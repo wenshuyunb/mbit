@@ -1,0 +1,43 @@
+{
+  "name": "@soulmap/admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SoulMap AI Web 管理后台（Vue3 + Vite + TypeScript + Element Plus）",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0 <25.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "lint": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node -e \"console.error('[Phase 0] Admin E2E 尚未接入：Phase 7 按架构 §4.2 / §5.4 引入 Playwright（e2e/ 目录）。'); process.exit(1)\"",
+    "api:types": "node -e \"const fs=require('fs');const p='../../openapi.json';if(!fs.existsSync(p)){console.error('[api:types] 未找到 '+p+'，请先执行 pnpm --filter @soulmap/server openapi:export');process.exit(1);}\" && openapi-typescript ../../openapi.json -o src/types/openapi.d.ts"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "2.3.2",
+    "axios": "1.20.0",
+    "dayjs": "1.11.13",
+    "echarts": "5.6.0",
+    "element-plus": "2.14.7",
+    "pinia": "2.3.1",
+    "vue": "3.5.43",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.7",
+    "@vitejs/plugin-vue": "5.2.4",
+    "@vue/test-utils": "2.5.1",
+    "jsdom": "25.0.1",
+    "sass": "1.105.1",
+    "typescript": "5.9.3",
+    "vite": "5.4.21",
+    "vitest": "2.1.9",
+    "vue-tsc": "2.2.0"
+  }
+}

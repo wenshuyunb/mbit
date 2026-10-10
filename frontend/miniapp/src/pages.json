@@ -1,0 +1,177 @@
+{
+  "easycom": {
+    "autoscan": true,
+    "custom": {
+      "^van-(.*)": "@/wxcomponents/vant/$1/index"
+    }
+  },
+
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "SoulMap AI",
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true,
+        "backgroundTextStyle": "dark"
+      }
+    },
+    {
+      "path": "pages/report/list",
+      "style": {
+        "navigationBarTitleText": "我的报告",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/profile/index",
+      "style": {
+        "navigationBarTitleText": "我的"
+      }
+    },
+    {
+      "path": "pages/test/intro",
+      "style": {
+        "navigationBarTitleText": "开始测试"
+      }
+    }
+  ],
+
+  "subPackages": [
+    {
+      "root": "pkgTest",
+      "name": "test",
+      "pages": [
+        {
+          "path": "pages/quiz",
+          "style": {
+            "navigationBarTitleText": "人格测试",
+            "navigationStyle": "custom",
+            "disableScroll": false
+          }
+        },
+        {
+          "path": "pages/result",
+          "style": {
+            "navigationBarTitleText": "测试结果",
+            "navigationStyle": "custom"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pkgReport",
+      "name": "report",
+      "pages": [
+        {
+          "path": "pages/detail",
+          "style": {
+            "navigationBarTitleText": "深度报告"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pkgMatch",
+      "name": "match",
+      "pages": [
+        {
+          "path": "pages/invite",
+          "style": {
+            "navigationBarTitleText": "邀请 TA 测试"
+          }
+        },
+        {
+          "path": "pages/result",
+          "style": {
+            "navigationBarTitleText": "关系匹配报告"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pkgChat",
+      "name": "chat",
+      "pages": [
+        {
+          "path": "pages/index",
+          "style": {
+            "navigationBarTitleText": "AI 情感助手",
+            "disableScroll": true
+          }
+        }
+      ]
+    },
+    {
+      "root": "pkgMember",
+      "name": "member",
+      "pages": [
+        {
+          "path": "pages/index",
+          "style": {
+            "navigationBarTitleText": "会员中心"
+          }
+        }
+      ]
+    },
+    {
+      "root": "pkgWebview",
+      "name": "webview",
+      "pages": [
+        {
+          "path": "pages/agreement",
+          "style": {
+            "navigationBarTitleText": "用户协议"
+          }
+        },
+        {
+          "path": "pages/privacy",
+          "style": {
+            "navigationBarTitleText": "隐私政策"
+          }
+        }
+      ]
+    }
+  ],
+
+  "preloadRule": {
+    "pages/report/list": {
+      "network": "all",
+      "packages": ["pkgReport"]
+    },
+    "pages/test/intro": {
+      "network": "wifi",
+      "packages": ["pkgTest"]
+    }
+  },
+
+  "tabBar": {
+    "color": "#8A8A9E",
+    "selectedColor": "#5B4BE0",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/report/list",
+        "text": "报告"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的"
+      }
+    ]
+  },
+
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "SoulMap AI",
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "backgroundColor": "#F5F5FA",
+    "backgroundColorTop": "#FFFFFF",
+    "backgroundColorBottom": "#F5F5FA"
+  }
+}

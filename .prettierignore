@@ -1,0 +1,28 @@
+node_modules
+dist
+build
+out
+coverage
+pnpm-lock.yaml
+frontend/miniapp/dist
+frontend/miniapp/unpackage
+*.min.js
+*.min.css
+backend/prisma/migrations
+
+# ---------------------------------------------------------------- 生成物
+# 以下文件由脚本从「唯一事实源」生成，禁止被格式化工具改写：
+#   否则 CI 的生成物一致性校验（generate-error-code-doc.mjs --check 等）会失败。
+#   如需调整样式，请修改生成脚本或源文件。
+docs/ERROR_CODES.md
+backend/prisma/schema.prisma
+openapi.json
+frontend/miniapp/src/wxcomponents
+
+# ---------------------------------------------------------------- 沙箱工具日志
+.runlogs
+
+# ---------------------------------------------------------------- 本地配置
+.env
+.env.*
+!.env.example

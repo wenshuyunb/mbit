@@ -1,0 +1,245 @@
+# ============================================================
+# SoulMap AI — 本地开发基础设施编排
+# ------------------------------------------------------------
+# 仅启动基础设施（推荐日常开发方式）：
+#   docker compose up -d postgres redis
+#
+# 连同应用一起启动（需先构建镜像）：
+#   docker compose --profile app up -d
+#
+# 查看状态： docker compose ps
+# 停止：     docker compose down
+# 清空数据： docker compose down -v   （⚠ 会删除数据库与缓存数据）
+# ============================================================
+
+name: soulmap
+
+services:
+  # ----------------------------------------------------------
+  # PostgreSQL 16 — 主数据库
+  # ----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: soulmap-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soulmap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soulmap_dev_pwd}
+      POSTGRES_DB: ${POSTGRES_DB:-soulmap}
+      # 初始化性能参数（开发环境友好）
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C --data-checksums"
+      TZ: ${TZ:-Asia/Shanghai}
+      PGTZ: ${TZ:-Asia/Shanghai}
+    ports:
+      # 仅监听本机，避免开发机数据库暴露到局域网
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soulmap} -d ${POSTGRES_DB:-soulmap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    command:
+      - postgres
+      # 日志便于排查慢查询
+      - -c
+      - log_min_duration_statement=1000
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - timezone=Asia/Shanghai
+    networks:
+      - soulmap-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ----------------------------------------------------------
+  # Redis 7 — 缓存 / 队列(BullMQ) / 限流 / 会话
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: soulmap-redis
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          redis-cli
+          ${REDIS_PASSWORD:+-a "$REDIS_PASSWORD"}
+          --no-auth-warning ping | grep -q PONG
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 512mb
+      # 队列数据不可用 allkeys-lru 淘汰，采用 noeviction 保证 BullMQ 可靠性
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - "900 1 300 10"
+    networks:
+      - soulmap-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ----------------------------------------------------------
+  # 数据库管理界面（可选，profile: tools）
+  #   docker compose --profile tools up -d adminer
+  #   访问 http://127.0.0.1:8080
+  # ----------------------------------------------------------
+  adminer:
+    image: adminer:4-standalone
+    container_name: soulmap-adminer
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: nette
+    ports:
+      - "127.0.0.1:${ADMINER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - soulmap-net
+
+  # ----------------------------------------------------------
+  # Redis 管理界面（可选，profile: tools）
+  #   docker compose --profile tools up -d redis-commander
+  #   访问 http://127.0.0.1:8081
+  # ----------------------------------------------------------
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: soulmap-redis-commander
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${REDIS_COMMANDER_PORT:-8081}:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - soulmap-net
+
+  # ----------------------------------------------------------
+  # 后端 API（profile: app）— 本地一般用 pnpm dev 直接跑，容器方式用于验证镜像
+  # ----------------------------------------------------------
+  server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runner
+    image: soulmap/server:local
+    container_name: soulmap-server
+    restart: unless-stopped
+    profiles: ["app"]
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-soulmap}:${POSTGRES_PASSWORD:-soulmap_dev_pwd}@postgres:5432/${POSTGRES_DB:-soulmap}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${SERVER_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/main.js"]
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    networks:
+      - soulmap-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ----------------------------------------------------------
+  # 队列 Worker（profile: app）— 与 server 同镜像，不同入口
+  # ----------------------------------------------------------
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runner
+    image: soulmap/server:local
+    container_name: soulmap-worker
+    restart: unless-stopped
+    profiles: ["app"]
+    env_file:
+      - ./.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-soulmap}:${POSTGRES_PASSWORD:-soulmap_dev_pwd}@postgres:5432/${POSTGRES_DB:-soulmap}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/worker.js"]
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    networks:
+      - soulmap-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  soulmap-net:
+    name: soulmap-net
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: soulmap-postgres-data
+  redis-data:
+    name: soulmap-redis-data

@@ -1,0 +1,177 @@
+/**
+ * 应用根模块
+ *
+ * 装配顺序即启动依赖顺序：
+ *   ConfigModule（环境校验，失败即启动失败）
+ *     → LoggerModule（结构化日志）
+ *     → ThrottlerModule（全局限流）
+ *     → PrismaModule / RedisModule（基础设施，fail-fast 连接）
+ *     → 业务模块（Phase 1 起逐步接入：auth / user / test / personality / ai / report / ...）
+ *     → HealthModule
+ *
+ * 全局横切（通过 APP_* 令牌注册，保证依赖注入可用）：
+ *   APP_FILTER      AllExceptionsFilter  统一错误响应与日志
+ *   APP_INTERCEPTOR TransformInterceptor 统一成功响应包络
+ *   APP_GUARD       ThrottlerGuard       全局限流（未来叠加 JwtAuthGuard / RolesGuard）
+ */
+
+import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { LoggerModule } from 'nestjs-pino';
+import { join } from 'node:path';
+
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { configuration } from './config/configuration';
+import { validationSchema } from './config/validation.schema';
+import type { AppConfig } from './config/config.type';
+import { CryptoModule } from './infra/crypto/crypto.module';
+import { OssModule } from './infra/oss/oss.module';
+import { PrismaModule } from './infra/prisma/prisma.module';
+import { QueueModule } from './infra/queue/queue.module';
+import { RedisModule } from './infra/redis/redis.module';
+import { HealthModule } from './health/health.module';
+import { AiModule } from './modules/ai/ai.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { MembershipModule } from './modules/membership/membership.module';
+import { PaymentModule } from './modules/payment/payment.module';
+import { PersonalityModule } from './modules/personality/personality.module';
+import { RelationshipModule } from './modules/relationship/relationship.module';
+import { StorageModule } from './modules/storage/storage.module';
+import { TestModule } from './modules/test/test.module';
+import { UserModule } from './modules/user/user.module';
+
+@Module({
+  imports: [
+    // ---------------------------------------------------------------- 配置
+    ConfigModule.forRoot({
+      isGlobal: true,
+      cache: true,
+      load: [configuration],
+      // 优先级：backend/.env（服务专属） → 仓库根 .env（共享基础设施配置）
+      envFilePath: [join(process.cwd(), '.env'), join(process.cwd(), '..', '.env')],
+      validationSchema,
+      validationOptions: {
+        // 一次性报告全部缺失项，避免逐个试错
+        abortEarly: false,
+        // 允许未在 schema 中声明的变量存在（如 GIT_SHA 等由 CI 注入）
+        allowUnknown: true,
+        convert: true,
+      },
+      expandVariables: true,
+    }),
+
+    // ---------------------------------------------------------------- 日志
+    LoggerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService<AppConfig, true>) => {
+        const isProduction = configService.get('app.isProduction', { infer: true });
+        const level = configService.get('app.logLevel', { infer: true });
+
+        return {
+          pinoHttp: {
+            level,
+            // 开发环境人类可读，生产环境纯 JSON（便于日志采集）
+            transport: isProduction
+              ? undefined
+              : {
+                  target: 'pino-pretty',
+                  options: {
+                    singleLine: true,
+                    colorize: true,
+                    translateTime: 'SYS:yyyy-mm-dd HH:mm:ss.l',
+                    ignore: 'pid,hostname,context,req,res',
+                  },
+                },
+            // 复用 RequestIdMiddleware 生成的 requestId，保证全链路一致
+            genReqId: (req: { requestId?: string; headers: Record<string, unknown> }) =>
+              req.requestId ?? (req.headers['x-request-id'] as string) ?? undefined,
+            customProps: () => ({ service: configService.get('app.name', { infer: true }) }),
+            // 脱敏：任何情况下不得把凭证写入日志
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'req.headers.cookie',
+                'req.headers["x-idempotency-key"]',
+                'res.headers["set-cookie"]',
+                'req.body.password',
+                'req.body.sessionKey',
+                'req.body.code',
+                'req.body.phone',
+                'req.body.idCard',
+                '*.password',
+                '*.sessionKey',
+                '*.apiKey',
+                '*.accessKeySecret',
+                '*.secret',
+                '*.privateKey',
+              ],
+              censor: '[REDACTED]',
+            },
+            // 忽略健康检查与静态资源的访问日志，避免噪声淹没真实请求
+            autoLogging: {
+              ignore: (req: { url?: string }) =>
+                typeof req.url === 'string' && (req.url.startsWith('/health') || req.url.startsWith('/metrics')),
+            },
+            customLogLevel: (_req: unknown, res: { statusCode?: number }, err?: Error) => {
+              if (err || (res.statusCode ?? 500) >= 500) return 'error';
+              if ((res.statusCode ?? 200) >= 400) return 'warn';
+              return 'info';
+            },
+          },
+        };
+      },
+    }),
+
+    // ---------------------------------------------------------------- 限流
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService<AppConfig, true>) => [
+        {
+          name: 'global',
+          ttl: configService.get('throttle.globalTtl', { infer: true }) * 1000,
+          limit: configService.get('throttle.globalLimit', { infer: true }),
+        },
+      ],
+    }),
+
+    // ------------------------------------------------------------ 基础设施
+    CryptoModule,
+    OssModule,
+    PrismaModule,
+    QueueModule,
+    RedisModule,
+
+    // ------------------------------------------------------------ 业务模块
+    AiModule,
+    AuthModule,
+    UserModule,
+    PersonalityModule,
+    MembershipModule,
+    PaymentModule,
+    RelationshipModule,
+    StorageModule,
+    TestModule,
+    // Phase 5+ 待接入：PaymentModule、NotificationModule、AdminModule
+
+    // ---------------------------------------------------------------- 运维
+    HealthModule,
+  ],
+  providers: [
+    // 限流最先执行（在鉴权之前，避免被刷）
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // 安全默认：默认拒绝。仅 @Public() 标记的接口允许匿名访问（架构 §14.1）
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_INTERCEPTOR, useClass: TransformInterceptor },
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
+  ],
+})
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestIdMiddleware).forRoutes({ path: '*', method: RequestMethod.ALL });
+  }
+}

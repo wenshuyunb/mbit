@@ -1,0 +1,1986 @@
+// ============================================================================
+// SoulMap AI — Prisma Schema
+// ----------------------------------------------------------------------------
+// ⚠ 本文件由 scripts/extract-prisma-schema.mjs 从 docs/DATABASE_DESIGN.md 自动生成。
+//    请勿手工修改：所有模型变更必须先更新设计文档，再重新生成并执行迁移。
+//
+// 生成命令： node scripts/extract-prisma-schema.mjs
+// 校验命令： node backend/node_modules/prisma/build/index.js validate --schema backend/prisma/schema.prisma
+//
+// 通用约定（见 PROJECT_ARCHITECTURE.md §8.3）：
+//   · 主键 uuid(7) —— 时间有序、索引友好、不暴露业务规模
+//   · 时间戳统一 @db.Timestamptz(3)，UTC 存储
+//   · 金额统一 Int，单位「分」，字段名以 Amount 结尾
+//   · 物理表名/列名统一 snake_case（@@map / @map），表名复数
+//   · 敏感字段以 Enc 结尾，AES-256-GCM 加密后存储
+//   · personality_profiles.version 是画像版本号，非乐观锁（ADR-018）
+// ============================================================================
+
+// ============================================================================
+// SoulMap AI — Prisma Schema
+// 依据文档：docs/DATABASE_DESIGN.md（唯一权威数据库设计文档）
+// 上游基准：docs/PROJECT_ARCHITECTURE.md（已冻结）
+// 约定：主键 UUIDv7；时间 Timestamptz(3) UTC；金额 Int（分，*Amount）；
+//       敏感字段 *Enc（AES-256-GCM）；并发写表 version 乐观锁；软删除 deletedAt
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// 枚举定义（PG native enum，物理类型名 snake_case）
+// ============================================================================
+
+/// 用户账号状态
+enum UserStatus {
+  ACTIVE // 正常
+  DISABLED // 被限制（风控/违规）
+  DELETED // 已注销（匿名化完成）
+
+  @@map("user_status")
+}
+
+/// 性别
+enum UserGender {
+  UNKNOWN
+  MALE
+  FEMALE
+  OTHER
+
+  @@map("user_gender")
+}
+
+/// 微信平台来源
+enum WechatPlatform {
+  MINIAPP
+  OFFICIAL_ACCOUNT
+  WEB
+  APP
+
+  @@map("wechat_platform")
+}
+
+/// 用户同意类型
+enum ConsentType {
+  PRIVACY_POLICY // 隐私政策
+  TERMS_OF_SERVICE // 服务协议
+  AGE_DECLARATION // 年龄声明（≥18）
+  AI_CONTENT_NOTICE // AI 生成内容提示
+  MARKETING // 营销授权
+
+  @@map("consent_type")
+}
+
+/// 账号注销申请状态
+enum DeletionRequestStatus {
+  PENDING // 冷静期内待执行
+  PROCESSING // 正在匿名化
+  COMPLETED // 已完成
+  CANCELLED // 用户取消
+
+  @@map("deletion_request_status")
+}
+
+/// 测试大类
+enum TestCategory {
+  MBTI
+  BIG_FIVE
+  RELATIONSHIP_STYLE
+  COMPREHENSIVE
+
+  @@map("test_category")
+}
+
+/// 测试定义生命周期
+enum TestDefinitionStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+
+  @@map("test_definition_status")
+}
+
+/// 抽题模式
+enum QuestionSelectionMode {
+  STATIC_SET // 固定题目集合
+  DIMENSION_QUOTA // 按维度配额动态抽取
+
+  @@map("question_selection_mode")
+}
+
+/// 题型
+enum QuestionType {
+  LIKERT5 // 5 点李克特量表
+  BINARY // 二选一
+  FORCED_CHOICE // 迫选
+  RANK // 排序
+
+  @@map("question_type")
+}
+
+/// 计分维度
+enum Dimension {
+  EI // 外向/内向
+  SN // 实感/直觉
+  TF // 思考/情感
+  JP // 判断/知觉
+  OPENNESS
+  CONSCIENTIOUSNESS
+  EXTRAVERSION
+  AGREEABLENESS
+  NEUROTICISM
+  ATTACHMENT // 依恋类型
+  LOVE_LANGUAGE // 爱的语言
+  CONFLICT_STYLE // 冲突风格
+
+  @@map("dimension")
+}
+
+/// 测试会话状态机
+enum TestSessionStatus {
+  CREATED // 已创建未取卷
+  IN_PROGRESS // 作答中（支持断点续答）
+  SUBMITTED // 已提交待算分
+  SCORED // 已算分
+  REPORT_READY // AI 报告已生成
+  EXPIRED // 超时过期
+  ABANDONED // 用户放弃
+
+  @@map("test_session_status")
+}
+
+/// 依恋类型
+enum AttachmentStyle {
+  SECURE
+  ANXIOUS
+  AVOIDANT
+  FEARFUL
+
+  @@map("attachment_style")
+}
+
+/// Prompt 模板类型
+enum PromptType {
+  MBTI_REPORT
+  RELATIONSHIP_REPORT
+  AI_COMPANION
+  EMOTION_ANALYSIS
+  SYSTEM_SAFETY
+
+  @@map("prompt_type")
+}
+
+/// Prompt 版本状态
+enum PromptVersionStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+
+  @@map("prompt_version_status")
+}
+
+/// AI 任务类型（对应 ai_task_routings.taskType）
+enum AiTaskType {
+  MBTI_REPORT
+  RELATIONSHIP_REPORT
+  AI_COMPANION
+  EMOTION_ANALYSIS
+  MEMORY_SUMMARY
+  STRUCTURED_EXTRACT
+  SAFETY_CHECK
+
+  @@map("ai_task_type")
+}
+
+/// LLM Provider
+enum AiProvider {
+  DEEPSEEK
+  OPENAI
+  QWEN
+
+  @@map("ai_provider")
+}
+
+/// AI 报告类型
+enum AiReportType {
+  MBTI_REPORT
+  BIG_FIVE_REPORT
+  RELATIONSHIP_REPORT
+  GROWTH_SUMMARY
+
+  @@map("ai_report_type")
+}
+
+/// AI 报告状态机
+enum AiReportStatus {
+  QUEUED
+  GENERATING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@map("ai_report_status")
+}
+
+/// 消息角色
+enum AiMessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+
+  @@map("ai_message_role")
+}
+
+/// 对话状态
+enum AiConversationStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+
+  @@map("ai_conversation_status")
+}
+
+/// 内容安全状态
+enum SafetyCheckStatus {
+  PENDING // 待检查
+  PASS // 通过
+  BLOCKED // 拦截（危险内容，未调用模型）
+  REVIEW // 待人工复核
+
+  @@map("safety_check_status")
+}
+
+/// AI 调用结果状态
+enum AiCallStatus {
+  SUCCESS
+  FAILED
+  TIMEOUT
+  CIRCUIT_OPEN // 熔断拒绝
+  BLOCKED // 安全拦截
+  CACHE_HIT // 缓存命中（未真实调用）
+
+  @@map("ai_call_status")
+}
+
+/// 关系类型
+enum RelationshipType {
+  COUPLE
+  FRIEND
+  FAMILY
+
+  @@map("relationship_type")
+}
+
+/// 关系状态机
+enum RelationshipStatus {
+  PENDING_A_CONFIRM // 待 A 确认
+  ACTIVE // 已生效
+  REJECTED // 被拒绝 / 被撤回
+  EXPIRED // 确认超时（PENDING_A_CONFIRM 超 7 天，定时任务置位）
+  REMOVED // 已解除
+
+  @@map("relationship_status")
+}
+
+/// 邀请状态机
+enum RelationshipInviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+
+  @@map("relationship_invite_status")
+}
+
+/// 匹配报告状态机
+enum CompatibilityReportStatus {
+  QUEUED
+  COMPUTING // 确定性算分中
+  GENERATING // AI 解读生成中
+  SUCCEEDED
+  FAILED
+
+  @@map("compatibility_report_status")
+}
+
+/// 商品类型
+enum ProductType {
+  REPORT_PERSONAL
+  REPORT_COMPATIBILITY
+  MEMBERSHIP
+  AI_CREDITS
+
+  @@map("product_type")
+}
+
+/// 商品上架状态
+enum ProductStatus {
+  DRAFT
+  ON_SALE
+  OFF_SALE
+
+  @@map("product_status")
+}
+
+/// 订单状态机
+enum OrderStatus {
+  CREATED // 已创建
+  PENDING_PAY // 已下单待支付（prepay 成功）
+  PAID // 已支付
+  FULFILLED // 权益已发放
+  CLOSED // 超时关单
+  CANCELLED // 用户取消
+  REFUNDED // 全额退款
+  PARTIAL_REFUNDED // 部分退款
+
+  @@map("order_status")
+}
+
+/// 支付渠道
+enum PayChannel {
+  WECHAT_JSAPI
+  WECHAT_NATIVE
+  WECHAT_H5
+  SANDBOX // 开发/测试环境
+
+  @@map("pay_channel")
+}
+
+/// 支付状态
+enum PaymentStatus {
+  INIT // 已创建预支付单
+  SUCCESS
+  FAILED
+  CLOSED
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+/// 退款状态机
+enum RefundStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CLOSED
+
+  @@map("refund_status")
+}
+
+/// 会员状态机
+enum MembershipStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  FROZEN
+
+  @@map("membership_status")
+}
+
+/// 会员来源
+enum MembershipSource {
+  PURCHASE // 用户购买
+  GRANT // 后台发放（客服补发/补偿）
+  TRIAL // 试用
+  PROMOTION // 活动赠送
+
+  @@map("membership_source")
+}
+
+/// 权益类型
+enum EntitlementType {
+  REPORT_UNLOCK // 单份报告解锁（一次性）
+  MEMBERSHIP_ACTIVE // 会员有效期权益（时间窗）
+  AI_CREDITS // AI 对话次数（计数递减）
+  PDF_EXPORT // PDF 导出权（时间窗内 N 次）
+
+  @@map("entitlement_type")
+}
+
+/// 权益状态机
+enum EntitlementStatus {
+  ACTIVE
+  CONSUMED // 已消耗（一次性权益用尽，但仍视为已解锁）
+  EXPIRED // 时间窗到期
+  REVOKED // 退款撤销
+
+  @@map("entitlement_status")
+}
+
+/// 管理员状态
+enum AdminUserStatus {
+  ACTIVE
+  DISABLED
+  LOCKED // 连续登录失败锁定
+
+  @@map("admin_user_status")
+}
+
+/// 后台审计动作
+enum AdminAuditAction {
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  CREATE
+  UPDATE
+  DELETE
+  PUBLISH
+  UNPUBLISH
+  ROLLBACK // 版本回滚
+  GRANT // 授权/发放
+  REVOKE // 撤销
+  REFUND
+  MANUAL_FULFILL // 手工补发权益
+  EXPORT // 数据导出
+  IMPORT // 批量导入（题库）
+  CONFIG_CHANGE // 修改系统配置
+
+  @@map("admin_audit_action")
+}
+
+/// 通知类型
+enum NotificationType {
+  SUBSCRIPTION_MESSAGE // 微信订阅消息
+  IN_APP // 站内通知
+
+  @@map("notification_type")
+}
+
+/// 通知投递状态
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+  CANCELLED
+
+  @@map("notification_status")
+}
+
+/// 分享渠道
+enum ShareChannel {
+  WECHAT_SESSION
+  WECHAT_TIMELINE
+  MINIAPP_CODE // 小程序码
+  POSTER // 生成海报
+  QRCODE
+  COPY_LINK
+
+  @@map("share_channel")
+}
+
+/// 分享目标类型（决定 share_records.targetId 指向哪张表）
+enum ShareTargetType {
+  TEST_RESULT
+  AI_REPORT
+  COMPATIBILITY_REPORT
+  INVITE
+  PROFILE_CARD
+  APP_HOME
+
+  @@map("share_target_type")
+}
+
+/// 系统配置值类型
+enum ConfigValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  JSON
+
+  @@map("config_value_type")
+}
+
+/// Outbox 事件状态机
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+  DEAD // 超过最大重试，进死信
+
+  @@map("outbox_status")
+}
+
+/// 文件上传场景（决定对象键前缀、类型白名单与大小上限，契约 §3.10.1）
+enum StorageScene {
+  AVATAR // 头像 2MB，jpg/png/webp
+  REPORT_PDF // 报告 PDF 20MB
+  SHARE_CARD // 自定义分享图 5MB
+  FEEDBACK_IMAGE // 客服反馈附图 5MB
+  CHAT_ATTACHMENT // 对话附件 5MB（预留，当前未开放）
+
+  @@map("storage_scene")
+}
+
+// ============================================================================
+// 身份域
+// ============================================================================
+
+/// 用户主表：只存最小必要身份信息，微信凭证在 wechat_accounts
+model User {
+  id                String     @id @default(uuid(7)) @db.Uuid
+  nickname          String?    @db.VarChar(64)
+  avatarUrl         String?    @map("avatar_url") @db.VarChar(512)
+  gender            UserGender @default(UNKNOWN)
+  birthday          DateTime?  @db.Date
+  ageVerified       Boolean    @default(false) @map("age_verified")
+  phoneEnc          String?    @map("phone_enc") @db.VarChar(512)
+  phoneHash         String?    @unique @map("phone_hash") @db.VarChar(64)
+  status            UserStatus @default(ACTIVE)
+  inviterUserId     String?    @map("inviter_user_id") @db.Uuid
+  inviter           User?      @relation("UserInviter", fields: [inviterUserId], references: [id], onDelete: SetNull)
+  invitees          User[]     @relation("UserInviter")
+  registerChannel   String?    @map("register_channel") @db.VarChar(32)
+  lastLoginAt       DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  lastLoginIp       String?    @map("last_login_ip") @db.VarChar(64)
+  exportRequestedAt DateTime?  @map("export_requested_at") @db.Timestamptz(3)
+  anonymizedAt      DateTime?  @map("anonymized_at") @db.Timestamptz(3)
+  version           Int        @default(0)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?  @map("deleted_at") @db.Timestamptz(3)
+
+  wechatAccounts          WechatAccount[]
+  sessions                UserSession[]
+  consents                UserConsent[]
+  deletionRequests        UserDeletionRequest[]
+  testSessions            TestSession[]
+  testAnswers             TestAnswer[]
+  testResults             TestResult[]
+  profiles                PersonalityProfile[]
+  snapshots               PersonalitySnapshot[]
+  aiConversations         AiConversation[]
+  aiMessages              AiMessage[]
+  aiReports               AiReport[]
+  aiUsageLogs             AiUsageLog[]
+  aiCallAudits            AiCallAudit[]
+  invitesSent             RelationshipInvite[] @relation("InviteInviter")
+  invitesReceived         RelationshipInvite[] @relation("InviteInvitee")
+  relationshipsAsUserA    Relationship[]       @relation("RelationshipUserA")
+  relationshipsAsUserB    Relationship[]       @relation("RelationshipUserB")
+  confirmedRelationships  Relationship[]       @relation("RelationshipConfirmedBy")
+  unboundRelationships    Relationship[]       @relation("RelationshipUnboundBy")
+  notifications           Notification[]
+  shareRecords            ShareRecord[]
+  orders                  Order[]
+  payments                Payment[]
+  refunds                 Refund[]
+  memberships             Membership[]
+  entitlements            Entitlement[]
+  storedFiles             StoredFile[]
+  phoneHistory            UserPhoneHistory[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@index([inviterUserId])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+/// 微信账号绑定：session_key 加密存储，绝不回传客户端
+model WechatAccount {
+  id                 String         @id @default(uuid(7)) @db.Uuid
+  userId             String         @unique @map("user_id") @db.Uuid
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appid              String         @db.VarChar(64)
+  platform           WechatPlatform @default(MINIAPP)
+  openid             String         @unique @db.VarChar(64)
+  unionid            String?        @unique @db.VarChar(64)
+  sessionKeyEnc      String?        @map("session_key_enc") @db.VarChar(512)
+  sessionKeyExpireAt DateTime?      @map("session_key_expire_at") @db.Timestamptz(3)
+  nicknameEnc        String?        @map("nickname_enc") @db.VarChar(512)
+  avatarUrl          String?        @map("avatar_url") @db.VarChar(512)
+  lastAuthAt         DateTime?      @map("last_auth_at") @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([unionid])
+  @@map("wechat_accounts")
+}
+
+/// 登录会话：refresh token 审计与旋转链
+model UserSession {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  userId           String       @map("user_id") @db.Uuid
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jti              String       @unique @db.VarChar(64)
+  refreshTokenHash String       @unique @map("refresh_token_hash") @db.VarChar(128)
+  platform         String?      @db.VarChar(32)
+  deviceId         String?      @map("device_id") @db.VarChar(128)
+  ip               String?      @db.VarChar(64)
+  userAgent        String?      @map("user_agent") @db.VarChar(256)
+  issuedAt         DateTime     @default(now()) @map("issued_at") @db.Timestamptz(3)
+  expiresAt        DateTime     @map("expires_at") @db.Timestamptz(3)
+  lastUsedAt       DateTime?    @map("last_used_at") @db.Timestamptz(3)
+  revokedAt        DateTime?    @map("revoked_at") @db.Timestamptz(3)
+  revokedReason    String?      @map("revoked_reason") @db.VarChar(64)
+  replacedById     String?      @unique @map("replaced_by_id") @db.Uuid
+  replacedBy       UserSession? @relation("SessionRotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces         UserSession? @relation("SessionRotation")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+/// 用户同意记录（合规证据，不删除）
+model UserConsent {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  userId        String      @map("user_id") @db.Uuid
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          ConsentType
+  policyVersion String      @map("policy_version") @db.VarChar(32)
+  agreed        Boolean     @default(true)
+  agreedAt      DateTime    @default(now()) @map("agreed_at") @db.Timestamptz(3)
+  revokedAt     DateTime?   @map("revoked_at") @db.Timestamptz(3)
+  channel       String?     @db.VarChar(32)
+  ip            String?     @db.VarChar(64)
+  userAgent     String?     @map("user_agent") @db.VarChar(256)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([userId, type, policyVersion])
+  @@index([userId, type])
+  @@map("user_consents")
+}
+
+/// 账号注销申请：7 天冷静期 + 匿名化审计
+model UserDeletionRequest {
+  id              String                @id @default(uuid(7)) @db.Uuid
+  userId          String                @map("user_id") @db.Uuid
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status          DeletionRequestStatus @default(PENDING)
+  reason          String?               @db.VarChar(512)
+  requestedAt     DateTime              @default(now()) @map("requested_at") @db.Timestamptz(3)
+  scheduledAt     DateTime              @map("scheduled_at") @db.Timestamptz(3)
+  confirmedAt     DateTime?             @map("confirmed_at") @db.Timestamptz(3)
+  processedAt     DateTime?             @map("processed_at") @db.Timestamptz(3)
+  cancelledAt     DateTime?             @map("cancelled_at") @db.Timestamptz(3)
+  operatorAdminId String?               @map("operator_admin_id") @db.Uuid
+  operatorAdmin   AdminUser?            @relation(fields: [operatorAdminId], references: [id], onDelete: SetNull)
+  operatorName    String?               @map("operator_name") @db.VarChar(64)
+  anonymizeLog    Json?                 @map("anonymize_log") @db.JsonB
+  retentionNote   String?               @map("retention_note") @db.VarChar(512)
+  ip              String?               @db.VarChar(64)
+  failureReason   String?               @map("failure_reason") @db.VarChar(512)
+  version         Int                   @default(0)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, scheduledAt])
+  @@index([userId, status])
+  @@map("user_deletion_requests")
+}
+
+// ============================================================================
+// 测评域
+// ============================================================================
+
+/// 测试定义（量表/题库容器）
+model TestDefinition {
+  id                 String                @id @default(uuid(7)) @db.Uuid
+  code               String                @unique @db.VarChar(32)
+  name               String                @db.VarChar(64)
+  category           TestCategory
+  description        String?               @db.VarChar(512)
+  version            String                @default("1.0.0") @db.VarChar(16)
+  status             TestDefinitionStatus  @default(DRAFT)
+  isActive           Boolean               @default(true) @map("is_active")
+  questionCount      Int                   @default(0) @map("question_count")
+  estimatedMinutes   Int                   @default(0) @map("estimated_minutes")
+  selectionMode      QuestionSelectionMode @default(STATIC_SET) @map("selection_mode")
+  dimensionQuotas    Json?                 @map("dimension_quotas") @db.JsonB
+  scoringConfig      Json?                 @map("scoring_config") @db.JsonB
+  resultTemplate     Json?                 @map("result_template") @db.JsonB
+  sortOrder          Int                   @default(0) @map("sort_order")
+  coverUrl           String?               @map("cover_url") @db.VarChar(512)
+  createdByAdminId   String?               @map("created_by_admin_id") @db.Uuid
+  createdByAdmin     AdminUser?            @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?             @map("deleted_at") @db.Timestamptz(3)
+
+  questions          Question[]
+  sessions           TestSession[]
+  results            TestResult[]
+
+  @@index([category, isActive])
+  @@index([isActive, sortOrder])
+  @@map("test_definitions")
+}
+
+/// 题目
+model Question {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  testDefinitionId String           @map("test_definition_id") @db.Uuid
+  testDefinition   TestDefinition   @relation(fields: [testDefinitionId], references: [id], onDelete: Cascade)
+  code             String           @unique @db.VarChar(48)
+  content          String           @db.Text
+  type             QuestionType
+  dimension        Dimension
+  subDimension     String?          @map("sub_dimension") @db.VarChar(32)
+  weight           Float            @default(1)
+  reverseScored    Boolean          @default(false) @map("reverse_scored")
+  order            Int              @default(0)
+  isActive         Boolean          @default(true) @map("is_active")
+  tags             String[]         @default([])
+  minValue         Int?             @map("min_value")
+  maxValue         Int?             @map("max_value")
+  scoringConfig    Json?            @map("scoring_config") @db.JsonB
+  explanation      String?          @db.Text
+  createdByAdminId String?          @map("created_by_admin_id") @db.Uuid
+  createdByAdmin   AdminUser?       @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?        @map("deleted_at") @db.Timestamptz(3)
+
+  options          QuestionOption[]
+  answers          TestAnswer[]
+
+  @@index([testDefinitionId, order])
+  @@index([dimension, isActive])
+  @@index([isActive])
+  @@map("questions")
+}
+
+/// 题目选项
+model QuestionOption {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  questionId String   @map("question_id") @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String   @db.VarChar(256)
+  value      Int
+  scoreMap   Json     @map("score_map") @db.JsonB
+  order      Int      @default(0)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([questionId, order])
+  @@index([questionId])
+  @@map("question_options")
+}
+
+/// 测试会话（断点续答 + 试卷快照）
+model TestSession {
+  id                String            @id @default(uuid(7)) @db.Uuid
+  userId            String            @map("user_id") @db.Uuid
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testDefinitionId  String            @map("test_definition_id") @db.Uuid
+  testDefinition    TestDefinition    @relation(fields: [testDefinitionId], references: [id], onDelete: Restrict)
+  definitionCode    String            @map("definition_code") @db.VarChar(32)
+  definitionVersion String            @map("definition_version") @db.VarChar(16)
+  status            TestSessionStatus @default(CREATED)
+  paperSnapshot     Json              @map("paper_snapshot") @db.JsonB
+  questionCount     Int               @default(0) @map("question_count")
+  answeredCount     Int               @default(0) @map("answered_count")
+  progress          Int               @default(0)
+  startedAt         DateTime?         @map("started_at") @db.Timestamptz(3)
+  submittedAt       DateTime?         @map("submitted_at") @db.Timestamptz(3)
+  expiredAt         DateTime?         @map("expired_at") @db.Timestamptz(3)
+  scoredAt          DateTime?         @map("scored_at") @db.Timestamptz(3)
+  reportReadyAt     DateTime?         @map("report_ready_at") @db.Timestamptz(3)
+  durationMs        Int?              @map("duration_ms")
+  consistencyScore  Float?            @map("consistency_score")
+  completionRate    Float?            @map("completion_rate")
+  clientPlatform    String?           @map("client_platform") @db.VarChar(32)
+  clientVersion     String?           @map("client_version") @db.VarChar(32)
+  idempotencyKey    String?           @unique @map("idempotency_key") @db.VarChar(64)
+  version           Int               @default(0)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?         @map("deleted_at") @db.Timestamptz(3)
+
+  answers           TestAnswer[]
+  result            TestResult?
+  aiReports         AiReport[]
+  snapshots         PersonalitySnapshot[]
+
+  @@index([userId, status])
+  @@index([createdAt(sort: Desc)])
+  @@index([testDefinitionId, status])
+  @@index([status, expiredAt])
+  @@map("test_sessions")
+}
+
+/// 答题明细（UNIQUE(sessionId, questionId) 防重复作答）
+model TestAnswer {
+  id           String       @id @default(uuid(7)) @db.Uuid
+  sessionId    String       @map("session_id") @db.Uuid
+  session      TestSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId   String       @map("question_id") @db.Uuid
+  question     Question     @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  userId       String       @map("user_id") @db.Uuid
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionType QuestionType @map("question_type")
+  rawValue     Json         @map("raw_value") @db.JsonB
+  scoreValue   Float?       @map("score_value")
+  responseMs   Int?         @map("response_ms")
+  isSkipped    Boolean      @default(false) @map("is_skipped")
+  answeredAt   DateTime     @default(now()) @map("answered_at") @db.Timestamptz(3)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([sessionId, questionId])
+  @@index([userId, answeredAt(sort: Desc)])
+  @@map("test_answers")
+}
+
+/// 测试原始分结果（确定性算分）
+model TestResult {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  sessionId         String       @unique @map("session_id") @db.Uuid
+  session           TestSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId            String       @map("user_id") @db.Uuid
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testDefinitionId  String       @map("test_definition_id") @db.Uuid
+  testDefinition    TestDefinition @relation(fields: [testDefinitionId], references: [id], onDelete: Restrict)
+  definitionCode    String       @map("definition_code") @db.VarChar(32)
+  engineVersion     String       @map("engine_version") @db.VarChar(16)
+  mbtiType          String?      @map("mbti_type") @db.VarChar(4)
+  mbtiDimensions    Json?        @map("mbti_dimensions") @db.JsonB
+  bigFiveScores     Json?        @map("big_five_scores") @db.JsonB
+  rawScores         Json         @map("raw_scores") @db.JsonB
+  relationshipStyle Json?        @map("relationship_style") @db.JsonB
+  qualityMetrics    Json?        @map("quality_metrics") @db.JsonB
+  consistencyScore  Float?       @map("consistency_score")
+  completionRate    Float?       @map("completion_rate")
+  avgResponseMs     Int?         @map("avg_response_ms")
+  computedAt        DateTime     @default(now()) @map("computed_at") @db.Timestamptz(3)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  profiles          PersonalityProfile[]
+
+  @@index([userId, computedAt(sort: Desc)])
+  @@index([mbtiType])
+  @@map("test_results")
+}
+
+/// 人格画像（版本化：UNIQUE(userId, version)）
+model PersonalityProfile {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  userId            String          @map("user_id") @db.Uuid
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testResultId      String          @map("test_result_id") @db.Uuid
+  testResult        TestResult      @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  version           Int             @default(1)
+  isCurrent         Boolean         @default(true) @map("is_current")
+  engineVersion     String          @map("engine_version") @db.VarChar(16)
+  mbtiType          String          @map("mbti_type") @db.VarChar(4)
+  mbtiConfidence    Float           @default(0) @map("mbti_confidence")
+  eiPercent         Float           @map("ei_percent")
+  snPercent         Float           @map("sn_percent")
+  tfPercent         Float           @map("tf_percent")
+  jpPercent         Float           @map("jp_percent")
+  openness          Float
+  conscientiousness Float
+  extraversion      Float
+  agreeableness     Float
+  neuroticism       Float
+  attachmentStyle   AttachmentStyle @map("attachment_style")
+  loveLanguages     String[]        @default([]) @map("love_languages")
+  conflictStyle     String?         @map("conflict_style") @db.VarChar(32)
+  relationshipStyle Json?           @map("relationship_style") @db.JsonB
+  traits            Json?           @db.JsonB
+  consistencyScore  Float?          @map("consistency_score")
+  completionRate    Float?          @map("completion_rate")
+  avgResponseMs     Int?            @map("avg_response_ms")
+  computedAt        DateTime        @default(now()) @map("computed_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  compatibilityReportsAsA CompatibilityReport[] @relation("CompatProfileA")
+  compatibilityReportsAsB CompatibilityReport[] @relation("CompatProfileB")
+  snapshots               PersonalitySnapshot[]
+  aiReports               AiReport[]
+
+  @@unique([userId, version])
+  @@index([userId, isCurrent])
+  @@index([mbtiType])
+  @@map("personality_profiles")
+}
+
+/// 人格时间序列快照（成长曲线）
+model PersonalitySnapshot {
+  id                String              @id @default(uuid(7)) @db.Uuid
+  userId            String              @map("user_id") @db.Uuid
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profileId         String?             @map("profile_id") @db.Uuid
+  profile           PersonalityProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  sourceSessionId   String?             @unique @map("source_session_id") @db.Uuid
+  sourceSession     TestSession?        @relation(fields: [sourceSessionId], references: [id], onDelete: SetNull)
+  capturedAt        DateTime            @default(now()) @map("captured_at") @db.Timestamptz(3)
+  mbtiType          String              @map("mbti_type") @db.VarChar(4)
+  bigFive           Json                @map("big_five") @db.JsonB
+  relationshipStyle Json?               @map("relationship_style") @db.JsonB
+  completenessScore Float?              @map("completeness_score")
+  moodScore         Float?              @map("mood_score")
+  note              String?             @db.VarChar(256)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, capturedAt(sort: Desc)])
+  @@map("personality_snapshots")
+}
+
+/// 关系风格推导规则（Big Five 组合 → 依恋/爱的语言/冲突风格）
+model RelationshipStyleRule {
+  id                  String          @id @default(uuid(7)) @db.Uuid
+  code                String          @unique @db.VarChar(32)
+  name                String          @db.VarChar(64)
+  description         String?         @db.VarChar(512)
+  priority            Int             @default(100)
+  conditions          Json            @db.JsonB
+  resultAttachment    AttachmentStyle @map("result_attachment")
+  resultLoveLanguages String[]        @default([]) @map("result_love_languages")
+  resultConflictStyle String?         @map("result_conflict_style") @db.VarChar(32)
+  isActive            Boolean         @default(true) @map("is_active")
+  version             String          @default("1.0.0") @db.VarChar(16)
+  createdByAdminId    String?         @map("created_by_admin_id") @db.Uuid
+  createdByAdmin      AdminUser?      @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([isActive, priority])
+  @@map("relationship_style_rules")
+}
+
+// ============================================================================
+// AI 域
+// ============================================================================
+
+/// Prompt 模板（key 唯一，activeVersionId 指向生效版本）
+model PromptTemplate {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  key              String        @unique @db.VarChar(64)
+  name             String        @db.VarChar(64)
+  type             PromptType
+  description      String?       @db.VarChar(512)
+  activeVersionId  String?       @unique @map("active_version_id") @db.Uuid
+  activeVersion    PromptVersion? @relation("TemplateActiveVersion", fields: [activeVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  isActive         Boolean       @default(true) @map("is_active")
+  createdByAdminId String?       @map("created_by_admin_id") @db.Uuid
+  createdByAdmin   AdminUser?    @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  versions         PromptVersion[] @relation("TemplateVersions")
+
+  @@index([type, isActive])
+  @@map("prompt_templates")
+}
+
+/// Prompt 版本（发布/AB 测试/回滚的最小单元）
+model PromptVersion {
+  id                 String              @id @default(uuid(7)) @db.Uuid
+  templateId         String              @map("template_id") @db.Uuid
+  template           PromptTemplate      @relation("TemplateVersions", fields: [templateId], references: [id], onDelete: Cascade)
+  version            Int
+  systemPrompt       String              @map("system_prompt") @db.Text
+  userPromptTemplate String              @map("user_prompt_template") @db.Text
+  variables          Json?               @db.JsonB
+  outputSchema       Json?               @map("output_schema") @db.JsonB
+  model              String?             @db.VarChar(64)
+  provider           AiProvider?
+  temperature        Float?              @default(0.7)
+  maxTokens          Int?                @default(2048) @map("max_tokens")
+  topP               Float?              @map("top_p")
+  status             PromptVersionStatus @default(DRAFT)
+  trafficWeight      Int                 @default(100) @map("traffic_weight")
+  changeNote         String?             @map("change_note") @db.VarChar(512)
+  publishedAt        DateTime?           @map("published_at") @db.Timestamptz(3)
+  publishedById      String?             @map("published_by_id") @db.Uuid
+  publishedBy        AdminUser?          @relation(fields: [publishedById], references: [id], onDelete: SetNull)
+  archivedAt         DateTime?           @map("archived_at") @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  templatesActivating  PromptTemplate[]      @relation("TemplateActiveVersion")
+  aiReports            AiReport[]
+  compatibilityReports CompatibilityReport[]
+
+  @@unique([templateId, version])
+  @@index([status])
+  @@map("prompt_versions")
+}
+
+/// AI 任务路由配置（主/备 Provider、超时、重试、熔断、预算）
+model AiTaskRouting {
+  id                      String     @id @default(uuid(7)) @db.Uuid
+  taskType                AiTaskType @unique @map("task_type")
+  primaryProvider         AiProvider @map("primary_provider")
+  primaryModel            String     @map("primary_model") @db.VarChar(64)
+  fallbackProvider        AiProvider? @map("fallback_provider")
+  fallbackModel           String?    @map("fallback_model") @db.VarChar(64)
+  temperature             Float?     @default(0.7)
+  maxTokens               Int?       @default(2048) @map("max_tokens")
+  timeoutMs               Int        @default(60000) @map("timeout_ms")
+  streamFirstTokenMs      Int?       @default(20000) @map("stream_first_token_ms")
+  streamTotalMs           Int?       @default(180000) @map("stream_total_ms")
+  maxRetries              Int        @default(2) @map("max_retries")
+  circuitFailureThreshold Int        @default(5) @map("circuit_failure_threshold")
+  circuitOpenMs           Int        @default(60000) @map("circuit_open_ms")
+  dailyCostBudgetAmount   Int?       @map("daily_cost_budget_amount")
+  isActive                Boolean    @default(true) @map("is_active")
+  remark                  String?    @db.VarChar(256)
+  updatedByAdminId        String?    @map("updated_by_admin_id") @db.Uuid
+  updatedByAdmin          AdminUser? @relation(fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+  version                 Int        @default(0)
+  createdAt               DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([isActive])
+  @@map("ai_task_routings")
+}
+
+/// AI 对话会话（含长期记忆摘要与聚合计量）
+model AiConversation {
+  id              String               @id @default(uuid(7)) @db.Uuid
+  userId          String               @map("user_id") @db.Uuid
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  relationshipId  String?              @map("relationship_id") @db.Uuid
+  relationship    Relationship?        @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
+  title           String?              @db.VarChar(128)
+  scene           String?              @db.VarChar(32)
+  status          AiConversationStatus @default(ACTIVE)
+  messageCount    Int                  @default(0) @map("message_count")
+  totalTokens     Int                  @default(0) @map("total_tokens")
+  totalCostAmount Int                  @default(0) @map("total_cost_amount")
+  memorySummary   String?              @map("memory_summary") @db.Text
+  memoryTokens    Int                  @default(0) @map("memory_tokens")
+  memoryUpdatedAt DateTime?            @map("memory_updated_at") @db.Timestamptz(3)
+  lastMessageAt   DateTime?            @map("last_message_at") @db.Timestamptz(3)
+  archivedAt      DateTime?            @map("archived_at") @db.Timestamptz(3)
+  version         Int                  @default(0)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?            @map("deleted_at") @db.Timestamptz(3)
+
+  messages        AiMessage[]
+  aiUsageLogs     AiUsageLog[]
+
+  @@index([userId, status, lastMessageAt(sort: Desc)])
+  @@index([lastMessageAt(sort: Desc)])
+  @@map("ai_conversations")
+}
+
+/// AI 对话消息（全文 + 计量 + 安全状态）
+model AiMessage {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  conversationId   String             @map("conversation_id") @db.Uuid
+  conversation     AiConversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId           String?            @map("user_id") @db.Uuid
+  user             User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  role             AiMessageRole
+  content          String             @db.Text
+  contentLength    Int                @default(0) @map("content_length")
+  provider         AiProvider?
+  model            String?            @db.VarChar(64)
+  promptTokens     Int                @default(0) @map("prompt_tokens")
+  completionTokens Int                @default(0) @map("completion_tokens")
+  totalTokens      Int                @default(0) @map("total_tokens")
+  costAmount       Int                @default(0) @map("cost_amount")
+  latencyMs        Int?               @map("latency_ms")
+  finishReason     String?            @map("finish_reason") @db.VarChar(32)
+  safetyStatus     SafetyCheckStatus  @default(PENDING) @map("safety_status")
+  safetyLabels     String[]           @default([]) @map("safety_labels")
+  clientMessageId  String?            @map("client_message_id") @db.VarChar(64)
+  requestId        String?            @map("request_id") @db.VarChar(64)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt        DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("ai_messages")
+}
+
+/// AI 报告（个人报告与匹配报告的 AI 正文载体）
+model AiReport {
+  id                   String           @id @default(uuid(7)) @db.Uuid
+  userId               String           @map("user_id") @db.Uuid
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                 AiReportType
+  status               AiReportStatus   @default(QUEUED)
+  sessionId            String?          @map("session_id") @db.Uuid
+  session              TestSession?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  relationshipId       String?          @map("relationship_id") @db.Uuid
+  relationship         Relationship?    @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
+  profileId            String?          @map("profile_id") @db.Uuid
+  profile              PersonalityProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  promptTemplateKey    String           @map("prompt_template_key") @db.VarChar(64)
+  promptVersionId      String?          @map("prompt_version_id") @db.Uuid
+  promptVersion        PromptVersion?   @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)
+  cacheKey             String           @unique @map("cache_key") @db.VarChar(128)
+  title                String?          @db.VarChar(128)
+  summary              String?          @db.VarChar(1024)
+  content              String?          @db.Text
+  contentLength        Int              @default(0) @map("content_length")
+  freePreviewLength    Int              @default(0) @map("free_preview_length")
+  sectionCount         Int              @default(0) @map("section_count")
+  provider             AiProvider?
+  model                String?          @db.VarChar(64)
+  promptTokens         Int              @default(0) @map("prompt_tokens")
+  completionTokens     Int              @default(0) @map("completion_tokens")
+  totalTokens          Int              @default(0) @map("total_tokens")
+  costAmount           Int              @default(0) @map("cost_amount")
+  latencyMs            Int?             @map("latency_ms")
+  retryCount           Int              @default(0) @map("retry_count")
+  progress             Int              @default(0)
+  errorCode            String?          @map("error_code") @db.VarChar(32)
+  errorMessage         String?          @map("error_message") @db.VarChar(1024)
+  generationStartedAt  DateTime?        @map("generation_started_at") @db.Timestamptz(3)
+  generationFinishedAt DateTime?        @map("generation_finished_at") @db.Timestamptz(3)
+  pdfUrl               String?          @map("pdf_url") @db.VarChar(512)
+  pdfGeneratedAt       DateTime?        @map("pdf_generated_at") @db.Timestamptz(3)
+  shareImageUrl        String?          @map("share_image_url") @db.VarChar(512)
+  qualityScore         Float?           @map("quality_score")
+  version              Int              @default(0)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime?        @map("deleted_at") @db.Timestamptz(3)
+
+  sections            ReportSection[]
+  usageLogs           AiUsageLog[]
+  callAudits          AiCallAudit[]
+  entitlements        Entitlement[]
+  compatibilityReport CompatibilityReport?
+
+  @@index([userId, type, status])
+  @@index([status, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("ai_reports")
+}
+
+/// 报告结构化分段（按段预览/解锁/重生成/编辑）
+model ReportSection {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  reportId      String   @map("report_id") @db.Uuid
+  report        AiReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  sectionKey    String   @map("section_key") @db.VarChar(48)
+  title         String   @db.VarChar(128)
+  content       String   @db.Text
+  order         Int      @default(0)
+  isFreePreview Boolean  @default(false) @map("is_free_preview")
+  tokenCount    Int      @default(0) @map("token_count")
+  model         String?  @db.VarChar(64)
+  generatedAt   DateTime? @map("generated_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([reportId, sectionKey])
+  @@index([reportId, order])
+  @@map("report_sections")
+}
+
+/// AI 用量与成本计量（财务口径，只追加）
+model AiUsageLog {
+  id               String          @id @default(uuid(7)) @db.Uuid
+  userId           String?         @map("user_id") @db.Uuid
+  user             User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  conversationId   String?         @map("conversation_id") @db.Uuid
+  conversation     AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  reportId         String?         @map("report_id") @db.Uuid
+  report           AiReport?       @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  messageId        String?         @map("message_id") @db.Uuid
+  taskType         AiTaskType      @map("task_type")
+  provider         AiProvider
+  model            String          @db.VarChar(64)
+  promptTokens     Int             @default(0) @map("prompt_tokens")
+  completionTokens Int             @default(0) @map("completion_tokens")
+  totalTokens      Int             @default(0) @map("total_tokens")
+  costAmount       Int             @default(0) @map("cost_amount")
+  currency         String          @default("CNY") @db.VarChar(8)
+  cacheHit         Boolean         @default(false) @map("cache_hit")
+  success          Boolean         @default(true)
+  retryIndex       Int             @default(0) @map("retry_index")
+  latencyMs        Int?            @map("latency_ms")
+  requestId        String?         @map("request_id") @db.VarChar(64)
+  usageDate        DateTime        @map("usage_date") @db.Date
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([usageDate, taskType])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([provider, usageDate])
+  @@map("ai_usage_logs")
+}
+
+/// AI 调用审计（排障：指纹、Provider、缓存命中、错误码；不存全文）
+model AiCallAudit {
+  id                String        @id @default(uuid(7)) @db.Uuid
+  requestId         String        @map("request_id") @db.VarChar(64)
+  userId            String?       @map("user_id") @db.Uuid
+  user              User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  reportId          String?       @map("report_id") @db.Uuid
+  report            AiReport?     @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  taskType          AiTaskType    @map("task_type")
+  provider          AiProvider
+  model             String        @db.VarChar(64)
+  promptFingerprint String        @map("prompt_fingerprint") @db.VarChar(64)
+  promptLength      Int           @default(0) @map("prompt_length")
+  responseLength    Int           @default(0) @map("response_length")
+  redactedSample    String?       @map("redacted_sample") @db.VarChar(2000)
+  cacheHit          Boolean       @default(false) @map("cache_hit")
+  status            AiCallStatus
+  httpStatus        Int?          @map("http_status")
+  errorCode         String?       @map("error_code") @db.VarChar(32)
+  errorMessage      String?       @map("error_message") @db.VarChar(512)
+  latencyMs         Int?          @map("latency_ms")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([taskType, status, createdAt(sort: Desc)])
+  @@index([provider, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("ai_call_audits")
+}
+
+// ============================================================================
+// 关系域
+// ============================================================================
+
+/// 用户关系（pairKey 由部分唯一索引约束，见 ADR-030；解除后保留原值作审计）
+model Relationship {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  pairKey           String             @map("pair_key") @db.VarChar(80)
+  userAId           String             @map("user_a_id") @db.Uuid
+  userA             User               @relation("RelationshipUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userBId           String             @map("user_b_id") @db.Uuid
+  userB             User               @relation("RelationshipUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  type              RelationshipType
+  status            RelationshipStatus @default(PENDING_A_CONFIRM)
+  confirmedAt       DateTime?          @map("confirmed_at") @db.Timestamptz(3)
+  confirmedByUserId String?            @map("confirmed_by_user_id") @db.Uuid
+  confirmedBy       User?              @relation("RelationshipConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  unboundAt         DateTime?          @map("unbound_at") @db.Timestamptz(3)
+  unboundReason     String?            @map("unbound_reason") @db.VarChar(256)
+  unboundByUserId   String?            @map("unbound_by_user_id") @db.Uuid
+  unboundBy         User?              @relation("RelationshipUnboundBy", fields: [unboundByUserId], references: [id], onDelete: SetNull)
+  lastReportAt      DateTime?          @map("last_report_at") @db.Timestamptz(3)
+  reportCount       Int                @default(0) @map("report_count")
+  version           Int                @default(0)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  invites             RelationshipInvite[]
+  compatibilityReports CompatibilityReport[]
+  aiReports           AiReport[]
+  aiConversations     AiConversation[]
+  entitlements        Entitlement[]
+
+  @@index([pairKey]) // 审计回溯：查「这对用户历史上建过几次关系」（含已解除行）
+  @@index([userAId, status])
+  @@index([userBId, status])
+  @@index([status, createdAt])
+  @@map("relationships")
+}
+
+/// 关系邀请（8 位短码 + 小程序码 + TTL 7 天）
+model RelationshipInvite {
+  id             String                   @id @default(uuid(7)) @db.Uuid
+  code           String                   @unique @db.VarChar(16)
+  inviterId      String                   @map("inviter_id") @db.Uuid
+  inviter        User                     @relation("InviteInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  inviteeId      String?                  @map("invitee_id") @db.Uuid
+  invitee        User?                    @relation("InviteInvitee", fields: [inviteeId], references: [id], onDelete: SetNull)
+  relationType   RelationshipType         @map("relation_type")
+  status         RelationshipInviteStatus @default(PENDING)
+  message        String?                  @db.VarChar(256)
+  scene          String?                  @db.VarChar(64)
+  qrCodeUrl      String?                  @map("qr_code_url") @db.VarChar(512)
+  channel        ShareChannel?
+  maxUses        Int                      @default(1) @map("max_uses")
+  usedCount      Int                      @default(0) @map("used_count")
+  expiresAt      DateTime                 @map("expires_at") @db.Timestamptz(3)
+  acceptedAt     DateTime?                @map("accepted_at") @db.Timestamptz(3)
+  revokedAt      DateTime?                @map("revoked_at") @db.Timestamptz(3)
+  relationshipId String?                  @unique @map("relationship_id") @db.Uuid
+  relationship   Relationship?            @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
+  version        Int                      @default(0)
+  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime?                @map("deleted_at") @db.Timestamptz(3)
+
+  shareRecords   ShareRecord[]
+
+  @@index([inviterId, status])
+  @@index([status, expiresAt])
+  @@index([inviteeId])
+  @@map("relationship_invites")
+}
+
+/// 匹配报告（确定性算分 + AI 解读引用）
+model CompatibilityReport {
+  id                 String                   @id @default(uuid(7)) @db.Uuid
+  relationshipId     String                   @map("relationship_id") @db.Uuid
+  relationship       Relationship             @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
+  profileAId         String                   @map("profile_a_id") @db.Uuid
+  profileA           PersonalityProfile       @relation("CompatProfileA", fields: [profileAId], references: [id], onDelete: Restrict)
+  profileBId         String                   @map("profile_b_id") @db.Uuid
+  profileB           PersonalityProfile       @relation("CompatProfileB", fields: [profileBId], references: [id], onDelete: Restrict)
+  weightsId          String                   @map("weights_id") @db.Uuid
+  weights            CompatibilityWeight      @relation(fields: [weightsId], references: [id], onDelete: Restrict)
+  weightsVersion     String                   @map("weights_version") @db.VarChar(16)
+  status             CompatibilityReportStatus @default(QUEUED)
+  totalScore         Int?                     @map("total_score")
+  mbtiScore          Int?                     @map("mbti_score")
+  bigFiveScore       Int?                     @map("big_five_score")
+  attachmentScore    Int?                     @map("attachment_score")
+  communicationScore Int?                     @map("communication_score")
+  scoreBreakdown     Json?                    @map("score_breakdown") @db.JsonB
+  advantages         Json?                    @db.JsonB
+  conflicts          Json?                    @db.JsonB
+  suggestions        Json?                    @db.JsonB
+  cacheKey           String                   @unique @map("cache_key") @db.VarChar(128)
+  engineVersion      String                   @map("engine_version") @db.VarChar(16)
+  aiReportId         String?                  @unique @map("ai_report_id") @db.Uuid
+  aiReport           AiReport?                @relation(fields: [aiReportId], references: [id], onDelete: SetNull)
+  promptVersionId    String?                  @map("prompt_version_id") @db.Uuid
+  promptVersion      PromptVersion?           @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)
+  provider           AiProvider?
+  model              String?                  @db.VarChar(64)
+  totalTokens        Int                      @default(0) @map("total_tokens")
+  costAmount         Int                      @default(0) @map("cost_amount")
+  retryCount         Int                      @default(0) @map("retry_count")
+  errorCode          String?                  @map("error_code") @db.VarChar(32)
+  errorMessage       String?                  @map("error_message") @db.VarChar(1024)
+  computedAt         DateTime?                @map("computed_at") @db.Timestamptz(3)
+  generatedAt        DateTime?                @map("generated_at") @db.Timestamptz(3)
+  version            Int                      @default(0)
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?                @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([relationshipId, status])
+  @@index([relationshipId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("compatibility_reports")
+}
+
+/// 匹配权重矩阵（版本化，后台可调）
+model CompatibilityWeight {
+  id                    String        @id @default(uuid(7)) @db.Uuid
+  code                  String        @db.VarChar(32)
+  name                  String        @db.VarChar(64)
+  version               String        @db.VarChar(16)
+  description           String?       @db.VarChar(512)
+  mbtiMatrix            Json          @map("mbti_matrix") @db.JsonB
+  bigFiveConfig         Json          @map("big_five_config") @db.JsonB
+  attachmentMatrix      Json          @map("attachment_matrix") @db.JsonB
+  communicationConfig   Json?         @map("communication_config") @db.JsonB
+  dimensionWeights      Json          @map("dimension_weights") @db.JsonB
+  isActive              Boolean       @default(true) @map("is_active")
+  effectiveFrom         DateTime      @default(now()) @map("effective_from") @db.Timestamptz(3)
+  createdByAdminId      String?       @map("created_by_admin_id") @db.Uuid
+  createdByAdmin        AdminUser?    @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt             DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  reports               CompatibilityReport[]
+
+  @@unique([code, version])
+  @@index([isActive])
+  @@map("compatibility_weights")
+}
+
+// ============================================================================
+// 商业化域
+// ============================================================================
+
+/// 商品（单次付费报告 / AI 次数包 / 会员类商品）
+model Product {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  code             String        @unique @db.VarChar(48)
+  name             String        @db.VarChar(64)
+  type             ProductType
+  description      String?       @db.VarChar(1024)
+  priceAmount      Int           @map("price_amount")
+  originalAmount   Int?          @map("original_amount")
+  currency         String        @default("CNY") @db.VarChar(8)
+  credits          Int?
+  durationDays     Int?          @map("duration_days")
+  membershipPlanId String?       @map("membership_plan_id") @db.Uuid
+  membershipPlan   MembershipPlan? @relation(fields: [membershipPlanId], references: [id], onDelete: SetNull)
+  reportType       AiReportType? @map("report_type")
+  coverUrl         String?       @map("cover_url") @db.VarChar(512)
+  tags             String[]      @default([])
+  sortOrder        Int           @default(0) @map("sort_order")
+  status           ProductStatus @default(DRAFT)
+  purchaseLimit    Int?          @map("purchase_limit")
+  validFrom        DateTime?     @map("valid_from") @db.Timestamptz(3)
+  validTo          DateTime?     @map("valid_to") @db.Timestamptz(3)
+  isRecommended    Boolean       @default(false) @map("is_recommended")
+  createdByAdminId String?       @map("created_by_admin_id") @db.Uuid
+  createdByAdmin   AdminUser?    @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  version          Int           @default(0)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  orders           Order[]
+
+  @@index([type, status])
+  @@index([status, sortOrder])
+  @@map("products")
+}
+
+/// 会员套餐
+model MembershipPlan {
+  id               String         @id @default(uuid(7)) @db.Uuid
+  code             String         @unique @db.VarChar(48)
+  name             String         @db.VarChar(64)
+  description      String?        @db.VarChar(1024)
+  durationDays     Int            @map("duration_days")
+  priceAmount      Int            @map("price_amount")
+  originalAmount   Int?           @map("original_amount")
+  currency         String         @default("CNY") @db.VarChar(8)
+  benefits         Json           @db.JsonB
+  dailyAiQuota     Int            @default(0) @map("daily_ai_quota")
+  totalAiQuota     Int?           @map("total_ai_quota")
+  pdfExportQuota   Int            @default(0) @map("pdf_export_quota")
+  sortOrder        Int            @default(0) @map("sort_order")
+  isActive         Boolean        @default(true) @map("is_active")
+  isRecommended    Boolean        @default(false) @map("is_recommended")
+  tags             String[]       @default([])
+  createdByAdminId String?        @map("created_by_admin_id") @db.Uuid
+  createdByAdmin   AdminUser?     @relation(fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  version          Int            @default(0)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  products         Product[]
+  orders           Order[]
+  memberships      Membership[]
+
+  @@index([isActive, sortOrder])
+  @@map("membership_plans")
+}
+
+/// 订单（用户购买意图 + 应收金额 + 状态机）
+model Order {
+  id                    String           @id @default(uuid(7)) @db.Uuid
+  orderNo               String           @unique @map("order_no") @db.VarChar(32)
+  userId                String           @map("user_id") @db.Uuid
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  productId             String?          @map("product_id") @db.Uuid
+  product               Product?         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  planId                String?          @map("plan_id") @db.Uuid
+  plan                  MembershipPlan?  @relation(fields: [planId], references: [id], onDelete: Restrict)
+  productType           ProductType      @map("product_type")
+  productSnapshot       Json             @map("product_snapshot") @db.JsonB
+  quantity              Int              @default(1)
+  totalAmount           Int              @map("total_amount")
+  discountAmount        Int              @default(0) @map("discount_amount")
+  paidAmount            Int              @default(0) @map("paid_amount")
+  refundedAmount        Int              @default(0) @map("refunded_amount")
+  currency              String           @default("CNY") @db.VarChar(8)
+  status                OrderStatus      @default(CREATED)
+  payChannel            PayChannel?      @map("pay_channel")
+  clientIp              String?          @map("client_ip") @db.VarChar(64)
+  remark                String?          @db.VarChar(256)
+  relatedReportId       String?          @map("related_report_id") @db.Uuid
+  relatedRelationshipId String?          @map("related_relationship_id") @db.Uuid
+  expiredAt             DateTime         @map("expired_at") @db.Timestamptz(3)
+  paidAt                DateTime?        @map("paid_at") @db.Timestamptz(3)
+  fulfilledAt           DateTime?        @map("fulfilled_at") @db.Timestamptz(3)
+  closedAt              DateTime?        @map("closed_at") @db.Timestamptz(3)
+  cancelledAt           DateTime?        @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason          String?          @map("cancel_reason") @db.VarChar(256)
+  idempotencyKey        String?          @unique @map("idempotency_key") @db.VarChar(64)
+  version               Int              @default(0)
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt             DateTime?        @map("deleted_at") @db.Timestamptz(3)
+
+  payments              Payment[]
+  refunds               Refund[]
+  memberships           Membership[]
+  entitlements          Entitlement[]
+
+  @@index([userId, status])
+  @@index([status, createdAt])
+  @@index([status, expiredAt])
+  @@index([createdAt(sort: Desc)])
+  @@index([productId])
+  @@map("orders")
+}
+
+/// 支付单（回调幂等锚点：UNIQUE(transactionId)）
+model Payment {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  orderId          String        @map("order_id") @db.Uuid
+  order            Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId           String        @map("user_id") @db.Uuid
+  user             User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  outTradeNo       String        @unique @map("out_trade_no") @db.VarChar(32)
+  transactionId    String?       @unique @map("transaction_id") @db.VarChar(64)
+  prepayId         String?       @map("prepay_id") @db.VarChar(64)
+  channel          PayChannel
+  status           PaymentStatus @default(INIT)
+  amount           Int
+  payerAmount      Int?          @map("payer_amount")
+  currency         String        @default("CNY") @db.VarChar(8)
+  tradeState       String?       @map("trade_state") @db.VarChar(32)
+  bankType         String?       @map("bank_type") @db.VarChar(32)
+  appid            String?       @db.VarChar(64)
+  mchid            String?       @db.VarChar(64)
+  notifyPayload    Json?         @map("notify_payload") @db.JsonB
+  notifyReceivedAt DateTime?     @map("notify_received_at") @db.Timestamptz(3)
+  idempotencyKey   String?       @unique @map("idempotency_key") @db.VarChar(64)
+  successTime      DateTime?     @map("success_time") @db.Timestamptz(3)
+  errorCode        String?       @map("error_code") @db.VarChar(32)
+  errorMessage     String?       @map("error_message") @db.VarChar(512)
+  version          Int           @default(0)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  refunds          Refund[]
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("payments")
+}
+
+/// 退款单（PENDING → SUCCESS/FAILED）
+model Refund {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  refundNo          String       @unique @map("refund_no") @db.VarChar(32)
+  orderId           String       @map("order_id") @db.Uuid
+  order             Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentId         String       @map("payment_id") @db.Uuid
+  payment           Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  userId            String       @map("user_id") @db.Uuid
+  user              User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  outRefundNo       String       @unique @map("out_refund_no") @db.VarChar(32)
+  refundId          String?      @unique @map("refund_id") @db.VarChar(64)
+  refundAmount      Int          @map("refund_amount")
+  totalAmount       Int          @map("total_amount")
+  currency          String       @default("CNY") @db.VarChar(8)
+  reason            String?      @db.VarChar(256)
+  status            RefundStatus @default(PENDING)
+  channel           PayChannel
+  operatorAdminId   String?      @map("operator_admin_id") @db.Uuid
+  operatorAdmin     AdminUser?   @relation("RefundOperator", fields: [operatorAdminId], references: [id], onDelete: SetNull)
+  approvedByAdminId String?      @map("approved_by_admin_id") @db.Uuid
+  approvedByAdmin   AdminUser?   @relation("RefundApprover", fields: [approvedByAdminId], references: [id], onDelete: SetNull)
+  notifyPayload     Json?        @map("notify_payload") @db.JsonB
+  successTime       DateTime?    @map("success_time") @db.Timestamptz(3)
+  errorCode         String?      @map("error_code") @db.VarChar(32)
+  errorMessage      String?      @map("error_message") @db.VarChar(512)
+  idempotencyKey    String?      @unique @map("idempotency_key") @db.VarChar(64)
+  version           Int          @default(0)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?    @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([orderId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("refunds")
+}
+
+/// 会员实例（同一用户同时只有一段 ACTIVE）
+model Membership {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  userId           String           @map("user_id") @db.Uuid
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId           String           @map("plan_id") @db.Uuid
+  plan             MembershipPlan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+  orderId          String?          @map("order_id") @db.Uuid
+  order            Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  status           MembershipStatus @default(ACTIVE)
+  source           MembershipSource @default(PURCHASE)
+  startAt          DateTime         @map("start_at") @db.Timestamptz(3)
+  expireAt         DateTime         @map("expire_at") @db.Timestamptz(3)
+  autoRenew        Boolean          @default(false) @map("auto_renew")
+  cancelledAt      DateTime?        @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason     String?          @map("cancel_reason") @db.VarChar(256)
+  benefitsSnapshot Json             @map("benefits_snapshot") @db.JsonB
+  dailyAiUsed      Int              @default(0) @map("daily_ai_used")
+  dailyAiUsedDate  DateTime?        @map("daily_ai_used_date") @db.Date
+  grantedByAdminId String?          @map("granted_by_admin_id") @db.Uuid
+  grantedByAdmin   AdminUser?       @relation(fields: [grantedByAdminId], references: [id], onDelete: SetNull)
+  version          Int              @default(0)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?        @map("deleted_at") @db.Timestamptz(3)
+
+  entitlements     Entitlement[]
+
+  @@index([userId, status])
+  @@index([status, expireAt])
+  @@index([orderId])
+  @@map("memberships")
+}
+
+/// 权益（解锁付费内容的唯一依据）
+model Entitlement {
+  id               String            @id @default(uuid(7)) @db.Uuid
+  userId           String            @map("user_id") @db.Uuid
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type             EntitlementType
+  status           EntitlementStatus @default(ACTIVE)
+  resourceKey      String?           @map("resource_key") @db.VarChar(128)
+  orderId          String?           @map("order_id") @db.Uuid
+  order            Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  membershipId     String?           @map("membership_id") @db.Uuid
+  membership       Membership?       @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  reportId         String?           @map("report_id") @db.Uuid
+  report           AiReport?         @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  relationshipId   String?           @map("relationship_id") @db.Uuid
+  relationship     Relationship?     @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
+  totalQuota       Int?              @map("total_quota")
+  usedQuota        Int               @default(0) @map("used_quota")
+  remainingQuota   Int?              @map("remaining_quota")
+  startAt          DateTime          @default(now()) @map("start_at") @db.Timestamptz(3)
+  expireAt         DateTime?         @map("expire_at") @db.Timestamptz(3)
+  consumedAt       DateTime?         @map("consumed_at") @db.Timestamptz(3)
+  revokedAt        DateTime?         @map("revoked_at") @db.Timestamptz(3)
+  revokeReason     String?           @map("revoke_reason") @db.VarChar(256)
+  idempotencyKey   String?           @unique @map("idempotency_key") @db.VarChar(128)
+  grantedByAdminId String?           @map("granted_by_admin_id") @db.Uuid
+  grantedByAdmin   AdminUser?        @relation(fields: [grantedByAdminId], references: [id], onDelete: SetNull)
+  version          Int               @default(0)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?         @map("deleted_at") @db.Timestamptz(3)
+
+  @@unique([userId, type, resourceKey])
+  @@index([userId, type, status])
+  @@index([status, expireAt])
+  @@map("entitlements")
+}
+
+// ============================================================================
+// 平台域
+// ============================================================================
+
+/// 后台管理员（密码 Argon2id；独立 realm）
+model AdminUser {
+  id                 String          @id @default(uuid(7)) @db.Uuid
+  username           String          @unique @db.VarChar(48)
+  passwordHash       String          @map("password_hash") @db.VarChar(256)
+  nickname           String?         @db.VarChar(64)
+  realName           String?         @map("real_name") @db.VarChar(64)
+  emailEnc           String?         @map("email_enc") @db.VarChar(512)
+  phoneEnc           String?         @map("phone_enc") @db.VarChar(512)
+  status             AdminUserStatus @default(ACTIVE)
+  isSuperAdmin       Boolean         @default(false) @map("is_super_admin")
+  mustChangePassword Boolean         @default(false) @map("must_change_password")
+  passwordUpdatedAt  DateTime?       @map("password_updated_at") @db.Timestamptz(3)
+  failedLoginCount   Int             @default(0) @map("failed_login_count")
+  lockedUntil        DateTime?       @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt        DateTime?       @map("last_login_at") @db.Timestamptz(3)
+  lastLoginIp        String?         @map("last_login_ip") @db.VarChar(64)
+  mfaSecretEnc       String?         @map("mfa_secret_enc") @db.VarChar(512)
+  remark             String?         @db.VarChar(256)
+  version            Int             @default(0)
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  userRoles               AdminUserRole[]       @relation("AdminUserRoleUser")
+  grantedUserRoles        AdminUserRole[]       @relation("AdminUserRoleGrantedBy")
+  auditLogs               AdminAuditLog[]
+  handledDeletionRequests UserDeletionRequest[]
+  createdTestDefinitions  TestDefinition[]
+  createdQuestions        Question[]
+  createdStyleRules       RelationshipStyleRule[]
+  createdPromptTemplates  PromptTemplate[]
+  publishedPromptVersions PromptVersion[]
+  updatedTaskRoutings     AiTaskRouting[]
+  createdProducts         Product[]
+  createdPlans            MembershipPlan[]
+  createdWeights          CompatibilityWeight[]
+  updatedConfigs          SystemConfig[]
+  operatedRefunds         Refund[]              @relation("RefundOperator")
+  approvedRefunds         Refund[]              @relation("RefundApprover")
+  grantedMemberships      Membership[]
+  grantedEntitlements     Entitlement[]
+
+  @@index([status])
+  @@map("admin_users")
+}
+
+/// 角色
+model Role {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  code        String    @unique @db.VarChar(48)
+  name        String    @db.VarChar(64)
+  description String?   @db.VarChar(256)
+  isSystem    Boolean   @default(false) @map("is_system")
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  adminUsers  AdminUserRole[]
+  permissions RolePermission[]
+
+  @@index([isSystem])
+  @@map("roles")
+}
+
+/// 权限点（<domain>:<resource>:<action>）
+model Permission {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  code        String   @unique @db.VarChar(96)
+  name        String   @db.VarChar(64)
+  domain      String   @db.VarChar(32)
+  resource    String   @db.VarChar(32)
+  action      String   @db.VarChar(32)
+  description String?  @db.VarChar(256)
+  isSystem    Boolean  @default(true) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  roles       RolePermission[]
+
+  @@index([domain, resource])
+  @@map("permissions")
+}
+
+/// 管理员-角色关联
+model AdminUserRole {
+  id               String     @id @default(uuid(7)) @db.Uuid
+  adminUserId      String     @map("admin_user_id") @db.Uuid
+  adminUser        AdminUser  @relation("AdminUserRoleUser", fields: [adminUserId], references: [id], onDelete: Cascade)
+  roleId           String     @map("role_id") @db.Uuid
+  role             Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  grantedByAdminId String?    @map("granted_by_admin_id") @db.Uuid
+  grantedByAdmin   AdminUser? @relation("AdminUserRoleGrantedBy", fields: [grantedByAdminId], references: [id], onDelete: SetNull)
+  expiresAt        DateTime?  @map("expires_at") @db.Timestamptz(3)
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([adminUserId, roleId])
+  @@index([roleId])
+  @@map("admin_user_roles")
+}
+
+/// 角色-权限关联
+model RolePermission {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  roleId       String     @map("role_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String     @map("permission_id") @db.Uuid
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+/// 后台操作审计（禁止删除与修改）
+model AdminAuditLog {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  adminUserId   String?          @map("admin_user_id") @db.Uuid
+  adminUser     AdminUser?       @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+  adminUsername String           @map("admin_username") @db.VarChar(48)
+  action        AdminAuditAction
+  resourceType  String           @map("resource_type") @db.VarChar(48)
+  resourceId    String?          @map("resource_id") @db.Uuid
+  targetUserId  String?          @map("target_user_id") @db.Uuid
+  beforeData    Json?            @map("before_data") @db.JsonB
+  afterData     Json?            @map("after_data") @db.JsonB
+  diffSummary   String?          @map("diff_summary") @db.VarChar(1024)
+  reason        String?          @db.VarChar(256)
+  ip            String?          @db.VarChar(64)
+  userAgent     String?          @map("user_agent") @db.VarChar(256)
+  requestId     String?          @map("request_id") @db.VarChar(64)
+  success       Boolean          @default(true)
+  errorCode     String?          @map("error_code") @db.VarChar(32)
+  latencyMs     Int?             @map("latency_ms")
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([adminUserId, createdAt(sort: Desc)])
+  @@index([resourceType, resourceId])
+  @@index([action, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("admin_audit_logs")
+}
+
+/// 通知（订阅消息 / 站内）
+model Notification {
+  id             String             @id @default(uuid(7)) @db.Uuid
+  userId         String             @map("user_id") @db.Uuid
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           NotificationType
+  status         NotificationStatus @default(PENDING)
+  templateId     String?            @map("template_id") @db.VarChar(64)
+  title          String?            @db.VarChar(128)
+  content        String?            @db.VarChar(1024)
+  pagePath       String?            @map("page_path") @db.VarChar(256)
+  payload        Json?              @db.JsonB
+  outboxEventId  String?            @map("outbox_event_id") @db.Uuid
+  outboxEvent    OutboxEvent?       @relation(fields: [outboxEventId], references: [id], onDelete: SetNull)
+  idempotencyKey String?            @unique @map("idempotency_key") @db.VarChar(128)
+  retryCount     Int                @default(0) @map("retry_count")
+  sentAt         DateTime?          @map("sent_at") @db.Timestamptz(3)
+  readAt         DateTime?          @map("read_at") @db.Timestamptz(3)
+  failReason     String?            @map("fail_reason") @db.VarChar(512)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt      DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([userId, status, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("notifications")
+}
+
+/// 分享记录（裂变归因）
+model ShareRecord {
+  id             String              @id @default(uuid(7)) @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel        ShareChannel
+  scene          String              @db.VarChar(64)
+  targetType     ShareTargetType     @map("target_type")
+  targetId       String?             @map("target_id") @db.Uuid
+  inviteId       String?             @map("invite_id") @db.Uuid
+  invite         RelationshipInvite? @relation(fields: [inviteId], references: [id], onDelete: SetNull)
+  pagePath       String?             @map("page_path") @db.VarChar(256)
+  posterUrl      String?             @map("poster_url") @db.VarChar(512)
+  clickCount     Int                 @default(0) @map("click_count")
+  newUserCount   Int                 @default(0) @map("new_user_count")
+  convertedCount Int                 @default(0) @map("converted_count")
+  requestId      String?             @map("request_id") @db.VarChar(64)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([scene, createdAt])
+  @@index([channel, createdAt])
+  @@map("share_records")
+}
+
+/// 系统配置（运行时可变文案与开关；禁止存密钥）
+model SystemConfig {
+  id               String          @id @default(uuid(7)) @db.Uuid
+  key              String          @unique @db.VarChar(96)
+  value            String          @db.Text
+  valueType        ConfigValueType @default(STRING) @map("value_type")
+  group            String          @db.VarChar(48)
+  description      String?         @db.VarChar(512)
+  isPublic         Boolean         @default(false) @map("is_public")
+  isEditable       Boolean         @default(true) @map("is_editable")
+  updatedByAdminId String?         @map("updated_by_admin_id") @db.Uuid
+  updatedByAdmin   AdminUser?      @relation(fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+  version          Int             @default(0)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([group])
+  @@index([isPublic])
+  @@map("system_configs")
+}
+
+/// 事务性发件箱（at-least-once 投递）
+model OutboxEvent {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  eventType      String       @map("event_type") @db.VarChar(64)
+  aggregateType  String       @map("aggregate_type") @db.VarChar(48)
+  aggregateId    String       @map("aggregate_id") @db.Uuid
+  payload        Json         @db.JsonB
+  status         OutboxStatus @default(PENDING)
+  idempotencyKey String       @unique @map("idempotency_key") @db.VarChar(128)
+  retryCount     Int          @default(0) @map("retry_count")
+  maxRetries     Int          @default(5) @map("max_retries")
+  availableAt    DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
+  publishedAt    DateTime?    @map("published_at") @db.Timestamptz(3)
+  lockedAt       DateTime?    @map("locked_at") @db.Timestamptz(3)
+  lockedBy       String?      @map("locked_by") @db.VarChar(64)
+  lastError      String?      @map("last_error") @db.VarChar(1024)
+  requestId      String?      @map("request_id") @db.VarChar(64)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  notifications  Notification[]
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@index([createdAt(sort: Desc)])
+  @@map("outbox_events")
+}
+
+// ============================================================================
+// 文件与审计域（ADR-029）
+//
+// 这两张表由接口契约反向要求、在首版数据模型中遗漏，现补齐：
+//   · stored_files       —— 契约 §3.10.3 规则 4「写入 stored_files 供审计与清理任务使用」
+//   · user_phone_history —— 契约 §3.2.4 规则 3「旧号码记录进历史供审计」
+// 二者都不是短生命周期状态（需长期保留），因此**不适用 ADR-024 的 Redis 方案**。
+// ============================================================================
+
+/// 对象存储文件元数据：OSS 直传回调登记，供内容安全与孤儿清理使用
+model StoredFile {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  /// 对象键，形如 `{scene}/{userId}/{yyyyMMdd}_{uuid}.{ext}`；由服务端生成，全局唯一
+  objectKey      String            @unique @map("object_key") @db.VarChar(200)
+  /// 归属用户；注销匿名化时置 NULL（审计记录保留，不阻断注销流程）
+  userId         String?           @map("user_id") @db.Uuid
+  user           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  scene          StorageScene
+  sizeBytes      Int               @map("size_bytes")
+  mimeType       String            @map("mime_type") @db.VarChar(64)
+  etag           String?           @db.VarChar(64)
+  safetyStatus   SafetyCheckStatus @default(PENDING) @map("safety_status")
+  safetyLabels   String[]          @default([]) @map("safety_labels")
+  /// 业务登记时间（如 POST /users/me/avatar 调用成功）；NULL = 孤儿对象，超期后由清理任务删除
+  registeredAt   DateTime?         @map("registered_at") @db.Timestamptz(3)
+  /// 回调次数；同一 objectKey + etag 重复回调只累加计数，不重复投递检测任务
+  callbackCount  Int               @default(1) @map("callback_count")
+  lastCallbackAt DateTime          @default(now()) @map("last_callback_at") @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([scene, createdAt(sort: Desc)])
+  @@index([safetyStatus])
+  /// 孤儿清理扫描：未登记（registeredAt IS NULL）且已超 24h
+  @@index([registeredAt, createdAt])
+  @@map("stored_files")
+}
+
+/// 手机号绑定与换绑历史（合规审计）
+///
+/// 明文零落库：只保留 `phoneHash`（SHA-256 加盐）与 `phoneMasked`（脱敏展示值），
+/// 两者都无法还原完整号码 —— 审计需要的是「何时换过、换成哪个号的脱敏形态」，
+/// 而不是号码本身（架构 §14.2）。
+model UserPhoneHistory {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256(phone + CRYPTO_IV_SALT)，与 users.phoneHash 同算法，用于跨账号查重
+  phoneHash   String    @map("phone_hash") @db.VarChar(64)
+  /// 脱敏值（如 138****6721），仅供人工审计时辨识
+  phoneMasked String    @map("phone_masked") @db.VarChar(32)
+  countryCode String    @default("86") @map("country_code") @db.VarChar(8)
+  /// 授权来源：BUTTON / PROFILE（契约 §3.2.4）
+  source      String?   @db.VarChar(16)
+  /// 该号码被替换掉的时刻；NULL 表示这是当前绑定号码
+  replacedAt  DateTime? @map("replaced_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([phoneHash])
+  @@map("user_phone_history")
+}

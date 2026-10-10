@@ -1,0 +1,24 @@
+packages:
+  - "backend"
+  - "frontend/*"
+
+# ---------------------------------------------------------------------------
+# pnpm 10 默认阻止依赖的 postinstall 脚本（供应链安全）。
+# 这里仅放行「确实需要」构建/下载二进制的包：
+#   - prisma / @prisma/client : 需要下载 query engine 并 generate
+#   - @prisma/engines        : 引擎二进制
+#   - argon2                 : 需要编译/下载原生绑定
+#   - esbuild                : 需要放置平台二进制（vite / nest build 依赖）
+#   - unrs-resolver          : eslint-import-resolver 的原生依赖
+#   - @parcel/watcher        : 文件监听原生模块
+# 新增需要放行的包时，必须在此显式声明并说明原因，禁止直接开启 allow-all。
+# ---------------------------------------------------------------------------
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - prisma
+  - argon2
+  - esbuild
+  - unrs-resolver
+  - "@parcel/watcher"
+  - core-js

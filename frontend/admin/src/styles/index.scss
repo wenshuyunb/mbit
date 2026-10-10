@@ -1,0 +1,99 @@
+// ============================================================================
+// 全局样式入口（由 src/main.ts 引入，全站仅编译一次）
+//
+// 结构：
+//   1. 引入基础重置
+//   2. 声明可被暗色主题覆盖的 CSS 变量（供组件通过 var(--sm-*) 使用）
+//   3. 全局基础排版与通用布局工具类
+//
+// 注意：SCSS 变量（$xxx）由 vite.config.ts 的 additionalData 自动注入，无需 @use variables.scss。
+// ============================================================================
+
+@use './reset.scss';
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+// ----------------------------------------------------------------- 主题变量
+:root {
+  --sm-color-primary: #{$color-primary};
+  --sm-color-primary-bg: #{$color-primary-bg};
+  --sm-bg-page: #{$color-bg-page};
+  --sm-bg-container: #{$color-bg-container};
+  --sm-text-primary: #{$color-text-primary};
+  --sm-text-regular: #{$color-text-regular};
+  --sm-text-secondary: #{$color-text-secondary};
+  --sm-border-color: #{$color-border};
+  --sm-radius-card: #{$radius-md};
+  --sm-shadow-card: #{$shadow-sm};
+}
+
+// 暗色主题：Element Plus 的暗色变量由 html.dark 类启用（见 src/main.ts 引入的 dark/css-vars.css），
+// 这里只覆盖本项目自定义的少量变量，保证页面底色与文字跟随主题。
+html.dark {
+  --sm-color-primary-bg: #26283a;
+  --sm-bg-page: #141414;
+  --sm-bg-container: #1d1e1f;
+  --sm-text-primary: #e5eaf3;
+  --sm-text-regular: #cfd3dc;
+  --sm-text-secondary: #a3a6ad;
+  --sm-border-color: #414243;
+  --sm-shadow-card: none;
+}
+
+// ----------------------------------------------------------------- 基础排版
+body {
+  font-family: $font-family-base;
+  font-size: $font-size-base;
+  line-height: 1.5;
+  color: var(--sm-text-primary);
+  background-color: var(--sm-bg-page);
+}
+
+code,
+kbd,
+pre {
+  font-family: $font-family-mono;
+}
+
+// ----------------------------------------------------------------- 通用工具类
+// 统一页面容器：所有 view 的根节点建议使用，保证内边距一致
+.sm-page {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  height: 100%;
+}
+
+// 内容卡片
+.sm-card {
+  padding: $spacing-md;
+  background-color: var(--sm-bg-container);
+  border: 1px solid var(--sm-border-color);
+  border-radius: var(--sm-radius-card);
+}
+
+// 表格/长文本中需要等宽展示的标识（ID、订单号等）
+.sm-mono {
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  color: var(--sm-text-regular);
+}
+
+.sm-text-secondary {
+  color: var(--sm-text-secondary);
+}
+
+// 路由切换过渡
+.layout-fade-enter-active,
+.layout-fade-leave-active {
+  transition: opacity 0.15s ease-in-out;
+}
+
+.layout-fade-enter-from,
+.layout-fade-leave-to {
+  opacity: 0;
+}

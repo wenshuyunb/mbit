@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": false,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": false,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "paths": {
+      "src/*": ["src/*"],
+      "test/*": ["test/*"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*", "prisma/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist", "coverage"]
+}

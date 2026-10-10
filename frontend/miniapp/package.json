@@ -1,0 +1,45 @@
+{
+  "name": "@soulmap/miniapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SoulMap AI 微信小程序（uni-app + Vue3 + TypeScript）",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev:mp-weixin": "uni -p mp-weixin",
+    "dev:h5": "uni",
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "build:h5": "uni build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "lint": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "api:types": "openapi-typescript ../../openapi.json -o src/types/openapi.d.ts",
+    "copy:vant": "node scripts/copy-vant.mjs"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-5030120260930001",
+    "@dcloudio/uni-components": "3.0.0-alpha-5030120260930001",
+    "@dcloudio/uni-h5": "3.0.0-alpha-5030120260930001",
+    "@dcloudio/uni-mp-weixin": "3.0.0-alpha-5030120260930001",
+    "@vant/weapp": "1.11.7",
+    "echarts": "5.6.0",
+    "pinia": "2.3.1",
+    "vue": "3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "3.4.31",
+    "@dcloudio/uni-cli-shared": "3.0.0-alpha-5030120260930001",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-5030120260930001",
+    "@types/node": "22.10.7",
+    "@vue/test-utils": "2.5.1",
+    "jsdom": "25.0.1",
+    "sass": "1.105.1",
+    "typescript": "5.9.3",
+    "vite": "5.2.8",
+    "vitest": "2.1.9",
+    "vue-tsc": "2.2.0"
+  }
+}

@@ -1,0 +1,332 @@
+# =============================================================================
+# SoulMap AI — CI/CD 流水线
+# -----------------------------------------------------------------------------
+# 流程（见 docs/PROJECT_ARCHITECTURE.md §18.1）：
+#   push / PR
+#     ├─ lint      : 三端 ESLint + 类型检查 + Prettier 校验
+#     ├─ test      : 后端 Jest / 小程序 Vitest / 后台 Vitest
+#     ├─ build     : 后端编译 + 管理后台构建 + 小程序 mp-weixin 构建
+#     ├─ security  : 依赖漏洞扫描 + 密钥泄露扫描
+#     └─ docs      : 生成物一致性校验（错误码文档 / Prisma schema）
+#   仅 main 分支 + 手动批准 → deploy
+#
+# ⚠ 本文件的各步骤已在本地逐项验证（`scripts/verify-all.ps1` 是它的本地镜像，
+#    执行同样的检查），但**整条流水线尚未在 GitHub Actions 上真实跑过**。
+#    首次推送后请核对：pnpm/Node 版本、缓存键、artifacts 路径。
+#
+# 已知的、无法在本地验证的部分：
+#   · `integration` job 的 PG/Redis service 容器与 `db:deploy` / `db:seed`
+#   · `deploy` job 的镜像构建与 SSH 部署（目前是占位 echo）
+#   · `security` job 的 gitleaks（需要 GITHUB_TOKEN）
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# 同一分支的旧流水线自动取消，节省额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 后端构建使用 Node 20 LTS（与 Docker 镜像一致）
+  NODE_VERSION_BACKEND: "20"
+  # 小程序工具链要求 Node ≥ 22.12
+  NODE_VERSION_FRONTEND: "22"
+  PNPM_VERSION: "10"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. 代码规范与类型检查
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_FRONTEND }}
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 生成 Prisma Client
+        run: pnpm db:generate
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/ci?schema=public
+
+      - name: Prettier 格式校验
+        run: pnpm format:check
+
+      - name: 后端 ESLint
+        run: pnpm --filter @soulmap/server lint
+
+      - name: 后端类型检查
+        run: pnpm --filter @soulmap/server typecheck
+
+      - name: 小程序类型检查
+        run: pnpm --filter @soulmap/miniapp typecheck
+
+      - name: 管理后台类型检查
+        run: pnpm --filter @soulmap/admin typecheck
+
+  # ---------------------------------------------------------------------------
+  # 2. 单元测试
+  # ---------------------------------------------------------------------------
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_FRONTEND }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 生成 Prisma Client
+        run: pnpm db:generate
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/ci?schema=public
+
+      - name: 后端单元测试
+        run: pnpm --filter @soulmap/server test -- --ci
+
+      - name: 小程序单元测试
+        run: pnpm --filter @soulmap/miniapp test
+
+      - name: 管理后台单元测试
+        # ⚠ 管理后台目前**没有任何用例**，而 `vitest run` 在无用例时以非零码退出 ——
+        # 直接跑会让这个 job 永远失败。这里先用 `--passWithNoTests` 并显式告警：
+        # 绿灯不等于"后台已被测试覆盖"，告警是为了让这件事在流水线里可见。
+        # 后台接入业务接口后**必须**去掉这个 flag（见 README 已知未完成项）。
+        run: |
+          echo "::warning::管理后台尚无测试用例，本步骤当前不做实质校验"
+          pnpm --filter @soulmap/admin test -- --passWithNoTests
+
+  # ---------------------------------------------------------------------------
+  # 3. 集成测试（真实 PostgreSQL + Redis 容器）
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: soulmap
+          POSTGRES_PASSWORD: soulmap_ci_pwd
+          POSTGRES_DB: soulmap_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U soulmap"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://soulmap:soulmap_ci_pwd@127.0.0.1:5432/soulmap_test?schema=public
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6379"
+      JWT_SECRET: ci_only_user_access_secret_at_least_32_characters_long
+      ADMIN_JWT_SECRET: ci_only_admin_access_secret_at_least_32_characters_long
+      LOG_LEVEL: error
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          # ⚠ 必须用前端版本（≥22.12）：本 job 执行的是**根级** `pnpm install`，
+          # 会装整棵 workspace，而小程序工具链要求 ≥22.12。
+          # 用 Node 20 会在安装阶段就失败，且报错与 e2e 毫无关系，极难定位。
+          node-version: ${{ env.NODE_VERSION_FRONTEND }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 生成 Prisma Client
+        run: pnpm db:generate
+
+      - name: 应用数据库迁移
+        run: pnpm db:deploy
+
+      - name: 灌入种子数据
+        run: pnpm db:seed
+
+      - name: 后端 e2e 测试
+        # ⚠ 目前 `backend/test/` 只有 `setup.ts`，**没有任何 e2e 用例**。
+        # 直接跑 `test:e2e` 会因 "no tests found" 退出 1，让这个 job 永远失败，
+        # 而 `deploy` 依赖它 —— 等于整条流水线从未成功过。
+        #
+        # 这里用"存在用例才跑"的方式：既有实质校验时正常执行，
+        # 没有用例时**明确告警**而不是静默通过（绿灯不该被误读为已被覆盖）。
+        # 用例落地后本判断可删除。
+        run: |
+          if ls backend/test/**/*.e2e-spec.ts >/dev/null 2>&1; then
+            pnpm --filter @soulmap/server test:e2e
+          else
+            echo "::warning::尚未编写后端 e2e 用例（backend/test/ 仅有 setup.ts），集成测试 job 当前不做实质校验"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 4. 构建
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_FRONTEND }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 生成 Prisma Client
+        run: pnpm db:generate
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/ci?schema=public
+
+      - name: 构建后端
+        run: pnpm build:server
+        env:
+          GIT_SHA: ${{ github.sha }}
+          BUILD_TIME: ${{ github.event.repository.updated_at }}
+
+      - name: 构建管理后台
+        run: pnpm build:admin
+
+      - name: 构建小程序（mp-weixin）
+        run: pnpm build:miniapp
+
+      - name: 归档构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          retention-days: 7
+          path: |
+            backend/dist/**
+            frontend/admin/dist/**
+            frontend/miniapp/dist/build/mp-weixin/**
+
+  # ---------------------------------------------------------------------------
+  # 5. 安全扫描
+  # ---------------------------------------------------------------------------
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 密钥泄露扫描（gitleaks）
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_FRONTEND }}
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 依赖漏洞审计
+        run: pnpm audit --audit-level=high
+        continue-on-error: true # 审计失败先告警不阻断，待依赖收敛后再收紧
+
+  # ---------------------------------------------------------------------------
+  # 6. 生成物一致性（文档即代码）
+  # ---------------------------------------------------------------------------
+  consistency:
+    name: Generated Artifacts Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_FRONTEND }}
+
+      - name: 校验错误码文档与后端源码一致
+        run: node scripts/generate-error-code-doc.mjs --check
+
+      - name: 校验 Prisma schema 与设计文档一致
+        # 用脚本自带的 `--check` 而不是"重新生成再 diff"：
+        # 后者会**写回**仓库文件，在 CI 里既无意义又掩盖了"是谁改的"；
+        # `--check` 还会打印首个差异行与两条修复指引（改文档 or 改生成物）。
+        run: node scripts/extract-prisma-schema.mjs --check
+
+  # ---------------------------------------------------------------------------
+  # 7. 部署（仅 main 分支，需手动批准）
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, integration, build, security, consistency]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      # 在 GitHub 仓库 Settings → Environments 中为 production 配置 Required reviewers
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建并推送镜像
+        run: |
+          echo "::notice::此处接入镜像仓库（GHCR 或阿里云 ACR）"
+          echo "docker buildx build --platform linux/amd64 -t \$IMAGE_TAG --push ./backend"
+
+      - name: 部署到服务器
+        run: |
+          echo "::notice::此处通过 SSH 执行：拉取镜像 → prisma migrate deploy → 滚动重启 → 健康检查 → 冒烟测试"
+          echo "失败时自动回滚上一镜像 tag"
+
+      - name: 冒烟测试
+        run: |
+          echo "::notice::执行 scripts/smoke.sh：登录 → 取题 → 提交 → 查报告"

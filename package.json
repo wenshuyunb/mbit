@@ -1,0 +1,71 @@
+{
+  "name": "soulmap-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SoulMap AI — 基于人格测试（MBTI + Big Five）与 AI 的情感成长平台（微信小程序 + Web 后台）",
+  "license": "UNLICENSED",
+  "author": "SoulMap AI Team",
+  "engines": {
+    "node": ">=20.0.0 <25.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d postgres redis",
+    "infra:logs": "docker compose logs -f postgres redis",
+    "dev:server": "pnpm --filter @soulmap/server start:dev",
+    "dev:admin": "pnpm --filter @soulmap/admin dev",
+    "dev:miniapp": "pnpm --filter @soulmap/miniapp dev:mp-weixin",
+    "build": "pnpm -r --filter \"./backend\" --filter \"./frontend/**\" build",
+    "build:server": "pnpm --filter @soulmap/server build",
+    "build:admin": "pnpm --filter @soulmap/admin build",
+    "build:miniapp": "pnpm --filter @soulmap/miniapp build:mp-weixin",
+    "lint": "pnpm -r lint",
+    "lint:fix": "pnpm -r lint:fix",
+    "format": "prettier --write \"**/*.{ts,js,mjs,json,md,yml,yaml,scss,vue}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,mjs,json,md,yml,yaml,scss,vue}\"",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:server": "pnpm --filter @soulmap/server test",
+    "test:admin": "pnpm --filter @soulmap/admin test",
+    "test:miniapp": "pnpm --filter @soulmap/miniapp test",
+    "test:e2e": "pnpm --filter @soulmap/admin test:e2e",
+    "db:generate": "pnpm --filter @soulmap/server prisma:generate",
+    "db:migrate": "pnpm --filter @soulmap/server prisma:migrate",
+    "db:deploy": "pnpm --filter @soulmap/server prisma:deploy",
+    "db:seed": "pnpm --filter @soulmap/server prisma:seed",
+    "db:studio": "pnpm --filter @soulmap/server prisma:studio",
+    "db:reset": "pnpm --filter @soulmap/server prisma:reset",
+    "api:types": "pnpm --filter @soulmap/server openapi:export && pnpm --filter @soulmap/admin api:types && pnpm --filter @soulmap/miniapp api:types",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.6.1",
+    "@commitlint/config-conventional": "^19.6.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.4.3",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.4.2",
+    "prettier-plugin-organize-imports": "^4.1.0",
+    "typescript": "^5.7.3"
+  },
+  "lint-staged": {
+    "*.{ts,js,mjs,cjs,vue}": [
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml,scss}": [
+      "prettier --write"
+    ]
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "@types/react",
+        "react",
+        "react-dom"
+      ]
+    }
+  }
+}

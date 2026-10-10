@@ -1,0 +1,34 @@
+# ============================================================
+# SoulMap AI Web 管理后台 —— 最小忽略集
+# 根目录 .gitignore 已覆盖 node_modules/dist/logs/coverage 等通用规则，
+# 此处只补充子包特有的产物与显式放行规则。
+# ============================================================
+
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+.vite/
+
+# ---- 测试与 E2E 产物（Phase 7 引入 Playwright）----
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# ---- 本地个人覆盖（禁止提交）----
+*.local
+.env.local
+.env.*.local
+
+# ---- 生成的 OpenAPI 类型 ----
+# 根目录 .gitignore 已放行 src/types/openapi.d.ts（便于无网环境开发），此处不再重复。
+
+# ---- 显式放行非敏感环境文件 ----
+# 根目录 .gitignore 的 `.env.*` 规则会忽略下列文件；
+# 它们只包含接口地址与标题（无密钥），属于开发/部署必需的默认配置，
+# 因此在子包中显式重新纳入版本管理（更深的 .gitignore 优先于父级）。
+!.env.development
+!.env.production

@@ -1,0 +1,13 @@
+/**
+ * uni-app 全局 SCSS 变量入口
+ *
+ * 说明：设计令牌（tokens.scss）通过 vite.config.ts 的
+ *       css.preprocessorOptions.scss.additionalData 注入到每个 SCSS 块，
+ *       因此这里不再重复 @import，避免每个组件的样式体积翻倍。
+ *
+ * 本文件保留是因为 uni-app 的工具链约定需要它存在；
+ * 若后续出现「某个平台的样式块未被注入」的问题，可在此补充 @import 作为兜底。
+ */
+
+// 设计令牌见 src/styles/tokens.scss
+// 全局选择器样式见 src/styles/global.scss（仅由 App.vue 引入一次）

@@ -1,0 +1,85 @@
+/**
+ * 全局样式（仅在 App.vue 中引入一次）
+ *
+ * 注意：这里写具体选择器是安全的（只打包一次）；
+ *       而 uni.scss 会被注入到每个组件，只能放变量与 mixin。
+ */
+
+page {
+  min-height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+  font-size: $font-size-base;
+  line-height: $line-height-base;
+  color: $color-text-primary;
+  background-color: $color-bg-page;
+  -webkit-font-smoothing: antialiased;
+}
+
+view,
+text,
+scroll-view,
+swiper,
+button,
+input,
+textarea,
+image {
+  box-sizing: border-box;
+}
+
+image {
+  display: block;
+}
+
+/* 去掉小程序 button 默认边框与背景 */
+button {
+  padding: 0;
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+
+  &::after {
+    border: none;
+  }
+}
+
+/* ---------------------------------------------------------------- 通用类 */
+
+.page-container {
+  min-height: 100vh;
+  padding: $space-lg;
+  background-color: $color-bg-page;
+}
+
+.card {
+  @include card;
+}
+
+.text-primary {
+  color: $color-text-primary;
+}
+
+.text-secondary {
+  color: $color-text-secondary;
+}
+
+.text-danger {
+  color: $color-danger;
+}
+
+.ellipsis {
+  @include text-ellipsis;
+}
+
+.ellipsis-2 {
+  @include text-ellipsis-multi(2);
+}
+
+.btn-primary {
+  @include button-primary;
+}
+
+.divider {
+  height: 1rpx;
+  background-color: $color-divider;
+}

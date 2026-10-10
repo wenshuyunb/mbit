@@ -1,0 +1,59 @@
+{
+  "name": "SoulMap AI",
+  "appid": "",
+  "description": "基于人格测试（MBTI + Big Five）与 AI 的情感成长平台",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "vueVersion": "3",
+  "locale": "zh-Hans",
+
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": true,
+      "es6": true,
+      "enhance": true,
+      "postcss": true,
+      "minified": true,
+      "minifyWXSS": true,
+      "minifyWXML": true,
+      "coverView": true,
+      "lazyloadPlaceholderEnable": false,
+      "preloadBackgroundData": false,
+      "autoAudits": false,
+      "uglifyFileName": false,
+      "uploadWithSourceMap": false,
+      "useCompilerPlugins": false,
+      "ignoreUploadUnusedFiles": true
+    },
+    "usingComponents": true,
+    "componentFramework": "glass-easel",
+    "lazyCodeLoading": "requiredComponents",
+    "optimization": {
+      "subPackages": true
+    },
+    "permission": {},
+    "requiredPrivateInfos": [],
+    "darkmode": false
+  },
+
+  "h5": {
+    "title": "SoulMap AI",
+    "router": {
+      "mode": "history",
+      "base": "/"
+    },
+    "optimization": {
+      "treeShaking": {
+        "enable": true
+      }
+    }
+  },
+
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3
+  }
+}

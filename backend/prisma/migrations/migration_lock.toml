@@ -1,0 +1,6 @@
+# Prisma 迁移锁文件
+#
+# 记录该迁移目录对应的数据库 provider，`prisma migrate deploy` 依据它做一致性校验。
+# 由 `prisma migrate dev` 自动生成；本项目在无数据库环境下用 `migrate diff` 生成初始迁移，
+# 因此手工补齐该文件（内容与 Prisma 官方生成的完全一致）。
+provider = "postgresql"

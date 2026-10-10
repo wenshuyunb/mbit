@@ -1,0 +1,89 @@
+# ============================================================
+# SoulMap AI — 依赖与忽略配置
+# ============================================================
+
+# ---- 依赖 ----
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+.pnpm-store-inspect/
+
+# ---- 构建产物 ----
+dist/
+build/
+out/
+*.tsbuildinfo
+.vite/
+.turbo/
+.cache/
+
+# ---- 小程序构建产物（uni-app 输出）----
+frontend/miniapp/dist/
+frontend/miniapp/unpackage/
+frontend/miniapp/src/uni_modules/**/dist/
+
+# ---- 环境变量（绝不提交）----
+.env
+.env.*
+!.env.example
+!.env.test
+
+# ---- 密钥与证书（绝不提交）----
+*.pem
+*.p12
+*.pfx
+*.key
+!frontend/**/public/*.key
+secrets/
+certs/
+
+# ---- 微信支付证书 ----
+backend/certs/
+apiclient_*.pem
+
+# ---- 日志 ----
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# ---- 测试与覆盖率 ----
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# ---- 编辑器与系统 ----
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Prisma ----
+backend/prisma/*.db
+backend/prisma/*.db-journal
+backend/prisma/migrations/dev.db*
+
+# ---- 生成的 OpenAPI 产物（由 CI 生成，不入库）----
+openapi.json
+openapi.generated.json
+# 注：前端生成的类型文件入库，便于无网环境开发
+!frontend/*/src/types/openapi.d.ts
+
+# ---- 临时与脚本产物 ----
+tmp/
+temp/
+scripts/out/
+*.local
+
+# ---- 本地命令输出日志（scripts/run.ps1 与 scripts/verify-frontend.ps1 产生）----
+.runlogs/
+probe-out.txt
+n1.txt
+n2.txt

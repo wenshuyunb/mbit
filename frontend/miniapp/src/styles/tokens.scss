@@ -1,0 +1,179 @@
+// ============================================================================
+// 设计令牌（Design Tokens）
+// ----------------------------------------------------------------------------
+// 单一来源：所有颜色、间距、字号、圆角、阴影必须引用这里的变量，
+// 禁止在业务组件中写死色值与尺寸。
+// 单位约定：rpx（微信小程序自适应单位，750rpx = 屏幕宽度）
+// ============================================================================
+
+// ------------------------------------------------------------------ 品牌色
+$color-primary: #5b4be0; // 主色：探索/自我认知
+$color-primary-light: #7d70ea;
+$color-primary-dark: #4234c4;
+$color-primary-fade: rgba(91, 75, 224, 0.08);
+
+$color-secondary: #ff7a59; // 辅助色：情感/关系
+$color-secondary-light: #ff9a80;
+$color-secondary-fade: rgba(255, 122, 89, 0.1);
+
+// ------------------------------------------------------------------ 功能色
+$color-success: #22c55e;
+$color-warning: #f59e0b;
+$color-danger: #ef4444;
+$color-info: #64748b;
+
+// ------------------------------------------------------------------ 中性色
+$color-text-primary: #1f1f2e; // 主要文字
+$color-text-regular: #4a4a5c; // 常规文字
+$color-text-secondary: #8a8a9e; // 次要文字
+$color-text-placeholder: #b8b8c7; // 占位文字
+$color-text-inverse: #ffffff;
+
+$color-bg-page: #f5f5fa; // 页面背景
+$color-bg-card: #ffffff; // 卡片背景
+$color-bg-mask: rgba(0, 0, 0, 0.45);
+$color-bg-hover: #f0f0f7;
+
+$color-border: #ebebf2;
+$color-border-strong: #d9d9e3;
+$color-divider: #f2f2f7;
+
+// ------------------------------------------------- MBTI 四维度主题色（可视化用）
+$color-mbti-e: #5b4be0;
+$color-mbti-i: #3b82f6;
+$color-mbti-s: #22c55e;
+$color-mbti-n: #a855f7;
+$color-mbti-t: #0ea5e9;
+$color-mbti-f: #f59e0b;
+$color-mbti-j: #14b8a6;
+$color-mbti-p: #ec4899;
+
+// ------------------------------------------------------------- Big Five 五维色
+$color-bigfive-openness: #5b4be0;
+$color-bigfive-conscientiousness: #22c55e;
+$color-bigfive-extraversion: #f59e0b;
+$color-bigfive-agreeableness: #ec4899;
+$color-bigfive-neuroticism: #0ea5e9;
+
+// ------------------------------------------------------------------ 间距
+$space-xxs: 4rpx;
+$space-xs: 8rpx;
+$space-sm: 16rpx;
+$space-md: 24rpx;
+$space-lg: 32rpx;
+$space-xl: 48rpx;
+$space-xxl: 64rpx;
+
+// ------------------------------------------------------------------ 字号
+$font-size-xs: 20rpx;
+$font-size-sm: 24rpx;
+$font-size-base: 28rpx;
+$font-size-md: 32rpx;
+$font-size-lg: 36rpx;
+$font-size-xl: 44rpx;
+$font-size-xxl: 56rpx;
+$font-size-display: 72rpx;
+
+$font-weight-regular: 400;
+$font-weight-medium: 500;
+$font-weight-semibold: 600;
+$font-weight-bold: 700;
+
+$line-height-tight: 1.25;
+$line-height-base: 1.5;
+$line-height-loose: 1.75;
+
+// ------------------------------------------------------------------ 圆角
+$radius-xs: 4rpx;
+$radius-sm: 8rpx;
+$radius-md: 16rpx;
+$radius-lg: 24rpx;
+$radius-xl: 32rpx;
+$radius-round: 999rpx;
+
+// ------------------------------------------------------------------ 阴影
+$shadow-sm: 0 2rpx 8rpx rgba(31, 31, 46, 0.04);
+$shadow-md: 0 8rpx 24rpx rgba(31, 31, 46, 0.06);
+$shadow-lg: 0 16rpx 40rpx rgba(31, 31, 46, 0.1);
+$shadow-primary: 0 12rpx 32rpx rgba(91, 75, 224, 0.24);
+
+// ------------------------------------------------------------------ 层级
+$z-index-base: 1;
+$z-index-sticky: 100;
+$z-index-fixed: 500;
+$z-index-mask: 900;
+$z-index-popup: 1000;
+$z-index-toast: 1100;
+
+// ------------------------------------------------------------------ 尺寸
+$navbar-height: 88rpx; // 自定义导航栏内容高度（不含状态栏）
+$tabbar-height: 100rpx;
+$safe-area-bottom: env(safe-area-inset-bottom);
+
+// ============================================================================
+// Mixins
+// ============================================================================
+
+/// 单行文本省略
+@mixin text-ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/// 多行文本省略
+@mixin text-ellipsis-multi($lines: 2) {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: $lines;
+  -webkit-box-orient: vertical;
+}
+
+/// 卡片容器
+@mixin card($padding: $space-lg) {
+  padding: $padding;
+  background-color: $color-bg-card;
+  border-radius: $radius-lg;
+  box-shadow: $shadow-sm;
+}
+
+/// 弹性居中
+@mixin flex-center($direction: row) {
+  display: flex;
+  flex-direction: $direction;
+  align-items: center;
+  justify-content: center;
+}
+
+/// 主轴两端对齐
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/// 主按钮样式
+@mixin button-primary {
+  @include flex-center;
+  height: 88rpx;
+  font-size: $font-size-md;
+  font-weight: $font-weight-semibold;
+  color: $color-text-inverse;
+  background: linear-gradient(135deg, $color-primary-light 0%, $color-primary 100%);
+  border-radius: $radius-round;
+  box-shadow: $shadow-primary;
+
+  &:active {
+    opacity: 0.86;
+  }
+
+  &.is-disabled {
+    background: $color-border-strong;
+    box-shadow: none;
+  }
+}
+
+/// 底部安全区占位
+@mixin safe-area-padding-bottom($extra: 0rpx) {
+  padding-bottom: calc(#{$extra} + #{$safe-area-bottom});
+}

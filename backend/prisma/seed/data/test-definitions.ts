@@ -1,0 +1,56 @@
+/**
+ * 测试定义种子数据
+ *
+ * 说明：
+ *   · `questionCount` 由 seed 脚本按实际灌入的题目数**回填**，不在此硬编码
+ *     （避免「定义说有 60 题、实际只有 32 题」导致运行期下发残缺试卷）
+ *   · `MBTI_FULL`（64 题深度版）暂以 DRAFT 状态存在：深度版需要独立撰写的题库内容，
+ *     在内容增量到位前保持不可用状态 —— 宁可缺少入口，也不能下发题量不足的试卷
+ */
+
+import type { SeedTestDefinition } from '../types';
+
+export const TEST_DEFINITIONS: SeedTestDefinition[] = [
+  {
+    code: 'MBTI_LITE',
+    name: '人格速测（MBTI 精简版）',
+    category: 'MBTI',
+    description:
+      '基于荣格类型学的四维度人格速测，32 道题覆盖能量来源、信息获取、决策方式与生活态度四个维度，约 5 分钟完成。',
+    version: '1.0.0',
+    status: 'ACTIVE',
+    isActive: true,
+    estimatedMinutes: 5,
+    selectionMode: 'STATIC_SET',
+    sortOrder: 10,
+    requiredEntitlement: null,
+  },
+  {
+    code: 'BIG_FIVE_50',
+    name: '大五人格测评（50 题）',
+    category: 'BIG_FIVE',
+    description:
+      '基于五因素人格理论（Big Five）的标准测评，50 道题覆盖开放性、尽责性、外向性、宜人性与神经质五个特质，约 8 分钟完成。',
+    version: '1.0.0',
+    status: 'ACTIVE',
+    isActive: true,
+    estimatedMinutes: 8,
+    selectionMode: 'STATIC_SET',
+    sortOrder: 20,
+    requiredEntitlement: null,
+  },
+  {
+    code: 'MBTI_FULL',
+    name: '人格深度测评（MBTI 完整版）',
+    category: 'COMPREHENSIVE',
+    description: '在精简版基础上扩展的深度测评，包含 MBTI 四维度与大五人格的联合评估，用于生成更精细的画像与报告。',
+    version: '1.0.0',
+    // 尚未灌入配套题库（64 题），保持 DRAFT + isActive=false，避免被误用
+    status: 'DRAFT',
+    isActive: false,
+    estimatedMinutes: 15,
+    selectionMode: 'STATIC_SET',
+    sortOrder: 30,
+    requiredEntitlement: null,
+  },
+];
