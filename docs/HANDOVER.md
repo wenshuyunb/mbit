@@ -67,23 +67,51 @@ node node_modules/ts-node/dist/bin.js prisma/seed/index.ts
 
 ---
 
-## 2. 四道门禁（每次交付必须全过）
+## 2. 五道门禁（每次交付必须全过）
 
 ```powershell
 cd D:\Projects\mbit\backend
-pnpm exec tsc --noEmit -p tsconfig.json      # 类型
-pnpm exec eslint src --max-warnings 0        # 静态检查（0 警告容忍）
-pnpm exec jest --runInBand                   # 单测（必须 --runInBand）
+pnpm exec tsc --noEmit -p tsconfig.json      # 1 类型
+pnpm exec eslint src --max-warnings 0        # 2 静态检查（0 警告容忍）
+pnpm exec jest --runInBand                   # 3 单测（必须 --runInBand）
 cd D:\Projects\mbit
-pnpm exec prettier --check .                 # 格式（全仓）
+pnpm exec prettier --check .                 # 4 格式（全仓）
 ```
 
-或用本地 CI 镜像脚本：
+或用本地 CI 镜像脚本（**只覆盖前四道**）：
 
 ```powershell
 cd D:\Projects\mbit
 & .\scripts\verify-all.ps1 -SkipFrontend
 ```
+
+### 第 5 道门禁：真实启动验证（**前四道全绿也挡不住的最后一类故障**）
+
+```powershell
+cd D:\Projects\mbit\backend
+pnpm exec nest build
+Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }   # 只能按端口杀
+Start-Process node -ArgumentList 'dist/main.js' -NoNewWindow `
+  -RedirectStandardOutput .runlogs\boot.log -RedirectStandardError .runlogs\boot.err
+# 轮询直到 200，而不是 sleep 固定秒数
+Invoke-WebRequest 'http://127.0.0.1:3000/health/ready' -UseBasicParsing
+```
+
+期望返回 `{"status":"ok",...,"checks":{"database":{"status":"up"},"redis":{"status":"up"}}}`。
+
+**为什么必须有这一道**：前四道门禁都**不做真实 bootstrap**，因此完全看不见这类故障：
+
+- **模块循环依赖**：`ai.module.ts` ↔ `chat.module.ts` 缺 `forwardRef` →
+  Nest 启动即失败。而 tsc/eslint/jest/prettier **全部通过** ——
+  单测直接 `new` 服务、绕过了 DI 容器，编译也不检查运行时依赖图。
+  这个缺陷一度让**整个后端起不来**，是"四道全绿"状态下最接近灾难的一次。
+- **控制器/服务漏装配进模块**：路由静默不存在（表现为 404），编译无警告。
+- **Prisma/Redis 连接配置错**：只有真实启动才连。
+- **新增模块忘记 import 进 `app.module.ts`**。
+
+判断标准：**`/health/ready` 真的返回 200**，不是"进程还活着"。
+进程活着但 DI 失败会反复重启或直接退出，`/health/ready` 会一直连不上。
 
 ### ⚠ 沙箱陷阱（不读会浪费时间）
 
@@ -144,51 +172,70 @@ cd D:\Projects\mbit
 - 业务域 38 个：用户 4 / 题库 7 / 测试定义 2 / Prompt 7 / 订单查询导出 3 / AI 统计 5 / 报告关系 2 / 看板 1 / 系统治理 8
 - **活体验证 27/27 通过**（脚本见 `backend/.runlogs/verify-admin-live.cjs`）
 
-### 3.2 交付但**尚未验证**（接手第一件事）
+### 3.2 新交付四个域的实测结论
 
-以下三个域由子代理交付，**我尚未亲自复核其门禁与活体行为**：
+四个域**都已接线、已通过真实启动验证与路由清点**（不再是"尚未验证"）：
 
-| 域                     | 接口数 | 文件位置                                                                                                                                                                                             |
-| ---------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 支付订单与退款         | 8      | `backend/src/modules/payment/`（`refund.service.ts`、`order-query.service.ts`、`order-lifecycle.processor.ts`、`orders.controller.ts`、`refunds.controller.ts`、`admin-order-refund.controller.ts`） |
-| AI 情感助手（Phase 5） | 8      | `backend/src/modules/ai/chat/`                                                                                                                                                                       |
-| 报告导出与分享         | 5      | `backend/src/modules/ai/report/`（`report-regenerate.*`、`report-share-card.*`、`report-export.service.ts`）                                                                                         |
-| 通知 + 零散            | 7      | `backend/src/modules/notification/`、`relationship/compatibility-report.controller.ts`、`membership/`                                                                                                |
+| 域                     | 接口数 | 文件位置                                                                                                                                                                                             | 状态                                                        |
+| ---------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 支付订单与退款         | 8      | `backend/src/modules/payment/`（`refund.service.ts`、`order-query.service.ts`、`order-lifecycle.processor.ts`、`orders.controller.ts`、`refunds.controller.ts`、`admin-order-refund.controller.ts`） | 下单链路**活体 11/11 通过**；退款链路待验                   |
+| AI 情感助手（Phase 5） | 8      | `backend/src/modules/ai/chat/`                                                                                                                                                                       | 路由已注册；**缺 seed 模板，开箱报 50011**（修复中，见 §9） |
+| 报告导出与分享         | 5      | `backend/src/modules/ai/report/`（`report-regenerate.*`、`report-share-card.*`、`report-export.service.ts`）                                                                                         | 已知渲染缺口：抛 `90008`（见 §3.4）                         |
+| 通知 + 零散            | 7      | `backend/src/modules/notification/`、`relationship/compatibility-report.controller.ts`、`membership/`                                                                                                | 路由已注册                                                  |
 
-**其中我知道的确切状态**：
+**已确认的设备级结论**：
 
-- 支付退款域自测：191 个单测 / 10 套件全绿，但它**无法做活体验证**（没有真实微信商户号），且**签名层曾发现一个发布级缺陷**（见 §6.1）
-- 通知域：交付时**无法运行任何门禁**，留下了 1 个语法错误 + 4 个类型错误（**我已修**）
-- AI 助手域：最后 3 个类型错误已自行修复，`tsc` 现已干净
+- 管理端活体验证 **27/27 通过**（`verify-admin-live.cjs`）
+- 支付下单链路活体验证 **11/11 通过**（`verify-payment.cjs`，含金额取自服务端商品表、订单落库校验）
+- 运行时注册路由 **123 条 = 契约 123 条**，其中管理端 45 条
+- 微信支付回调 `POST /payment/notify/wechat` **已注册且可用**（返回微信要求的
+  `{"code":"FAIL"}` 非 JSON 体，由 `@RawResponse()` 处理）
+
+**仍在进行**：四个新域业务行为的 HTTP 级逐项验证（正在跑），以及 AI 助手 seed 补齐。
 
 ### 3.3 已接线 / 未接线
 
-**已接线**（`app.module.ts` / `worker.module.ts`）：
+**全部已接线**（有证据，不是推测）：`app.module.ts` 已导入
+`SystemModule` + 12 个管理端域模块 + `AdminModule` + **`NotificationModule`**；
+`worker.module.ts` 已接线 `AdminOrderJobsModule`、**`PaymentJobsModule`**
+（订单超时关单 + 退款对账，不接线会**安静地不运行**）。
 
-- `SystemModule` + 12 个管理端域模块 + `AdminModule`
-- `worker.module.ts`：`AdminOrderJobsModule`、**`PaymentJobsModule`**（订单超时关单 + 退款对账，不接线会**安静地不运行**）
+**证据**：真实启动成功 + 路由清点 123 条与契约完全一致 —— 若任一域未接线，
+其路由必然缺失，清点会立刻暴露。**不需要再去逐个人工核对 module。**
 
-**可能未接线**：AI 助手 / 报告 / 通知三个域的模块。**接手后第一件事就是确认它们的 module 是否已加入 `app.module.ts`，没有就加**（否则路由不注册，但代码和单测都是绿的——这种"绿着但不生效"最难发现）。
-
-判断方法：启动服务后对比 Swagger 路径数
-
-```powershell
-(Invoke-WebRequest 'http://127.0.0.1:3000/api/v1/docs-json' -UseBasicParsing).Content |
-  ConvertFrom-Json | Select-Object -ExpandProperty paths | Get-Member -MemberType NoteProperty | Measure-Object
-```
+**仍需注意的是 worker**：`app.module.ts` 覆盖 HTTP，但 `export.pdf`、
+订单生命周期等**异步 job 只在 `pnpm start:worker` 运行时才执行**。
+worker 没跑时这些任务会**停在排队态**，表现为"接口 202 了但任务永远不完成"。
 
 ---
 
+### 3.4 已知的未完成项（**刻意留的，不是遗漏**）
+
+| 项                          | 具体表现                                                                                                                                    | 为什么这样留                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **报告渲染缺口**            | `report-render.util.ts` 的 `renderReportPdf` / `renderShareCardImage` 抛 `90008`；`generateMiniAppCode` 返回 `null`。**没有留任何占位文件** | 项目禁止新增 npm 依赖，而仓里没有 PDF/图片库。宁可明确报错也不产出假文件 |
+| **AI 助手 seed 缺失**       | 对话接口报 `50011`（`AI_PROMPT_TEMPLATE_NOT_FOUND`）                                                                                        | 修复中，见 §9 末尾                                                       |
+| **`payments` 表没有写入方** | 没有任何代码往 `payments` 写行，而 `refunds.payment_id` 是非空外键，退款依赖兜底逻辑                                                        | 正确做法是下单时建 `INIT` 行、回调时置 `SUCCESS`。待验证退款链路后再定   |
+| **会员权益矩阵拿不到**      | `ProductView` 没有 `benefits` 字段，契约里的权益对照表无法下发                                                                              | 已在 ADR-033 里登记为缺口                                                |
+| **对话 SSE 不是真流式**     | `LlmProvider` 只暴露 `complete()`，所以增量是**生成完再切片**的 —— 首字延迟 = 完整生成耗时                                                  | 需要 provider 层支持流式，属接口变更，要先写 ADR                         |
+| **管理后台 8 个占位视图**   | 前端页面还在，未接真实接口                                                                                                                  | 属第 4 步                                                                |
+
 ## 4. 下一步做什么（按这个顺序，别跳）
 
-### 第 1 步：把在途的三个域收干净（最高优先）
+### 第 1 步：收干净新交付的四个域（最高优先，**进行中**）
 
-1. 确认 AI 助手 / 报告 / 通知的 module 已接线到 `app.module.ts`（未接线就加）
-2. 重建 + 重启，跑四道门禁，**逐条修到全绿**
-3. 用 `backend/.runlogs/verify-admin-live.cjs` 的思路，为这批新接口写一个活体验证脚本并跑通
-4. 提交推送
+已完成的部分**不要重做**（路由接线、四道门禁、真实启动、管理端 27/27、支付 11/11）。
+真正还剩的是这两件：
+
+1. **补齐 AI 助手的 seed 数据** —— 这是唯一一个"开箱即用会失败"的功能缺口。
+   `system_configs` 表完全没有 seed 数据，`prompt_templates` 里没有对话模板，
+   导致对话接口报 `50011`。做法与硬约束见 §9 末尾的专项说明。
+2. **把四个新域的业务行为逐项验完** —— 路由存在 ≠ 业务正确。
+   用 `verify-new-domains.cjs` 做逐项断言（HTTP 状态码 + 业务 code + 关键字段值），
+   重点覆盖：退款链路能否真正创建成功、对话配额是否原子、报告导出失败后**配额是否真的退还**。
 
 **方法**：不要相信任何子代理的"门禁全绿"报告，**自己重跑**（见 §2 的假绿陷阱）。
+遇到 5xx 先**重试 3 次**再判定（见 §6.3 第 16 条）。
 
 ### 第 2 步：补齐真正缺失的接口
 
@@ -336,6 +383,35 @@ export class AdminXxxController {
 14. **同名但重复的实现**：`maskNickname` 曾在三个模块各存一份且口径不一致。
     脱敏是有合规含义的规则，**复制多份必然漂移**。已收敛到 `common/utils/mask.util.ts`，
     其余位置只做再导出。**星号数上限为 3**（产品确认）。
+15. **模块循环依赖让整个后端起不来，而四道门禁全绿**（见 §2 第 5 道门禁）。
+    `ai.module.ts` ↔ `chat.module.ts` 必须两侧都加 `forwardRef`。
+    **教训：任何新增模块后都要做一次真实启动验证。**
+16. **瞬时数据库连接失败会伪装成业务故障**：`GET /admin/dashboard/metrics`
+    曾返回 `503 code=90002`，日志里是
+    `Can't reach database server at 127.0.0.1:5452`，
+    而当时两个容器都是 `Up (healthy)`、端口正常监听。
+    连打 3 次即全部成功（返回 5782 字节真实数据）。
+    **判定规则：看到"连不上数据库/Redis"类的 5xx，先重试 3 次再下结论**，
+    否则会把环境抖动误报成代码缺陷、浪费一轮排查。
+17. **`endpoint-inventory.cjs` 有一处假报**：它把
+    `POST /api/v1/payment/notify/wechat` 列进"契约有、服务未注册"，
+    但该路由**确实已注册且可用**（实测返回 HTTP 200 +
+    `{"code":"FAIL","message":"处理失败，请重试"}`，这正是微信要求的**非 JSON** 响应体格式，
+    由 `@RawResponse()` 负责）。这是脚本的路径归一化 bug，**不是缺接口**。
+    用它做覆盖率统计时，看到这 1 条属已知假报。
+18. **管理员登录的字段名是 `username` 而不是 `email`**，值才是 `admin@soulmap.cn`。
+    传 `{"email": ...}` 会返回 `400/10001`，且 `details` 里会明确写
+    `property email should not exist`。写验证脚本时不要想当然。
+19. **数据库用户名是 `soulmap` 而不是 `postgres`**（库名也是 `soulmap`）。
+    用 `docker exec soulmap-postgres psql -U postgres` 会报 `role "postgres" does not exist`。
+    按 `backend/.env` 里的 `DATABASE_URL` 取真实凭据。
+20. **在这个 shell 里读中文文件必须显式加 `-Encoding utf8`**。
+    本项目文件是 **UTF-8 无 BOM**，而 PowerShell 默认按 ANSI 解码，于是：
+    - `Get-Content x.md` 会输出乱码（如 `缁欐帴鎵嬭€呯殑涓€鍙ヨ瘽`）；
+    - 更坑的是 **`(Get-Content x.md).Count` 会给出错误的行数**
+      （实测同一份 492 行的文档被报成 297 行，足以让人误判"文件被截断"而白查一轮）。
+      **判定文件是否损坏，请用字节统计或 `read` 工具，不要信 `Get-Content` 的行数。**
+      正确写法：`Get-Content x.md -Encoding utf8`、`Select-String -Encoding utf8`。
 
 ### 6.4 前端
 
@@ -381,7 +457,7 @@ scripts/
 
 ---
 
-## 8. 验收脚本怎么用（已有的三个）
+## 8. 验收脚本怎么用（已有的五个）
 
 ```powershell
 cd D:\Projects\mbit\backend
@@ -389,38 +465,71 @@ cd D:\Projects\mbit\backend
 node .runlogs\verify-admin-auth.cjs      # 管理端认证链路 14 项
 node .runlogs\verify-admin-live.cjs      # 管理端只读接口 + 守卫 27 项
 node .runlogs\verify-payment.cjs         # 商品列表 + 下单 + 落库 11 项
+node .runlogs\verify-new-domains.cjs     # 支付退款/对话/报告/通知（新增）
+node .runlogs\verify-ai-companion.cjs    # AI 对话模板是否就位（新增）
 node .runlogs\endpoint-inventory.cjs     # 契约 vs 实际注册路由的差集
 ```
+
+**写验证脚本时必看的凭据与字段约定**（踩过坑）：
+
+| 项             | 正确写法                                    | 错误写法的后果                                                             |
+| -------------- | ------------------------------------------- | -------------------------------------------------------------------------- |
+| 管理员登录字段 | `{"username":"admin@soulmap.cn", ...}`      | 传 `email` → `400/10001`，`details` 会写 `property email should not exist` |
+| 敏感操作       | 带请求头 `X-Confirm-Password: <管理员密码>` | 缺 → `401` + code `20017`（**这是正确行为**）                              |
+| 用户端登录     | 照抄 `verify-payment.cjs` 的流程            | 自己猜字段名会撞上 whitelist 校验                                          |
 
 > 这些脚本是**临时工具**（在 gitignore 的 `.runlogs/` 里），但**很有价值**：
 > 装配后才暴露的问题（路由未注册、DI 失败、守卫链顺序、真实 SQL 报错）
 > 只有它们能发现。**请继续用它们，并随新接口扩展。**
+>
+> ⚠ 但它们的"全绿"**不能单独作为证据**：输出里必须真有逐项结果，
+> 且遇到 5xx 类失败要**重试 3 次**再下结论（见 §6.3 第 16 条）。
 
 ---
 
 ## 9. 交接时的进行中状态
 
-- **3 个子代理在跑**：AI 情感助手、报告导出与分享、通知与零散。它们**可能仍在写文件**，
-  接手时先确认它们是否已结束（避免与在写文件冲突）。
-- `tsc` 当前**干净**；已实现路由 **134 条**。
-- 最后三个提交：
+**工作区状态**：撰写本文档初版时工作区是干净的；随后有子代理开始修改
+`backend/prisma/seed/` 下的文件（补 AI 助手模板与 `system_configs`，即第 1 步那件事），
+因此**接手前请先 `git status`**，避免与在写文件冲突。
+
+- **已推送**：`dc13e2e`（订单退款 / AI 助手 / 报告导出 / 通知 四块共 28 个接口 + 本文档）。
+- **门禁状态**：`tsc` 干净、`eslint --max-warnings 0` 干净、`nest build` 通过、
+  `jest --runInBand` = **108 个 suite / 2550 个测试全部通过**、`prettier --check` 通过。
+- **第 5 道门禁（真实启动）已通过**：`/health/ready` 返回 200，
+  `database: up` + `redis: up`。
+- **运行时路由数**：注册 **123 条**，与契约 `docs/API_DESIGN.md` A.13 索引的 **123 条一致**；
+  其中管理端 **45 条**。
+  （注：早期文档里写的"134 条"是静态计数的重复统计口径，**以运行时的 123 为准**。）
+- **活体验证**：管理端 27/27 通过；支付链路 11/11 通过。
+- **最近提交**：
+  - `dc13e2e` feat(backend): 四域 28 接口 + 交接文档
   - `f1d2152` docs: ADR-033 五处路径分歧以实现为准 + 契约同步修订
   - `0e69e1d` feat(admin): 管理端 38 个业务接口 + 用户端 system 模块
-  - `59c260a` fix(mask): 昵称掩码补上星号数上限（**注意：这条可能尚未提交，见下**）
 
-> ⚠ **未提交的改动**：撰写本文档时，以下改动**可能还在工作区**，接手后请先 `git status` 确认并提交：
->
-> - 微信支付 v3 签名修复（`infra/wechat/wechat-pay-sign.util.ts` + `wechat-pay.service.ts` + spec）
-> - CORS 补 `X-Confirm-Password`（`main.ts`）
-> - `worker.module.ts` 接线 `PaymentJobsModule`
-> - 通知域留下的语法/类型错误修复（`relationship/compatibility.service.ts` 等）
-> - 本文件
+> ✅ **已在 `dc13e2e` 中解决的历史遗留**：微信支付 v3 签名修复、CORS 补
+> `X-Confirm-Password`、`worker.module.ts` 接线 `PaymentJobsModule`、
+> `relationship/compatibility.service.ts` 的语法错误、`maskNickname` 星号上限 ——
+> 这些**都已提交**，不需要再处理。
+
+### ⏳ 接手后第一件事：补齐 AI 助手的 seed 数据
+
+`system_configs` 表**完全没有 seed 数据**，且 `prompt_templates` 里**没有对话模板**，
+导致 AI 情感助手开箱报 `50011 AI_PROMPT_TEMPLATE_NOT_FOUND`。
+修复要点（细节见 `backend/src/modules/ai/chat/chat-prompt.ts` 文件头）：
+
+- 模板键名**必须**是 `ai.companion`（不是 `AI_COMPANION` —— 种子键要匹配
+  `/^[a-z]+\.[a-z0-9]+$/`；候选链里已包含 `ai.companion`，所以这个键名能生效）。
+- 占位符只能取 `buildPromptVariables()` 真实产出的变量名。
+- 新增数据要同时满足 `prisma/seed/data/prompt-templates.spec.ts` 的约 30 条断言
+  （其中 `availableVariables()` 对未知键会回落到"报告变量"集合，需要一并修正）。
 
 ---
 
 ## 10. 最终目标（Definition of Done）
 
-**后端完整**：`docs/API_DESIGN.md` 的 123 个接口全部实现、四道门禁全绿、活体验证通过。
+**后端完整**：`docs/API_DESIGN.md` 的 123 个接口全部实现、**五道门禁**全绿（含真实启动验证）、
+活体验证通过。
 
 **可上线**（用户原话："我要的是上线级的成果"）：
 
