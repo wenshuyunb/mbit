@@ -71,12 +71,12 @@ export const validationSchema = Joi.object({
   }),
   ADMIN_JWT_ACCESS_TTL: Joi.string().default('1h'),
   ADMIN_JWT_REFRESH_TTL: Joi.string().default('7d'),
-  CRYPTO_KEY: Joi.string().default(''),
-  CRYPTO_IV_SALT: Joi.string().default(''),
+  CRYPTO_KEY: Joi.string().allow('').default(''),
+  CRYPTO_IV_SALT: Joi.string().allow('').default(''),
 
   // ---------------- 微信小程序 ----------------
-  WECHAT_APPID: Joi.string().default(''),
-  WECHAT_SECRET: Joi.string().default(''),
+  WECHAT_APPID: Joi.string().allow('').default(''),
+  WECHAT_SECRET: Joi.string().allow('').default(''),
   WECHAT_MSG_SEC_CHECK: Joi.boolean().truthy('true').falsy('false').default(false),
   WECHAT_TMPL_REPORT_READY: Joi.string().allow('').default(''),
   WECHAT_TMPL_INVITE_ACCEPTED: Joi.string().allow('').default(''),
@@ -84,8 +84,8 @@ export const validationSchema = Joi.object({
 
   // ---------------- 微信支付 ----------------
   WECHAT_PAY_ENV: Joi.string().valid('sandbox', 'production').default('sandbox'),
-  WECHAT_PAY_MCHID: Joi.string().default(''),
-  WECHAT_PAY_SERIAL_NO: Joi.string().default(''),
+  WECHAT_PAY_MCHID: Joi.string().allow('').default(''),
+  WECHAT_PAY_SERIAL_NO: Joi.string().allow('').default(''),
   WECHAT_PAY_PRIVATE_KEY: Joi.string().allow('').default(''),
   WECHAT_PAY_PRIVATE_KEY_PATH: Joi.string().allow('').default(''),
   WECHAT_PAY_APIV3_KEY: Joi.string().allow('').default(''),
@@ -115,7 +115,7 @@ export const validationSchema = Joi.object({
 
   // ---------------- OSS ----------------
   OSS_REGION: Joi.string().default('oss-cn-hangzhou'),
-  OSS_BUCKET: Joi.string().default(''),
+  OSS_BUCKET: Joi.string().allow('').default(''),
   OSS_ACCESS_KEY_ID: Joi.string().allow('').default(''),
   OSS_ACCESS_KEY_SECRET: Joi.string().allow('').default(''),
   OSS_STS_ROLE_ARN: Joi.string().allow('').default(''),

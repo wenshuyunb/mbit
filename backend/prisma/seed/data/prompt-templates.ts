@@ -1,3 +1,5 @@
+import type { PromptType } from '@prisma/client';
+
 /**
  * Prompt 模板种子数据（ADR-014：Prompt 存数据库 + 版本化）
  *
@@ -13,7 +15,7 @@
  */
 
 /** 模板类型（与 Prisma `PromptType` 对齐） */
-export type SeedPromptType = 'REPORT' | 'COMPANION' | 'ANALYSIS' | 'EXTRACTION' | 'SAFETY';
+export type SeedPromptType = PromptType;
 
 /** 段落声明（写入 `PromptVersion.outputSchema.sections`，供分段解析器使用） */
 export interface SeedPromptSection {
@@ -111,7 +113,7 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
   {
     key: 'report.mbti',
     name: 'MBTI 人格深度报告',
-    type: 'REPORT',
+    type: 'MBTI_REPORT',
     description: '基于 MBTI 四维倾向与大五特质生成个人深度解读报告（3 段：整体印象 / 核心优势 / 成长建议）',
     version: 1,
     systemPrompt: REPORT_SYSTEM_GUARDRAILS,
@@ -148,7 +150,7 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
   {
     key: 'report.relationship',
     name: '关系匹配解读报告',
-    type: 'REPORT',
+    type: 'RELATIONSHIP_REPORT',
     description:
       '基于双方的 MBTI 与大五数据、以及 CompatibilityEngine 的确定性算分结果，生成 4 段关系解读（契合优势 / 潜在分歧 / 相处建议 / 沟通话术）',
     version: 1,

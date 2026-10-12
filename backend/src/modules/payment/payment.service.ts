@@ -18,7 +18,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import type { WechatPayCallbackHeaders, WechatPayService } from '../../infra/wechat/wechat-pay.service';
+// ⚠ `WechatPayService` 必须用**普通 import**，只有请求头类型可用 `import type`：
+// Nest 的构造参数注入依赖 `design:paramtypes` 元数据里的**运行时类引用**，
+// `import type` 会被编译期擦除，元数据退化成 `Function`，启动时报
+// "Nest can't resolve dependencies of the PaymentService (PrismaService, ?)"。
+// 这个错误只有真正启动进程才会暴露 —— 单测全是手写 new，完全测不到。
+import { WechatPayService } from '../../infra/wechat/wechat-pay.service';
+import type { WechatPayCallbackHeaders } from '../../infra/wechat/wechat-pay.service';
 
 import {
   buildProductSnapshot,
