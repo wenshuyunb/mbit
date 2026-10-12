@@ -79,8 +79,12 @@ export class BusinessException extends HttpException {
     return new BusinessException(code, message, { details, httpStatus: HttpStatus.CONFLICT });
   }
 
-  static tooManyRequests(code: number = ErrorCode.RATE_LIMITED, message?: string): BusinessException {
-    return new BusinessException(code, message, { httpStatus: HttpStatus.TOO_MANY_REQUESTS });
+  static tooManyRequests(
+    code: number = ErrorCode.RATE_LIMITED,
+    message?: string,
+    details?: ErrorDetail[],
+  ): BusinessException {
+    return new BusinessException(code, message, { details, httpStatus: HttpStatus.TOO_MANY_REQUESTS });
   }
 
   static internal(

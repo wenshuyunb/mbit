@@ -25,6 +25,8 @@ export const ErrorCode = {
   IDEMPOTENCY_KEY_MISSING: 10009,
   IDEMPOTENCY_CONFLICT: 10010,
   VERSION_OUTDATED: 10011,
+  /** `Origin`/`Referer` 不在管理后台白名单（CSRF 防护配套，`ADMIN_ORIGIN`） */
+  ADMIN_ORIGIN_FORBIDDEN: 10019,
 
   // ------------------------------------------------------------ 认证鉴权 20
   UNAUTHORIZED: 20000,
@@ -44,6 +46,27 @@ export const ErrorCode = {
   ACCOUNT_IN_DELETION_GRACE: 20014,
   SESSION_NOT_FOUND: 20015,
   SESSION_REVOKED: 20016,
+
+  // -------------------------------------------------------------- 管理端 20（ADR-031）
+  // 契约 §3.14 原本沿用了 `20013` / `20014` / `20016`，但这三个码已被**用户端**占用
+  // 且含义不同（REALM_MISMATCH / ACCOUNT_IN_DELETION_GRACE / SESSION_REVOKED）。
+  // 错误码是对外契约，客户端按码做分支，覆盖已发布码的含义是破坏性变更，
+  // 故用户端码义冻结不动，管理端使用下列不冲突的码（见 ADR-031）。
+  // 语义与用户端完全重合的直接复用既有码：`20012` 承接「账号或密码错误」、
+  // `20011` 承接「登录失败次数过多」。
+  /** 敏感操作缺少 `X-Confirm-Password` 请求头 */
+  ADMIN_CONFIRM_PASSWORD_REQUIRED: 20017,
+  /** 敏感操作的二次确认密码错误 */
+  ADMIN_CONFIRM_PASSWORD_INVALID: 20018,
+  /** 20019 预留：管理端认证类错误扩展位 */
+  /** 当前 IP 不在 `ADMIN_IP_WHITELIST` 内 */
+  ADMIN_IP_NOT_ALLOWED: 20020,
+  /** 管理员账号已禁用（`admin_users.status = DISABLED`，契约原编号 20016 已被占用） */
+  ADMIN_ACCOUNT_DISABLED: 20021,
+  /** 管理员不存在 */
+  ADMIN_NOT_FOUND: 20022,
+  /** 角色不存在 */
+  ROLE_NOT_FOUND: 20023,
 
   // ---------------------------------------------------------------- 用户 30
   USER_NOT_FOUND: 30000,
@@ -171,6 +194,8 @@ export const ErrorCode = {
   THIRD_PARTY_ERROR: 90006,
   MAINTENANCE_MODE: 90007,
   CONFIG_MISSING: 90008,
+  /** 服务正在优雅关闭（`SIGTERM` 后拒绝新请求；契约原编号 90002 已被 DATABASE_ERROR 占用） */
+  SERVICE_SHUTTING_DOWN: 90009,
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -191,6 +216,7 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   10009: 400,
   10010: 409,
   10011: 409,
+  10019: 403,
 
   20000: 401,
   20001: 401,
@@ -209,6 +235,12 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   20014: 403,
   20015: 404,
   20016: 401,
+  20017: 401,
+  20018: 401,
+  20020: 403,
+  20021: 403,
+  20022: 404,
+  20023: 404,
 
   30000: 404,
   30001: 400,
@@ -329,6 +361,7 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   90006: 502,
   90007: 503,
   90008: 500,
+  90009: 503,
 };
 
 /** 错误码 → 面向用户的默认中文文案（5xx 不暴露内部细节） */
@@ -347,6 +380,7 @@ export const ERROR_MESSAGE: Record<number, string> = {
   10009: '缺少幂等键 X-Idempotency-Key',
   10010: '重复的请求，请勿重复提交',
   10011: '数据版本已过期，请刷新后重试',
+  10019: '请求来源不合法',
 
   20000: '请先登录',
   20001: '登录状态已过期，请重新登录',
@@ -365,6 +399,12 @@ export const ERROR_MESSAGE: Record<number, string> = {
   20014: '账号正在注销冷静期，如需继续使用请先撤销注销申请',
   20015: '登录会话不存在',
   20016: '登录会话已被撤销，请重新登录',
+  20017: '该操作需要二次确认密码',
+  20018: '二次确认密码错误',
+  20020: '当前 IP 不在允许范围内',
+  20021: '管理员账号已被禁用',
+  20022: '管理员不存在',
+  20023: '角色不存在',
 
   30000: '用户不存在',
   30001: '请先完善个人资料',
@@ -485,6 +525,7 @@ export const ERROR_MESSAGE: Record<number, string> = {
   90006: '第三方服务异常，请稍后重试',
   90007: '系统维护中，请稍后访问',
   90008: '服务配置缺失，请联系客服',
+  90009: '服务正在重启，请稍后重试',
 };
 
 /** 取错误码对应的 HTTP 状态码，未登记时回退 500 */
