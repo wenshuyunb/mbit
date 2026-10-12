@@ -41,6 +41,13 @@ export const configuration = (): AppConfig => {
       gitSha: str('GIT_SHA', 'unknown'),
       buildTime: str('BUILD_TIME', 'unknown'),
       legalBaseUrl: str('LEGAL_BASE_URL'),
+      /**
+       * 管理后台 IP 白名单（逗号分隔）
+       *
+       * 契约 §3.14.1.1：「配置 `ADMIN_IP_WHITELIST` 时生效」—— 为空表示不限制，
+       * 便于本地开发与内网部署；生产环境建议配置为办公网出口 IP。
+       */
+      adminIpWhitelist: str('ADMIN_IP_WHITELIST', ''),
     },
 
     database: {

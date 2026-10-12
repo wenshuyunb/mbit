@@ -13,7 +13,15 @@
  */
 
 import { PrismaClient, type Dimension, type Prisma, type QuestionType } from '@prisma/client';
+import { argon2id, hash as argonHash } from 'argon2';
 
+import {
+  ADMIN_PERMISSION_NAMES,
+  ADMIN_ROLE_DESCRIPTIONS,
+  ADMIN_ROLE_NAMES,
+  ADMIN_ROLE_PERMISSIONS,
+  ALL_ADMIN_PERMISSIONS,
+} from '../../src/modules/admin/rbac/admin-permission.constants';
 import { BIG_FIVE_QUESTIONS, MBTI_QUESTIONS } from './data';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
@@ -46,6 +54,12 @@ interface SeedSummary {
   promptTemplates?: number;
   /** 匹配权重矩阵数 */
   compatibilityWeights?: number;
+  /** 管理端权限点数 */
+  adminPermissions?: number;
+  /** 管理端角色数 */
+  adminRoles?: number;
+  /** 角色-权限映射数 */
+  adminRolePermissions?: number;
 }
 
 // ============================================================================
@@ -339,6 +353,172 @@ const seedCompatibilityWeights = async (): Promise<number> => {
 };
 
 // ============================================================================
+// 管理端 RBAC
+// ============================================================================
+
+/**
+ * 管理端初始账号
+ *
+ * ⚠ **默认密码仅供本地开发**：`mustChangePassword` 恒为 `true`，
+ * 首次登录会被强制跳转改密页，因此默认密码不会在生产环境长期存活。
+ * 生产环境通过 `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD` 注入。
+ */
+const SEED_ADMIN_USERNAME = process.env['SEED_ADMIN_USERNAME'] ?? 'admin@soulmap.cn';
+const SEED_ADMIN_PASSWORD = process.env['SEED_ADMIN_PASSWORD'] ?? 'S0ulM@p#2026Admin';
+const SEED_ADMIN_DISPLAY_NAME = process.env['SEED_ADMIN_DISPLAY_NAME'] ?? '超级管理员';
+
+/**
+ * 灌入权限点、内置角色、角色权限映射与初始超管
+ *
+ * 顺序不可颠倒：权限 → 角色 → 角色权限映射 → 管理员 → 管理员角色关联。
+ *
+ * 幂等策略：
+ *   · 权限与角色按 `code` upsert
+ *   · 角色权限映射**先清后建**（映射是集合而非实体，增量同步的复杂度远高于重写，
+ *     且这里的数据量只有几十行）
+ *   · 管理员按 `username` upsert；**已存在时不覆盖密码**，避免把运维改过的密码重置回默认值
+ */
+const seedAdminRbac = async (): Promise<{
+  permissions: number;
+  roles: number;
+  rolePermissions: number;
+  adminUsername: string;
+  adminCreated: boolean;
+}> => {
+  // ------------------------------------------------------------------ 权限点
+  for (const code of ALL_ADMIN_PERMISSIONS) {
+    const [domain, resource, action] = code.split(':');
+
+    await prisma.permission.upsert({
+      where: { code },
+      create: {
+        code,
+        name: ADMIN_PERMISSION_NAMES[code],
+        domain: domain ?? 'unknown',
+        resource: resource ?? 'unknown',
+        action: action ?? 'unknown',
+        isSystem: true,
+      },
+      update: {
+        name: ADMIN_PERMISSION_NAMES[code],
+        domain: domain ?? 'unknown',
+        resource: resource ?? 'unknown',
+        action: action ?? 'unknown',
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------ 角色
+  const roleCodes = Object.keys(ADMIN_ROLE_PERMISSIONS) as Array<keyof typeof ADMIN_ROLE_PERMISSIONS>;
+
+  for (const [index, roleCode] of roleCodes.entries()) {
+    await prisma.role.upsert({
+      where: { code: roleCode },
+      create: {
+        code: roleCode,
+        name: ADMIN_ROLE_NAMES[roleCode],
+        description: ADMIN_ROLE_DESCRIPTIONS[roleCode],
+        isSystem: true,
+        sortOrder: index,
+      },
+      update: {
+        name: ADMIN_ROLE_NAMES[roleCode],
+        description: ADMIN_ROLE_DESCRIPTIONS[roleCode],
+        isSystem: true,
+        sortOrder: index,
+      },
+    });
+  }
+
+  // -------------------------------------------------------- 角色权限映射
+  const permissionRows = await prisma.permission.findMany({ select: { id: true, code: true } });
+  const permissionIdByCode = new Map(permissionRows.map((row) => [row.code, row.id]));
+
+  let rolePermissionCount = 0;
+
+  for (const roleCode of roleCodes) {
+    const role = await prisma.role.findUnique({ where: { code: roleCode }, select: { id: true } });
+    if (!role) continue;
+
+    await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });
+
+    for (const permissionCode of ADMIN_ROLE_PERMISSIONS[roleCode]) {
+      // SUPER_ADMIN 的映射里是通配符 `*`，它**不是**一个真实权限点行，
+      // 而是「全部权限」的语义标记，由 AdminRbacService 按 isSuperAdmin 处理，
+      // 因此这里跳过，避免往 permissions 表塞一条假的 `*`
+      if (permissionCode === '*') continue;
+
+      const permissionId = permissionIdByCode.get(permissionCode);
+
+      if (!permissionId) {
+        // 角色映射引用了不存在的权限点：属种子数据自身错误，必须立刻暴露
+        throw new Error(`角色 ${roleCode} 引用了未定义的权限点：${permissionCode}`);
+      }
+
+      await prisma.rolePermission.create({
+        data: { roleId: role.id, permissionId },
+      });
+      rolePermissionCount += 1;
+    }
+  }
+
+  // -------------------------------------------------------------- 初始超管
+  const existing = await prisma.adminUser.findUnique({
+    where: { username: SEED_ADMIN_USERNAME },
+    select: { id: true },
+  });
+
+  const passwordHash = await argonHash(SEED_ADMIN_PASSWORD, {
+    type: argon2id,
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1,
+  });
+
+  const admin = existing
+    ? await prisma.adminUser.update({
+        where: { id: existing.id },
+        data: {
+          // 已存在则不覆盖密码：避免把运维改过的密码重置回默认值
+          isSuperAdmin: true,
+          deletedAt: null,
+        },
+        select: { id: true },
+      })
+    : await prisma.adminUser.create({
+        data: {
+          username: SEED_ADMIN_USERNAME,
+          passwordHash,
+          nickname: SEED_ADMIN_DISPLAY_NAME,
+          isSuperAdmin: true,
+          status: 'ACTIVE',
+          // 强制首次登录改密：默认密码不得在生产环境长期存活
+          mustChangePassword: true,
+        },
+        select: { id: true },
+      });
+
+  // 超管的角色关联（`AdminUserRole`）也建上，便于后台「管理员列表」展示角色
+  const superAdminRole = await prisma.role.findUnique({ where: { code: 'SUPER_ADMIN' }, select: { id: true } });
+
+  if (superAdminRole) {
+    await prisma.adminUserRole.upsert({
+      where: { adminUserId_roleId: { adminUserId: admin.id, roleId: superAdminRole.id } },
+      create: { adminUserId: admin.id, roleId: superAdminRole.id },
+      update: {},
+    });
+  }
+
+  return {
+    permissions: ALL_ADMIN_PERMISSIONS.length,
+    roles: roleCodes.length,
+    rolePermissions: rolePermissionCount,
+    adminUsername: SEED_ADMIN_USERNAME,
+    adminCreated: existing === null,
+  };
+};
+
+// ============================================================================
 // 入口
 // ============================================================================
 async function main(): Promise<void> {
@@ -362,6 +542,11 @@ async function main(): Promise<void> {
   summary.promptTemplates = await seedPromptTemplates();
   summary.compatibilityWeights = await seedCompatibilityWeights();
 
+  const adminRbac = await seedAdminRbac();
+  summary.adminPermissions = adminRbac.permissions;
+  summary.adminRoles = adminRbac.roles;
+  summary.adminRolePermissions = adminRbac.rolePermissions;
+
   const elapsed = Date.now() - started;
 
   console.log(
@@ -373,9 +558,23 @@ async function main(): Promise<void> {
       `  关系规则 : ${summary.rules}`,
       `  Prompt   : ${summary.promptTemplates ?? 0}`,
       `  匹配权重 : ${summary.compatibilityWeights ?? 0}`,
+      `  权限点   : ${summary.adminPermissions ?? 0}`,
+      `  角色     : ${summary.adminRoles ?? 0}`,
+      `  角色权限 : ${summary.adminRolePermissions ?? 0}`,
+      `  初始超管 : ${adminRbac.adminUsername}（${adminRbac.adminCreated ? '已创建' : '已存在，密码未改动'}）`,
       `  耗时     : ${elapsed}ms`,
     ].join('\n'),
   );
+
+  if (adminRbac.adminCreated) {
+    console.log(
+      [
+        '',
+        '⚠ 初始超管已创建，首次登录后必须立即修改密码（mustChangePassword = true）。',
+        '   默认密码仅供本地开发；生产环境请通过 SEED_ADMIN_PASSWORD 注入。',
+      ].join('\n'),
+    );
+  }
 }
 
 void main()

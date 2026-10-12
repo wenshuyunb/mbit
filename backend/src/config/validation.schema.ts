@@ -39,6 +39,25 @@ export const validationSchema = Joi.object({
   // 协议正文基址（隐私政策/用户协议/年龄声明/AI 内容提示/营销授权）
   // 未配置时相关接口的 url 字段返回 null，前端隐藏「查看原文」入口
   LEGAL_BASE_URL: Joi.string().uri().allow('').default(''),
+  // 管理后台 IP 白名单（逗号分隔的 IP 列表）
+  // 契约 §3.14.1.1「配置 ADMIN_IP_WHITELIST 时生效」：为空即不限制
+  ADMIN_IP_WHITELIST: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) => {
+      if (value === '') return value;
+
+      for (const entry of value.split(',').map((item) => item.trim())) {
+        // 逐项校验：只接受 IPv4 点分写法或含冒号的 IPv6；不校验 CIDR
+        // （网段限制应由反向代理/防火墙承担，应用层只做精确匹配，避免误判放行）
+        if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(entry) && !entry.includes(':')) {
+          return helpers.error('any.invalid');
+        }
+      }
+
+      return value;
+    }, 'ADMIN_IP_WHITELIST 格式')
+    .messages({ 'any.invalid': 'ADMIN_IP_WHITELIST 必须是逗号分隔的合法 IP 列表' }),
 
   // ---------------- 数据库 ----------------
   DATABASE_URL: Joi.string()

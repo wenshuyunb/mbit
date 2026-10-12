@@ -22,6 +22,8 @@ export interface AppConfig {
     buildTime: string;
     /** 协议正文基址（隐私政策/用户协议等）；未配置时相关接口的 url 字段返回 null */
     legalBaseUrl: string;
+    /** 管理后台 IP 白名单（逗号分隔）；为空表示不启用该限制 */
+    adminIpWhitelist: string;
   };
   database: {
     url: string;

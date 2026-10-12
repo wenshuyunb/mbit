@@ -35,6 +35,7 @@ import { QueueModule } from './infra/queue/queue.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { MembershipModule } from './modules/membership/membership.module';
@@ -156,7 +157,9 @@ import { UserModule } from './modules/user/user.module';
     RelationshipModule,
     StorageModule,
     TestModule,
-    // Phase 5+ 待接入：PaymentModule、NotificationModule、AdminModule
+    // 后台管理（独立 realm：AdminJwtStrategy + AdminAuthGuard + RolesGuard）
+    AdminModule,
+    // Phase 5+ 待接入：NotificationModule
 
     // ---------------------------------------------------------------- 运维
     HealthModule,
