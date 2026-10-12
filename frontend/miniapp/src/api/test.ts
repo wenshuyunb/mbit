@@ -8,11 +8,16 @@
  * 若后端调整响应结构，只需改这里并让 vue-tsc 报出所有受影响的使用点。
  */
 
+import { createIdempotencyKey } from '@/utils/request-id';
+
 import { http, httpPage } from './request';
 import type { PaginatedData } from './types';
 
 /** 题型（与后端 `QuestionType` 对齐） */
 export type QuestionType = 'LIKERT5' | 'BINARY' | 'FORCED_CHOICE' | 'RANK';
+
+/** 进入来源埋点（与后端 `TEST_SOURCES` 对齐，避免编译期放行非法值） */
+export type TestSource = 'HOME' | 'TEST_CENTER' | 'SHARE' | 'INVITE' | 'REPORT';
 
 /** 测试定义（列表项） */
 export interface TestDefinition {
@@ -192,15 +197,28 @@ export const getTest = (code: string): Promise<TestDefinition> => http.get<TestD
  *
  * 服务端会固化试卷快照；若已存在未过期的进行中会话则直接复用（`isReused = true`），
  * 因此重复调用是安全的（不会重置进度）。
+ *
+ * ⚠ **幂等键是必填的**：后端 `@IdempotencyKey()` 默认 required，缺 `X-Idempotency-Key`
+ * 头会直接抛 `400 / 10009`（`IDEMPOTENCY_KEY_MISSING`）—— 本函数此前没有传，
+ * 导致「开始测试」对**所有客户端 100% 失败**（实测：带上该头才返回 201）。
+ * 现在由本函数自动生成，从根上避免「忘记传」再次发生；
+ * 若要重试同一个「开始测试」意图（例如网络失败后由用户点重试），
+ * 应复用同一个 key：`createSession(code, { idempotencyKey: 上次的 key })`。
  */
 export const createSession = (
   definitionCode: string,
-  options: { forceNew?: boolean; reuseInProgress?: boolean; source?: string } = {},
+  options: {
+    forceNew?: boolean;
+    reuseInProgress?: boolean;
+    source?: TestSource;
+    /** 重试同一意图时传入与首次相同的 key；不传则自动生成 */
+    idempotencyKey?: string;
+  } = {},
 ): Promise<TestSessionView> =>
   http.post<TestSessionView>(
     `/tests/${definitionCode}/sessions`,
     { reuseInProgress: options.reuseInProgress ?? true, forceNew: options.forceNew ?? false, source: options.source },
-    { timeout: 20_000 },
+    { timeout: 20_000, idempotencyKey: options.idempotencyKey ?? createIdempotencyKey() },
   );
 
 /** 获取会话（断点续答 / 分批取卷） */
