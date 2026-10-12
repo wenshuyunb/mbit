@@ -920,23 +920,23 @@ Accept-Language: zh-CN
 
 ### 3.0 模块总览
 
-| 模块              | 前缀                                                                        | 接口数  | 鉴权级别          | 后端目录                    |
-| ----------------- | --------------------------------------------------------------------------- | ------- | ----------------- | --------------------------- |
-| 认证 auth         | `/api/v1/auth`                                                              | 5       | L0 / L1           | `modules/auth`              |
-| 用户 user         | `/api/v1/users`                                                             | 11      | L1                | `modules/user`              |
-| 测试 test         | `/api/v1/tests`                                                             | 8       | L1                | `modules/test`              |
-| 人格 personality  | `/api/v1/personality`                                                       | 4       | L1（类型百科 L0） | `modules/personality`       |
-| 报告 report       | `/api/v1/reports`                                                           | 9       | L1 / L2           | `modules/report`            |
-| 关系 relationship | `/api/v1/relationships`、`/api/v1/compatibility-reports`                    | 11      | L1 / L2           | `modules/relationship`      |
-| AI 助手 ai        | `/api/v1/ai`                                                                | 8       | L1 / L2           | `modules/ai`                |
-| 会员 membership   | `/api/v1/membership`                                                        | 3       | L0 / L1           | `modules/membership`        |
-| 支付 payment      | `/api/v1/orders`、`/api/v1/products`、`/api/v1/refunds`、`/api/v1/payments` | 10      | L1 / L0 / L3      | `modules/payment`           |
-| 存储 storage      | `/api/v1/storage`                                                           | 3       | L1 / L0（回调）   | `modules/storage`           |
-| 通知 notification | `/api/v1/notifications`                                                     | 3       | L1                | `modules/notification`      |
-| 系统 system       | `/api/v1/system`                                                            | 2       | L0                | `modules/admin`（只读服务） |
-| 健康检查 health   | `/health`                                                                   | 3       | L0                | `main.ts` 内建              |
-| 后台 admin        | `/api/v1/admin`                                                             | 43      | L3 / L0（登录）   | `modules/admin`             |
-| **合计**          | —                                                                           | **123** | —                 | —                           |
+| 模块              | 前缀                                                                                   | 接口数  | 鉴权级别          | 后端目录                    |
+| ----------------- | -------------------------------------------------------------------------------------- | ------- | ----------------- | --------------------------- |
+| 认证 auth         | `/api/v1/auth`                                                                         | 5       | L0 / L1           | `modules/auth`              |
+| 用户 user         | `/api/v1/users`                                                                        | 11      | L1                | `modules/user`              |
+| 测试 test         | `/api/v1/tests`                                                                        | 8       | L1                | `modules/test`              |
+| 人格 personality  | `/api/v1/personality`                                                                  | 4       | L1（类型百科 L0） | `modules/personality`       |
+| 报告 report       | `/api/v1/reports`                                                                      | 9       | L1 / L2           | `modules/report`            |
+| 关系 relationship | `/api/v1/relationships`、`/api/v1/compatibility-reports`                               | 11      | L1 / L2           | `modules/relationship`      |
+| AI 助手 ai        | `/api/v1/ai`                                                                           | 8       | L1 / L2           | `modules/ai`                |
+| 会员 membership   | `/api/v1/membership`                                                                   | 3       | L0 / L1           | `modules/membership`        |
+| 支付 payment      | `/api/v1/orders`、`/api/v1/membership/products`、`/api/v1/refunds`、`/api/v1/payments` | 10      | L1 / L0 / L3      | `modules/payment`           |
+| 存储 storage      | `/api/v1/storage`                                                                      | 3       | L1 / L0（回调）   | `modules/storage`           |
+| 通知 notification | `/api/v1/notifications`                                                                | 3       | L1                | `modules/notification`      |
+| 系统 system       | `/api/v1/system`                                                                       | 2       | L0                | `modules/admin`（只读服务） |
+| 健康检查 health   | `/health`                                                                              | 3       | L0                | `main.ts` 内建              |
+| 后台 admin        | `/api/v1/admin`                                                                        | 43      | L3 / L0（登录）   | `modules/admin`             |
+| **合计**          | —                                                                                      | **123** | —                 | —                           |
 
 > 示例中反复出现的一致性标识（全文档自洽）：用户 `0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70`（昵称「小满」）、邀请对象 `0195f3a2-8d5f-7c42-ab7e-3f6a9c2d8e81`（昵称「阿泽」）、请求 ID `req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5`、openid `oQ7Xk5aBcDeFgHiJkLmNoPqRsTu`。
 
@@ -8126,8 +8126,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     "exhausted": false,
     "nextActions": {
       "canChat": true,
-      "upgradeUrl": "/api/v1/membership/plans",
-      "creditsUrl": "/api/v1/products?type=AI_CREDITS",
+      "upgradeUrl": "/api/v1/membership/products",
+      "creditsUrl": "/api/v1/membership/products?type=AI_CREDITS",
       "reason": null
     },
     "usage": {
@@ -8197,12 +8197,14 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `AI_CREDITS`               | AI 对话剩余次数 | 计数递减         | `POST /ai/conversations/{id}/messages` |
 | `PDF_EXPORT`               | PDF 导出权      | 时间窗内 N 次    | `POST /reports/{id}/export-pdf`        |
 
-#### 3.8.1 `GET /api/v1/membership/plans` — 会员套餐列表 🔓
+#### 3.8.1 `GET /api/v1/membership/products` — 会员套餐列表
+
+> **与 §3.9.1 是同一端点**（ADR-033 合并），冲突时以本节为准。 🔓
 
 | 项   | 值                                                                       |
 | ---- | ------------------------------------------------------------------------ |
 | 用途 | 返回可售会员套餐（月卡/季卡/年卡）与权益对比，供会员页展示（游客可浏览） |
-| 鉴权 | 🔓 公开                                                                  |
+| 鉴权 | 🔑 公开                                                                  |
 | 限流 | IP 120 次/60s                                                            |
 | 幂等 | 是                                                                       |
 | 异步 | 否                                                                       |
@@ -8217,7 +8219,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 **请求示例**
 
 ```http
-GET /api/v1/membership/plans?includeBenefitsCompare=true HTTP/1.1
+GET /api/v1/membership/products?includeBenefitsCompare=true HTTP/1.1
 X-Platform: miniapp
 ```
 
@@ -8416,7 +8418,7 @@ X-Platform: miniapp
 4. **不返回**成本/利润相关字段。
 5. **合规**：`purchaseNotice` 明确「不会自动续费」与退款政策（微信平台运营规范，架构 1.2）。
 
-#### 3.8.2 `GET /api/v1/membership/me` — 我的会员状态与权益 🔑
+#### 3.8.2 `GET /api/v1/membership` — 我的会员状态与权益 🔑
 
 | 项   | 值                                                       |
 | ---- | -------------------------------------------------------- |
@@ -8436,7 +8438,7 @@ X-Platform: miniapp
 **请求示例**
 
 ```http
-GET /api/v1/membership/me?includeEntitlements=true&includeHistory=false HTTP/1.1
+GET /api/v1/membership?includeEntitlements=true&includeHistory=false HTTP/1.1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
@@ -8698,12 +8700,17 @@ CLOSED（关单）            CANCELLED           REFUNDED / PARTIAL_REFUNDED
 
 `Order.expiredAt = createdAt + 30min`；cron 每分钟关单并调微信 `close` 接口（架构 13.3）。
 
-#### 3.9.1 `GET /api/v1/products` — 商品列表 🔓
+#### 3.9.1 `GET /api/v1/membership/products` — 商品列表
+
+> **与 §3.8.1 是同一端点**：契约原本把「会员套餐列表」与「商品列表」分为两个接口，
+> 实现合并为一个目录接口（ADR-033）—— 一次请求同时返回全部可售商品（含会员档位与
+> 单次商品，用 `type` 区分）与当前会员状态，避免会员页出现「价格已渲染但会员状态
+> 还在转圈」的中间态。两节内容若有冲突，**以 §3.8.1 为准**。 🔓
 
 | 项   | 值                                                                  |
 | ---- | ------------------------------------------------------------------- |
 | 用途 | 返回可售商品（单次报告、匹配报告、AI 次数包），供付费墙与商品页展示 |
-| 鉴权 | 🔓 公开（价格透明，便于转化）；`userContext` 需登录才返回           |
+| 鉴权 | 🔑 公开（价格透明，便于转化）；`userContext` 需登录才返回           |
 | 限流 | IP 120 次/60s                                                       |
 | 幂等 | 是                                                                  |
 | 异步 | 否                                                                  |
@@ -8718,7 +8725,7 @@ CLOSED（关单）            CANCELLED           REFUNDED / PARTIAL_REFUNDED
 **请求示例**
 
 ```http
-GET /api/v1/products?type=REPORT_PERSONAL,AI_CREDITS HTTP/1.1
+GET /api/v1/membership/products?type=REPORT_PERSONAL,AI_CREDITS HTTP/1.1
 X-Platform: miniapp
 ```
 
@@ -8826,7 +8833,7 @@ X-Platform: miniapp
 4. **公开可访问**：游客可看价格；`userContext` 为 `null`。
 5. `isStackable` 标识多次购买是否叠加（次数包叠加，报告解锁不叠加）。
 
-#### 3.9.2 `POST /api/v1/orders` — 创建订单并返回 JSAPI 支付参数 🔑 ♻️
+#### 3.9.2 `POST /api/v1/payment/orders` — 创建订单并返回 JSAPI 支付参数 🔑 ♻️
 
 | 项   | 值                                                                                                                                                   |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -9563,7 +9570,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 3. 关单后可重新下单（`canRecreateOrder: true`），**不受任何惩罚限制**。
 4. 微信 `close` 失败不阻断本地关单（本地状态优先），写 `outbox_event` 重试（架构 15.5）。
 
-#### 3.9.8 `POST /api/v1/payments/wechat/notify` — 微信支付异步回调 🔓
+#### 3.9.8 `POST /api/v1/payment/notify/wechat` — 微信支付异步回调 🔓
 
 | 项   | 值                                                                                                                           |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -9615,7 +9622,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 **请求示例**
 
 ```http
-POST /api/v1/payments/wechat/notify HTTP/1.1
+POST /api/v1/payment/notify/wechat HTTP/1.1
 Host: api.soulmap.cn
 Wechatpay-Timestamp: 1771089156
 Wechatpay-Nonce: 3f8a1c7e5b2d9046a1c7e3f5b9d20468
@@ -18163,24 +18170,24 @@ X-Platform: admin
 
 | #   | 接口                                  | 鉴权 | 权限点 / 权益 | 限流          | 幂等键 |
 | --- | ------------------------------------- | ---- | ------------- | ------------- | ------ |
-| 57  | `GET /api/v1/membership/plans`        | 🔓   | —             | 120/60s（IP） | 是     |
-| 58  | `GET /api/v1/membership/me`           | 🔑   | —             | 120/60s       | 是     |
+| 57  | `GET /api/v1/membership/products`     | 🔑   | —             | 120/60s（IP） | 是     |
+| 58  | `GET /api/v1/membership`              | 🔑   | —             | 120/60s       | 是     |
 | 59  | `GET /api/v1/membership/entitlements` | 🔑   | —             | 120/60s       | 是     |
 
 ### A.9 支付 payment（10）
 
-| #   | 接口                                  | 鉴权               | 权限点 / 权益 | 限流          | 幂等键                 |
-| --- | ------------------------------------- | ------------------ | ------------- | ------------- | ---------------------- |
-| 60  | `GET /api/v1/products`                | 🔓                 | —             | 120/60s（IP） | 是                     |
-| 61  | `POST /api/v1/orders`                 | 🔑                 | —             | 10/60min      | **是**                 |
-| 62  | `GET /api/v1/orders`                  | 🔑                 | —             | 60/60s        | 是                     |
-| 63  | `GET /api/v1/orders/{id}`             | 🔑 + 归属          | —             | 60/60s        | 是                     |
-| 64  | `POST /api/v1/orders/{id}/query`      | 🔑 + 归属          | —             | 10/10min      | 天然幂等               |
-| 65  | `POST /api/v1/orders/{id}/cancel`     | 🔑 + 归属          | —             | 20/60min      | 天然幂等               |
-| 66  | `POST /api/v1/orders/{id}/close`      | 🔑 + 归属          | —             | 20/60min      | 天然幂等               |
-| 67  | `POST /api/v1/payments/wechat/notify` | 🔓（**必须验签**） | —             | —             | `transactionId` UNIQUE |
-| 68  | `GET /api/v1/refunds`                 | 🔑                 | —             | 120/60s       | 是                     |
-| 69  | `POST /api/v1/orders/{id}/refund`     | 🔑 + 归属          | —             | 5/24h         | **是**                 |
+| #   | 接口                                 | 鉴权               | 权限点 / 权益 | 限流          | 幂等键                 |
+| --- | ------------------------------------ | ------------------ | ------------- | ------------- | ---------------------- |
+| 60  | `GET /api/v1/membership/products`    | 🔑                 | —             | 120/60s（IP） | 是                     |
+| 61  | `POST /api/v1/payment/orders`        | 🔑                 | —             | 10/60min      | **是**                 |
+| 62  | `GET /api/v1/orders`                 | 🔑                 | —             | 60/60s        | 是                     |
+| 63  | `GET /api/v1/orders/{id}`            | 🔑 + 归属          | —             | 60/60s        | 是                     |
+| 64  | `POST /api/v1/orders/{id}/query`     | 🔑 + 归属          | —             | 10/10min      | 天然幂等               |
+| 65  | `POST /api/v1/orders/{id}/cancel`    | 🔑 + 归属          | —             | 20/60min      | 天然幂等               |
+| 66  | `POST /api/v1/orders/{id}/close`     | 🔑 + 归属          | —             | 20/60min      | 天然幂等               |
+| 67  | `POST /api/v1/payment/notify/wechat` | 🔓（**必须验签**） | —             | —             | `transactionId` UNIQUE |
+| 68  | `GET /api/v1/refunds`                | 🔑                 | —             | 120/60s       | 是                     |
+| 69  | `POST /api/v1/orders/{id}/refund`    | 🔑 + 归属          | —             | 5/24h         | **是**                 |
 
 ### A.10 存储 storage（3）
 
