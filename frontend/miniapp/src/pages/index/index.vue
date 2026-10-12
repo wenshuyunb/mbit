@@ -4,25 +4,34 @@
  *
  * 承载核心流程入口（需求 §17.1）：开始测试 / 我的报告 / 情侣匹配 / AI 助手
  *
- * Phase 0 状态：布局与入口完整，数据为占位；
- *   Phase 2 接入「测试定义列表 + 用户画像状态」，
- *   Phase 3 接入「最新报告卡片 + 生成进度」。
+ * ## 数据来源
+ *
+ *   · 是否有画像 → `GET /personality/me`（返回 null 表示尚未测评，是空状态而非错误）
+ *   · 报告卡片   → `GET /reports`（列表摘要 + 最新一条）
+ *   · 测试耗时   → `GET /tests`（题库由服务端下发，前端不写死「约 8 分钟」）
+ *
+ * 三个请求用 `Promise.allSettled` 并发：任一失败只降级对应区块，不整页白屏。
+ * 但**画像请求失败必须显式提示** —— 它是「开始测试 / 重新测试」这条主行动的
+ * 分支依据，误判会让用户点进错误的流程。
  */
 
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { onPullDownRefresh, onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app';
 
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
+import { useHome } from '@/composables/use-home';
 import { useAppStore } from '@/store/app';
 import { useAuthStore } from '@/store/auth';
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
 
-/** 是否已完成人格测试（Phase 2 接入 /personality/me 后由真实数据驱动） */
-const hasProfile = ref(false);
-/** 最近一次报告的简要信息（Phase 3 接入） */
-const latestReportTitle = ref('');
+const { hasProfile, profileError, profileBadge, primaryTitle, primaryDesc, reportDesc, loadHomeData } = useHome();
+
+/** 下拉刷新：同时刷新首页数据与系统配置 */
+const refresh = async (): Promise<void> => {
+  await Promise.allSettled([loadHomeData(), appStore.loadSystemConfig({ force: true })]);
+};
 
 const greeting = computed(() => {
   const hour = new Date().getHours();
@@ -47,7 +56,7 @@ const entrances = computed(() =>
     {
       key: 'report',
       title: '我的报告',
-      desc: latestReportTitle.value || '查看 AI 生成的深度人格解读',
+      desc: reportDesc.value,
       icon: '📖',
       url: '/pages/report/list',
       enabled: true,
@@ -90,16 +99,19 @@ onShareTimeline(() => ({
 
 onShow(() => {
   appStore.initSystemMetrics();
-  // 回前台超过 5 分钟则刷新配置，保证开关与文案不过期
+  // 回前台超过 5 分钟则刷新，保证画像与报告状态不过期
   if (appStore.shouldRefresh()) {
-    void appStore.loadSystemConfig({ force: true });
+    void refresh();
   }
 });
 
 onPullDownRefresh(async () => {
-  await Promise.allSettled([appStore.loadSystemConfig({ force: true }), authStore.fetchUserInfo()]);
+  await Promise.allSettled([refresh(), authStore.fetchUserInfo()]);
   uni.stopPullDownRefresh();
 });
+
+// 首屏加载：不能只依赖 onShow（首次进入时 shouldRefresh 恒为 false）
+void refresh();
 </script>
 
 <template>
@@ -107,16 +119,19 @@ onPullDownRefresh(async () => {
     <!-- 顶部问候与状态栏占位 -->
     <view class="home__hero" :style="{ paddingTop: `${appStore.statusBarHeight + 12}px` }">
       <text class="home__greeting">{{ greeting }}，{{ authStore.displayName }}</text>
-      <text class="home__slogan">{{ hasProfile ? '你的画像已就绪' : '认识自己，是理解关系的第一步' }}</text>
+      <text v-if="profileError" class="home__slogan home__slogan--error" @tap="loadHomeData">
+        {{ profileError }}（点击重试）
+      </text>
+      <text v-else class="home__slogan">
+        {{ profileBadge ? '你的画像：' + profileBadge : '认识自己，是理解关系的第一步' }}
+      </text>
     </view>
 
     <!-- 主行动卡片 -->
     <view class="home__primary card" @tap="goTo('/pages/test/intro')">
       <view class="home__primary-content">
-        <text class="home__primary-title">{{ hasProfile ? '重新测试人格' : '开始人格测试' }}</text>
-        <text class="home__primary-desc">
-          {{ hasProfile ? '看看这段时间你的变化' : 'MBTI + 大五人格双模型 · 约 8 分钟' }}
-        </text>
+        <text class="home__primary-title">{{ primaryTitle }}</text>
+        <text class="home__primary-desc">{{ primaryDesc }}</text>
       </view>
       <text class="home__primary-arrow">→</text>
     </view>
@@ -157,6 +172,11 @@ onPullDownRefresh(async () => {
     margin-top: $space-xs;
     font-size: $font-size-sm;
     color: $color-text-secondary;
+
+    /* 画像加载失败：可点击重试，用警示色与普通文案区分 */
+    &--error {
+      color: $color-danger;
+    }
   }
 
   &__primary {
