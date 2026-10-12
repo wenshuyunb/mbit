@@ -9,7 +9,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -28,6 +28,7 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/api-response.dto';
+import { IsAnswerValue } from '../../../common/validators/answer-value.validator';
 
 /** 进入测试的来源（埋点用） */
 export const TEST_SOURCES = ['HOME', 'TEST_CENTER', 'SHARE', 'INVITE', 'REPORT'] as const;
@@ -133,7 +134,10 @@ export class AnswerItemDto {
     description: '答案值。单选题传数字（LIKERT5 为 1–5，BINARY 为 0/1）；排序题传全部选项 value 的排列数组',
     oneOf: [{ type: 'number' }, { type: 'array', items: { type: 'number' } }],
   })
-  @Transform(({ value }: { value: unknown }) => value)
+  // 必须挂真实校验器：全局管道开了 whitelist + forbidNonWhitelisted，
+  // 无校验元数据的属性会被判为非白名单字段而整批 400（契约 §3.3.5 的 10001）。
+  // 具体值域由 Service 按题型判定（40008），此处仅判形状。
+  @IsAnswerValue()
   value!: number | number[];
 
   @ApiPropertyOptional({ description: '本题作答耗时（毫秒）', minimum: 0, maximum: MAX_RESPONSE_MS })

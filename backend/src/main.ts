@@ -20,6 +20,7 @@ import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { BusinessException } from './common/errors/business.exception';
 import { ErrorCode } from './common/errors/error-code';
+import { flattenValidationErrors } from './common/errors/validation-details.util';
 import type { AppConfig } from './config/config.type';
 
 /** 优雅关闭超时（毫秒）：等待进行中请求结束 */
@@ -93,12 +94,8 @@ async function bootstrap(): Promise<void> {
       // 校验失败时返回字段级明细
       validationError: { target: false, value: false },
       stopAtFirstError: false,
-      exceptionFactory: (errors) => {
-        const details = errors.flatMap((err) =>
-          Object.values(err.constraints ?? {}).map((issue) => ({ field: err.property, issue })),
-        );
-        return BusinessException.badRequest(ErrorCode.PARAM_INVALID, '请求参数不合法', details);
-      },
+      exceptionFactory: (errors) =>
+        BusinessException.badRequest(ErrorCode.PARAM_INVALID, '请求参数不合法', flattenValidationErrors(errors)),
     }),
   );
 
