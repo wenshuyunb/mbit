@@ -1,64 +1,43 @@
 /**
- * 商品与订单接口（微信支付 JSAPI）
+ * 订单与微信支付接口
  *
- * 支付流程（架构文档 §13.2）：
- *   ① 前端 POST /orders 创建订单 → 服务端调微信 prepay → 返回 JSAPI 支付参数
- *   ② 前端 wx.requestPayment(payParams)
+ * ## 后端只有两个支付相关接口（权威来源 `backend/src/modules/payment/payment.controller.ts`）
+ *
+ * | 接口                          | 用途                                    | 鉴权        |
+ * | ----------------------------- | --------------------------------------- | ----------- |
+ * | `POST /payment/orders`        | 创建订单并返回 JSAPI 支付参数（金额服务端读） | 需登录      |
+ * | `POST /payment/notify/wechat` | 微信支付结果回调 —— **微信服务器调用，前端不碰** | 公开 + 原始响应 |
+ *
+ * 原文件里的 `/orders`、`/orders/{id}`、`/orders/{id}/query`、`/orders/{id}/cancel`
+ * 后端**全都不存在**（下单实际在 `/payment/orders`）。见文件末尾的说明。
+ *
+ * ## 支付流程（架构文档 §13.2）
+ *
+ *   ① `createOrder()` → 服务端调微信 prepay → 返回 JSAPI 支付参数
+ *   ② `uni.requestPayment(payParams)`
  *   ③ 服务端接收微信异步回调（验签 + 幂等）→ 发放权益
- *   ④ 前端轮询 GET /orders/{id}（或支付成功页主动查单）确认最终状态
+ *   ④ 前端**以服务端状态为准**确认结果（见下方「支付后的状态确认」）
  *
- * 安全约束：
- *   · 金额以服务端商品价格为准，前端不传金额
- *   · 前端支付成功 ≠ 权益已发放，必须以服务端订单状态为准
+ * ## 安全约束
+ *
+ *   · 金额以服务端商品价格为准，前端不传金额（DTO 里刻意没有金额字段）
+ *   · 前端支付成功 ≠ 权益已发放，必须以服务端状态为准
  *   · 创建订单必须携带幂等键，避免重复下单
  */
 
-import { http, httpPage } from './request';
 import { createIdempotencyKey } from '@/utils/request-id';
-import type { PaginatedData } from './types';
 
-/** 商品类型 */
-export type ProductType = 'REPORT_PERSONAL' | 'REPORT_COMPATIBILITY' | 'MEMBERSHIP' | 'AI_CREDITS';
+import { http } from './request';
 
-/** 商品 */
-export interface Product {
-  code: string;
-  type: ProductType;
-  name: string;
-  description: string;
-  /** 现价（分） */
-  priceAmount: number;
-  originalAmount: number | null;
-  /** 关联资源（如报告解锁对应 reportId） */
-  targetId: string | null;
-  /** 权益摘要文案 */
-  benefitText: string;
-}
-
-/** 订单状态 */
+/** 订单状态（与 Prisma `OrderStatus` 一致） */
 export type OrderStatus =
   'CREATED' | 'PENDING_PAY' | 'PAID' | 'FULFILLED' | 'CLOSED' | 'CANCELLED' | 'REFUNDED' | 'PARTIAL_REFUNDED';
 
-/** 订单 */
-export interface Order {
-  id: string;
-  orderNo: string;
-  productCode: string;
-  productName: string;
-  /** 应付金额（分） */
-  amount: number;
-  /** 实付金额（分） */
-  paidAmount: number | null;
-  status: OrderStatus;
-  /** 权益是否已发放（前端据此决定是否解锁内容） */
-  fulfilled: boolean;
-  createdAt: string;
-  /** 未支付订单的自动关闭时间 */
-  expiredAt: string;
-  paidAt: string | null;
-}
-
-/** wx.requestPayment 所需参数 */
+/**
+ * `uni.requestPayment` 所需参数
+ *
+ * `signType` 后端固定返回 `'RSA'`（微信支付 v3）。
+ */
 export interface PaymentParams {
   timeStamp: string;
   nonceStr: string;
@@ -67,41 +46,78 @@ export interface PaymentParams {
   paySign: string;
 }
 
-/** 下单结果 */
-export interface CreateOrderResult {
-  order: Order;
-  payment: PaymentParams;
+/** 下单入参 */
+export interface CreateOrderInput {
+  /**
+   * 商品 ID（UUID）—— 来自 `listProducts()` 的 `Product.productId`
+   *
+   * ⚠ 不是 `code`：后端用 `@IsUUID()` 校验，传商品编码会被拒为 `400 / 10001`。
+   */
+  productId: string;
+  /** 购买单份报告解锁时提供 */
+  reportId?: string;
+  /** 购买匹配报告时提供 */
+  relationshipId?: string;
 }
 
-/** 商品列表（用于报告解锁、会员、AI 套餐的购买入口） */
-export const listProducts = (query: { type?: ProductType } = {}): Promise<Product[]> =>
-  http.get<Product[]>('/products', query, { needAuth: false, showError: false });
+/** 下单结果（后端 `OrderCreatedView`） */
+export interface OrderCreated {
+  orderId: string;
+  orderNo: string;
+  /** 金额（分），由服务端从商品表读取 */
+  amount: number;
+  currency: string;
+  /** 订单支付超时时间；超时后订单会被关闭 */
+  expiresAt: string;
+  /**
+   * 支付参数；**预支付失败时为 `null`**
+   *
+   * 原文件把这个字段声明为非空，直接取 `payment.package` 会在预支付失败时抛
+   * `TypeError: Cannot read properties of null`。调用方必须先判空，
+   * 为 `null` 时用 `paymentUnavailableReason` 提示用户并允许重试。
+   */
+  payment: PaymentParams | null;
+  /** 未返回支付参数时的原因（便于前端提示与排查） */
+  paymentUnavailableReason?: string;
+}
 
 /**
  * 创建订单并获取支付参数
- * 幂等键在调用时生成一次；重试同一笔订单必须复用同一 key（由调用方保存）
+ *
+ * 幂等键由本函数自动生成：同一意图重复调用会被服务端识别，避免重复下单。
  */
-export const createOrder = (payload: { productCode: string; idempotencyKey?: string }): Promise<CreateOrderResult> =>
-  http.post<CreateOrderResult>(
-    '/orders',
-    { productCode: payload.productCode },
-    { timeout: 30_000, idempotencyKey: payload.idempotencyKey ?? createIdempotencyKey() },
+export const createOrder = (input: CreateOrderInput): Promise<OrderCreated> =>
+  http.post<OrderCreated>(
+    '/payment/orders',
+    {
+      productId: input.productId,
+      ...(input.reportId === undefined ? {} : { reportId: input.reportId }),
+      ...(input.relationshipId === undefined ? {} : { relationshipId: input.relationshipId }),
+    },
+    { timeout: 30_000, idempotencyKey: createIdempotencyKey() },
   );
 
-/** 订单列表 */
-export const listOrders = (
-  query: { page?: number; pageSize?: number; status?: OrderStatus } = {},
-): Promise<PaginatedData<Order>> => httpPage('/orders', query);
-
-/** 订单详情 */
-export const getOrder = (orderId: string): Promise<Order> => http.get<Order>(`/orders/${orderId}`);
-
-/**
- * 主动查单（补偿机制）
- * 微信回调可能延迟或丢失，前端在支付返回后调用此接口向微信侧主动查询并对账
- */
-export const queryOrder = (orderId: string): Promise<Order> =>
-  http.post<Order>(`/orders/${orderId}/query`, {}, { timeout: 20_000, showError: false });
-
-/** 取消订单（仅未支付状态可取消） */
-export const cancelOrder = (orderId: string): Promise<void> => http.post<void>(`/orders/${orderId}/cancel`, {});
+// ---------------------------------------------------------------------------
+// 未实现的后端端点（**刻意不提供客户端**）
+// ---------------------------------------------------------------------------
+//
+// 契约 §3.9.3–3.9.6 定义了订单查询/取消接口，但后端**尚未实现**，
+// 调用只会得到 `404 / 10002`。保留它们会制造「功能已就绪」的假象：
+// 页面调过去失败时，排查方向会被引向网络或前端，而真正原因是端点不存在。
+//
+//   · GET  /orders                       契约 §3.9.3（我的订单列表）
+//   · GET  /orders/{orderId}             契约 §3.9.4（订单详情）
+//   · POST /orders/{orderId}/query       契约 §3.9.5（主动向微信查单）
+//   · POST /orders/{orderId}/cancel      契约 §3.9.6（取消未支付订单）
+//
+// ## 支付后的状态确认（重要）
+//
+// 由于上述查询接口缺失，前端在 `uni.requestPayment` 成功后**无法直接查订单状态**。
+// 现阶段可行的确认方式是「查业务状态」而非「查订单」：
+//   · 买会员  → 重新拉 `GET /membership`，看 `isMember` / `expireAt`
+//   · 买报告  → 重新拉报告详情，看 `isUnlocked` / `unlockType`
+// 注意微信回调是异步的，支付成功后立刻查可能仍是旧状态，需要带退避的重试
+// （建议 2s 起、上限 5 次），并明确告知用户「支付结果确认中」。
+//
+// 待后端补上订单查询接口后，这里应改为以订单状态为权威依据 —— 业务状态只能
+// 证明「权益到了」，无法区分「回调还没到」与「扣款了但发放失败」。
