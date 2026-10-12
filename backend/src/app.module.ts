@@ -59,6 +59,8 @@ import { AdminUserModule } from './modules/admin/user/admin-user.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { MembershipModule } from './modules/membership/membership.module';
+// 站内通知（`GET /notifications`、`/notifications/read`、`/notifications/subscribe`）
+import { NotificationModule } from './modules/notification/notification.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { PersonalityModule } from './modules/personality/personality.module';
 import { RelationshipModule } from './modules/relationship/relationship.module';
@@ -197,7 +199,9 @@ import { UserModule } from './modules/user/user.module';
     AdminRoleModule,
     AdminTestDefinitionModule,
     AdminUserModule,
-    // Phase 5+ 待接入：NotificationModule
+    // 站内通知（写入方是管理端的封禁/解封通知，此处提供读取/已读/订阅授权）
+    NotificationModule,
+    // Phase 5+ 待接入：订阅消息发送（wechat.service 目前无发送方法）
 
     // ---------------------------------------------------------------- 运维
     HealthModule,

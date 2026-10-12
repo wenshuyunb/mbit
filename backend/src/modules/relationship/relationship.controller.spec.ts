@@ -118,6 +118,7 @@ describe('RelationshipController 路由契约（API_DESIGN §3.6）', () => {
   it('【关键】全部端点必须鉴权（不得标记 @Public）', () => {
     for (const method of [
       'createInvite',
+      'getInviteDetail',
       'acceptInvite',
       'listRelationships',
       'getRelationship',
@@ -137,6 +138,7 @@ describe('RelationshipController 路由契约（API_DESIGN §3.6）', () => {
     // `@Throttle` 会变成空操作、静默回落到全局默认值 —— 这正是要断言的。
     for (const method of [
       'createInvite',
+      'getInviteDetail',
       'acceptInvite',
       'listRelationships',
       'getRelationship',
@@ -147,9 +149,11 @@ describe('RelationshipController 路由契约（API_DESIGN §3.6）', () => {
     }
     // 邀请创建是成本敏感接口（契约：10 次/24h），限额必须真的收窄到 10
     expect(Reflect.getMetadata(`${THROTTLER_LIMIT}global`, RelationshipController.prototype.createInvite)).toBe(10);
+    // 邀请详情面向扫码场景，限额必须收窄到 30 次/60s（防邀请码枚举）
+    expect(Reflect.getMetadata(`${THROTTLER_LIMIT}global`, RelationshipController.prototype.getInviteDetail)).toBe(30);
   });
 
-  it('已实现的路由恰好只有六个（新增路由必须同步更新本测试与文档）', () => {
+  it('已实现的路由恰好只有八个（新增路由必须同步更新本测试与文档）', () => {
     const handlerNames = Object.getOwnPropertyNames(RelationshipController.prototype).filter(
       (name) =>
         name !== 'constructor' &&
@@ -162,6 +166,7 @@ describe('RelationshipController 路由契约（API_DESIGN §3.6）', () => {
       'createInvite',
       'generateCompatibility',
       'getCompatibility',
+      'getInviteDetail',
       'getRelationship',
       'listRelationships',
       'removeRelationship',
@@ -416,14 +421,14 @@ describe('createInvite 响应成形', () => {
     });
   });
 
-  it('控制器实例上不存在未实现的读接口（防止误以为已实现）', () => {
+  it('契约 §3.6.2（邀请详情）已实现，不再是"未实现的读接口"', () => {
     const internals = RelationshipController.prototype as unknown as ControllerInternals;
 
     expect(internals).toBeDefined();
-    // 契约 §3.6.2（邀请详情）仍未实现。这个断言的作用是：一旦有人实现了它却忘了
-    // 更新本文件，测试会立刻变红 —— 而不是让文档继续声称"未实现"
-    expect(
-      Object.getOwnPropertyNames(RelationshipController.prototype).filter((name) => ['getInvite'].includes(name)),
-    ).toEqual([]);
+    // 这条断言的作用与之前相反：§3.6.2 已由 `getInviteDetail` 实现，
+    // 于是由「断言不存在」翻转为「断言存在、路径与参数名对齐」——
+    // 实现被删除或路径被改写时，这里同样会立刻变红
+    expect(Reflect.getMetadata(PATH_METADATA, RelationshipController.prototype.getInviteDetail)).toBe('invites/:code');
+    expect(new InviteCodeParamDto()).toHaveProperty('code');
   });
 });

@@ -19,7 +19,7 @@
  *    只在成功时记账会让成本看板系统性低估，而成本看板的用途正是发现异常。
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { BusinessException } from '../../../common/errors/business.exception';
@@ -41,6 +41,9 @@ import { estimateCostCents } from '../provider/llm-pricing';
 import { LlmProviderFactory } from '../provider/llm-provider.factory';
 import type { LlmCompletionResult } from '../provider/llm-provider.types';
 import { PromptService, type ResolvedPrompt } from '../prompt/prompt.service';
+import { ReportGenerationOptionsService, type ReportGenerationOptions } from './report-generation-options.service';
+import { ReportLiveProgressService } from './report-live-progress.service';
+import { STAGE_PROGRESS } from './report-stream.util';
 import { parseReportSections, readExpectedSections } from './report-section.parser';
 
 /** 生成请求 */
@@ -94,6 +97,18 @@ export class ReportGenerationService {
     private readonly prisma: PrismaService,
     private readonly prompts: PromptService,
     private readonly providers: LlmProviderFactory,
+    /**
+     * 实时进度通道（可选注入）
+     *
+     * `@Optional()` 有两个作用：
+     *   ① 现有单测用 `new ReportGenerationService(prisma, prompts, providers)` 直接构造，
+     *      不必为了进度上报而引入 Redis 替身；
+     *   ② 本服务在**没有**实时通道时行为完全不变（所有上报都经 `publishLiveProgress` 判空）。
+     * 注意它只上报"真实发生的阶段"，不制造进度数字（见各调用点注释）。
+     */
+    @Optional() private readonly liveProgress?: ReportLiveProgressService,
+    /** 生成选项（`tone` / `focus`），仅"重新生成"会写入；同样可选注入 */
+    @Optional() private readonly generationOptions?: ReportGenerationOptionsService,
   ) {}
 
   /**
@@ -153,17 +168,51 @@ export class ReportGenerationService {
       },
     });
 
+    // 阶段①：装配上下文（下面两次 `prepare*` 正是在做这件事）
+    await this.publishLiveProgress(reportId, report.userId, {
+      status: 'GENERATING',
+      stage: 'BUILDING_CONTEXT',
+      progress: STAGE_PROGRESS.BUILDING_CONTEXT,
+      startedAt: new Date().toISOString(),
+      provider: null,
+      model: null,
+    });
+
+    // 「重新生成」写入的语气/侧重：`ai_reports` 没有对应列，从这里取（见 OptionsService 说明）
+    const options = (await this.generationOptions?.read(reportId)) ?? null;
+
     // 重新推导上下文与 Prompt：3c 的确定性让"重新推导"必然等于首次推导，
     // 因此无需把变量快照落库（少一份可能与画像脱节的数据）
     const prepared = isRelationshipReport
-      ? await this.prepareForRelationship(report.userId, report.relationshipId as string, report.promptTemplateKey)
-      : await this.prepare(report.userId, report.profileId as string, report.promptTemplateKey);
+      ? await this.prepareForRelationship(
+          report.userId,
+          report.relationshipId as string,
+          report.promptTemplateKey,
+          options ?? {},
+        )
+      : await this.prepare(report.userId, report.profileId as string, report.promptTemplateKey, options ?? {});
+
+    // 阶段②：Prompt 已渲染完成（`prepare*` 内部已调用模板渲染）
+    await this.publishLiveProgress(reportId, report.userId, {
+      stage: 'RENDERING_PROMPT',
+      progress: STAGE_PROGRESS.RENDERING_PROMPT,
+      // 目标段数由模板的 `outputSchema` 声明，这是"生成中"唯一能确定的规模信息
+      targetSectionCount: readExpectedSections(prepared.prompt.outputSchema).length,
+      provider: prepared.prompt.provider,
+      model: prepared.prompt.model,
+    });
 
     const provider = this.providers.resolveAvailable(prepared.prompt.provider ?? undefined);
 
     let completion: LlmCompletionResult | null = null;
 
     try {
+      // 阶段③：开始调用模型（真实位置，不是估算）
+      await this.publishLiveProgress(reportId, report.userId, {
+        stage: 'CALLING_MODEL',
+        progress: STAGE_PROGRESS.CALLING_MODEL,
+      });
+
       completion = await provider.complete({
         messages: [
           { role: 'system', content: prepared.prompt.system },
@@ -183,7 +232,22 @@ export class ReportGenerationService {
         throw new BusinessException(ErrorCode.AI_OUTPUT_INVALID, 'AI 生成的报告没有任何有效段落');
       }
 
+      // 阶段④：模型已返回，正在切分段落并落库
+      await this.publishLiveProgress(reportId, report.userId, {
+        stage: 'GENERATING_SECTIONS',
+        progress: STAGE_PROGRESS.GENERATING_SECTIONS,
+        generatedSectionCount: parsed.sections.length,
+        targetSectionCount: parsed.sections.length,
+        provider: completion.provider,
+        model: completion.model,
+      });
+
       const costCents = estimateCostCents(completion.provider, completion.model, completion.usage);
+
+      await this.publishLiveProgress(reportId, report.userId, {
+        stage: 'PERSISTING',
+        progress: STAGE_PROGRESS.PERSISTING,
+      });
 
       await this.persistSuccess({
         reportId,
@@ -203,6 +267,11 @@ export class ReportGenerationService {
         costCents,
         success: true,
       });
+
+      // 任务终结：清掉实时进度，避免订阅方读到"上一轮生成的残留阶段"。
+      // 此后以 `ai_reports` 的行状态为准（SUCCEEDED → 派生出 DONE）
+      await this.clearLiveProgress(reportId);
+      await this.generationOptions?.clear(reportId);
 
       this.logger.log(
         `报告生成完成 reportId=${reportId} sections=${parsed.sections.length} tokens=${completion.usage.totalTokens} cost=${costCents}分 耗时=${Date.now() - startedAt}ms`,
@@ -236,6 +305,10 @@ export class ReportGenerationService {
         });
       }
 
+      // 失败同样要清实时进度：否则订阅方会看到"已经 FAILED 却还在调用模型"
+      await this.clearLiveProgress(reportId);
+      await this.generationOptions?.clear(reportId);
+
       this.logger.error(`报告生成失败 reportId=${reportId} code=${code}: ${message}`);
       throw error;
     }
@@ -245,11 +318,42 @@ export class ReportGenerationService {
   // 内部
   // ==========================================================================
 
+  /**
+   * 上报一次实时进度
+   *
+   * 三个刻意的约束：
+   *   ① **只在真实代码位置调用**（进入某阶段、拿到模型结果、开始落库），
+   *      不按时间推算"现在大概到 60% 了" —— 假进度会掩盖真实的卡顿；
+   *   ② 失败只记日志，**绝不影响生成**：进度是展示数据，报告才是交付物；
+   *   ③ 用 `?.` 与 try/catch 包住，未注入时（单测、无 Redis 环境）完全静默。
+   */
+  private async publishLiveProgress(
+    reportId: string,
+    userId: string,
+    patch: Parameters<ReportLiveProgressService['publish']>[2],
+  ): Promise<void> {
+    if (this.liveProgress === undefined) return;
+
+    try {
+      await this.liveProgress.publish(reportId, userId, patch);
+    } catch (error) {
+      this.logger.warn(`上报报告实时进度失败 reportId=${reportId}: ${(error as Error).message}`);
+    }
+  }
+
+  /** 清理实时进度（任务终结后调用） */
+  private async clearLiveProgress(reportId: string): Promise<void> {
+    if (this.liveProgress === undefined) return;
+
+    await this.liveProgress.clear(reportId);
+  }
+
   /** 读取画像并渲染 Prompt（返回 `prompt` 便于调用方复用） */
   private async prepare(
     userId: string,
     profileId: string,
     templateKey: string,
+    options: ReportGenerationOptions = {},
   ): Promise<{ prompt: ResolvedPrompt; title: string }> {
     const profile = await this.prisma.personalityProfile.findFirst({
       where: { id: profileId, userId, deletedAt: null },
@@ -274,7 +378,7 @@ export class ReportGenerationService {
     };
 
     const { variables } = buildReportContext(input);
-    const prompt = await this.prompts.getPrompt(templateKey, variables);
+    const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
 
     const title =
       variables['mbtiType'] === undefined || variables['mbtiTypeName'] === undefined
@@ -296,6 +400,7 @@ export class ReportGenerationService {
     userId: string,
     relationshipId: string,
     templateKey: string,
+    options: ReportGenerationOptions = {},
   ): Promise<{ prompt: ResolvedPrompt; title: string }> {
     const relationship = await this.prisma.relationship.findFirst({
       where: {
@@ -385,7 +490,7 @@ export class ReportGenerationService {
       daysTogether: daysTogether(relationship.confirmedAt, new Date()),
     });
 
-    const prompt = await this.prompts.getPrompt(templateKey, variables);
+    const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
 
     // 标题用双方类型 + 分数：用户一眼能认出是哪段关系的哪一份报告
     const title =
@@ -516,6 +621,25 @@ export class ReportGenerationService {
     }
   }
 }
+
+/**
+ * 把语气/侧重并入 Prompt 变量
+ *
+ * 只有显式传入的键才覆盖上下文变量 —— 不能整体替换，否则一次"换语气"的小操作
+ * 会把画像数据全部丢掉（模板里 `{{mbtiType}}` 之类会立刻渲染失败）。
+ *
+ * 模板若未声明 `{{tone}}` / `{{focus}}`，多传这两个键**不会**产生任何影响
+ * （`renderTemplate` 只对"模板里出现但变量缺失"报错），因此对既有模板完全向后兼容；
+ * 而一旦后台按契约 §3.14 的模板（含 `内容侧重：{{focus}}`）发布版本，这两个变量即生效。
+ */
+const mergeGenerationOptions = (
+  variables: Readonly<Record<string, string>>,
+  options: ReportGenerationOptions,
+): Record<string, string> => ({
+  ...variables,
+  ...(options.tone !== undefined ? { tone: options.tone } : {}),
+  ...(options.focus !== undefined ? { focus: options.focus } : {}),
+});
 
 /**
  * 从任意异常中取出可用的错误码（取不到则回退「AI 服务不可用」）

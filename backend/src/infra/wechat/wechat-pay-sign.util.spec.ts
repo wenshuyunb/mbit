@@ -7,14 +7,7 @@
 
 import { createVerify, generateKeyPairSync } from 'node:crypto';
 
-import {
-  buildAuthorizationHeader,
-  buildMiniAppPayParams,
-  buildRequestSignaturePayload,
-  normalizePemKey,
-  randomNonce,
-  signWithMerchantKey,
-} from './wechat-pay-sign.util';
+import { buildMiniAppPayParams, normalizePemKey, randomNonce, signWithMerchantKey } from './wechat-pay-sign.util';
 import {
   ORDER_TTL_MINUTES,
   buildProductSnapshot,
@@ -43,19 +36,15 @@ const verifyPayload = (payload: string, signature: string): boolean => {
   return verifier.verify(publicKey, Buffer.from(signature, 'base64'));
 };
 
-describe('buildRequestSignaturePayload', () => {
-  it('【关键】格式与顺序固定为 `mchid\\nnonce_str\\ntimestamp\\nbody\\n`', () => {
-    // 与回调验签的顺序（timestamp → nonce → body）**不同**，
-    // 照抄回调那边的格式会得到 401，而微信不会告诉你拼错了
-    expect(buildRequestSignaturePayload({ mchId: 'm1', nonceStr: 'n1', timestamp: 't1', body: '{}' })).toBe(
-      'm1\nn1\nt1\n{}\n',
-    );
-  });
-});
+// 说明：这里原有两个 describe（`buildRequestSignaturePayload` 与
+// `buildAuthorizationHeader`），它们断言的是 `mchid\nnonce_str\ntimestamp\nbody\n`
+// 这一**不符合微信支付 v3 规范**的格式（缺请求方法与 URL），随实现一并删除。
+// v3 官方格式（`METHOD\nURL\ntimestamp\nnonce_str\nbody\n`）的格式断言与真签真验
+// 见 `wechat-pay-v3-sign.spec.ts`。
 
 describe('signWithMerchantKey', () => {
   it('【关键】真实密钥对签出的内容可用公钥验过', () => {
-    const payload = buildRequestSignaturePayload({ mchId: 'm1', nonceStr: 'n1', timestamp: 't1', body: '{}' });
+    const payload = 'POST\n/v3/pay/transactions/jsapi\n1700000000\nn1\n{}\n';
     const signature = signWithMerchantKey(payload, privateKey);
 
     expect(verifyPayload(payload, signature)).toBe(true);
@@ -71,51 +60,6 @@ describe('signWithMerchantKey', () => {
   it('【关键】私钥格式非法时抛出带可操作提示的错误', () => {
     // 环境变量里存 PEM 时 `\n` 常是字面量而不是换行，这是最常见的失败原因
     expect(() => signWithMerchantKey('payload', 'not-a-key')).toThrow(/商户私钥签名失败/);
-  });
-});
-
-describe('buildAuthorizationHeader', () => {
-  it('【关键】头格式与五个字段名（下划线）都正确', () => {
-    const header = buildAuthorizationHeader({
-      mchId: '1900000109',
-      serialNo: 'SERIAL123',
-      privateKeyPem: privateKey,
-      body: '{"a":1}',
-      now: NOW,
-    });
-
-    expect(header.startsWith('WECHATPAY2-SHA256-RSA2048 ')).toBe(true);
-    expect(header).toContain('mchid="1900000109"');
-    expect(header).toContain('nonce_str="');
-    expect(header).toContain('signature="');
-    expect(header).toContain(`timestamp="${TIMESTAMP}"`);
-    expect(header).toContain('serial_no="SERIAL123"');
-  });
-
-  it('【关键】头里的签名能覆盖请求体被验过', () => {
-    const body = '{"a":1}';
-    const header = buildAuthorizationHeader({
-      mchId: 'm',
-      serialNo: 's',
-      privateKeyPem: privateKey,
-      body,
-      now: NOW,
-    });
-
-    const nonce = /nonce_str="([^"]+)"/.exec(header)?.[1] ?? '';
-    const signature = /signature="([^"]+)"/.exec(header)?.[1] ?? '';
-    const payload = buildRequestSignaturePayload({ mchId: 'm', nonceStr: nonce, timestamp: TIMESTAMP, body });
-
-    expect(verifyPayload(payload, signature)).toBe(true);
-    // 换一个请求体就验不过（签名确实覆盖了 body，而不是只签了固定串）
-    expect(verifyPayload(payload.replace(body, '{"a":2}'), signature)).toBe(false);
-  });
-
-  it('两次调用的 nonce 不同（不可预测）', () => {
-    const make = (): string =>
-      buildAuthorizationHeader({ mchId: 'm', serialNo: 's', privateKeyPem: privateKey, body: '{}', now: NOW });
-
-    expect(make()).not.toBe(make());
   });
 });
 

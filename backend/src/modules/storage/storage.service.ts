@@ -631,6 +631,22 @@ export class StorageService {
   }
 
   /**
+   * 把**服务端生成**的对象置为公开可读
+   *
+   * 用途：分享卡这类需要被前端直接引用（小程序 `<image src>`、微信分享图）的对象。
+   * `storage-policy.ts` 已为 `SHARE_CARD` 场景声明 `publicRead: true`，本方法只是
+   * 把该声明落到**服务端产出**的对象上（客户端直传走 OSS 回调登记那条路径）。
+   *
+   * ⚠ 报告 PDF / 反馈附件**不得**调用本方法：它们含个人隐私，必须保持私有 + 签名 URL。
+   *
+   * 失败返回 false 而不抛错：ACL 设置失败时调用方仍可退化为返回签名 URL，
+   * 让"分享图能看"优先于"分享图必须是公开地址"。
+   */
+  async makeServerObjectPublic(objectKey: string): Promise<boolean> {
+    return this.oss.putObjectAcl(objectKey, 'public-read');
+  }
+
+  /**
    * 校验对象真实内容类型（魔数），不符即**删除对象**
    *
    * 抽成共享实现的原因：回调与业务登记都需要这一步，两处各写一份必然漂移

@@ -20,7 +20,7 @@
  *   ② 邀请码 **DB + Redis 双写**：DB 是事实源（可审计），Redis 承担扫码时的高频查询
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { ShareChannel } from '@prisma/client';
 
 import { BusinessException } from '../../common/errors/business.exception';
@@ -35,6 +35,13 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { CompatibilityService } from './compatibility.service';
 import { buildPairKey, generateInviteCode, parseInviteCode } from './relationship.util';
 import { isCompatibilityInProgress, resolveCompatibilityBlocker } from './compatibility.util';
+import {
+  buildInviteFlow,
+  inviteRemainingSeconds,
+  resolveInviteAcceptability,
+  type InviteBlockedReason,
+  type InviteFlowStepView,
+} from './invite-view.util';
 import {
   buildPermissions,
   buildRelationshipSummary,
@@ -258,6 +265,85 @@ export interface AcceptedRelationshipView {
   readonly awaitingPeerConfirm: boolean;
 }
 
+// ============================================================================
+// 邀请详情（契约 §3.6.2）
+// ============================================================================
+
+/**
+ * 邀请人的**公开资料子集**
+ *
+ * 只包含昵称、头像与 MBTI 类型 —— 契约规则 1 明确要求「不返回手机号、openid、
+ * 画像详情、Big Five 分数」。这里的字段列表就是全部可下发内容：
+ * `phoneEnc` / `wechatAccounts.openid` / 大五分数**根本没有被查出来**，
+ * 而不是查出来再删 —— 后者迟早会有人往 select 里加一个字段就漏出去。
+ */
+export interface InviteInviterView {
+  readonly userId: string;
+  readonly nickname: string | null;
+  readonly avatarUrl: string | null;
+  readonly mbtiType: string | null;
+  readonly typeName: string | null;
+  readonly profileVersion: number | null;
+}
+
+/** 我的现状（契约 §3.6.2 的 `myStatus`），用于前端个性化引导 */
+export interface InviteMyStatusView {
+  readonly hasProfile: boolean;
+  readonly mbtiType: string | null;
+  readonly profileVersion: number | null;
+  readonly isInviter: boolean;
+  readonly existingRelationshipId: string | null;
+  readonly existingRelationshipStatus: string | null;
+}
+
+/** 邀请详情视图（契约 §3.6.2） */
+export interface InviteDetailView {
+  readonly inviteId: string;
+  readonly inviteCode: string;
+  readonly relationType: string;
+  readonly relationTypeName: string;
+  readonly status: string;
+  readonly canAccept: boolean;
+  readonly blockedReason: InviteBlockedReason | null;
+  /** `blockedReason` 的中文说明；可接受时为 `null` */
+  readonly blockedReasonLabel: string | null;
+  readonly inviter: InviteInviterView;
+  /**
+   * ⚠ 契约要求返回「被邀请人的称呼」，但**数据模型无法承载**
+   *
+   * `relationship_invites` 没有任何列能存它（与 `POST /relationships/invites` 的
+   * `inviteeName` 是同一个缺口，见 `relationship.controller.ts` 文件头）。
+   * 因此恒为 `null`，而不是编一个「对方」之类的占位文案 —— 占位会被当成真实数据
+   * 展示给用户，而用户会以为对方真的这么称呼自己。
+   */
+  readonly inviteeName: string | null;
+  readonly message: string | null;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly remainingSeconds: number;
+  /** 建议先完成的测评编码（库里查得到才返回，查不到为 `null`） */
+  readonly suggestedTestCode: string | null;
+  readonly myStatus: InviteMyStatusView;
+  readonly flow: { readonly steps: readonly InviteFlowStepView[] };
+  readonly disclaimer: string;
+  /**
+   * 已经是**我**接受过的邀请时返回既有关系 ID（契约规则 5）
+   *
+   * 此时接口仍返回 200 而不是 409：用户扫到自己已接受过的码，直接带去关系详情
+   * 才是他想要的；报「邀请已被使用」会让他以为出了错。
+   */
+  readonly acceptedRelationshipId?: string | null;
+}
+
+/**
+ * 建议的测评编码（契约 §3.6.2 的 `suggestedTestCode`）
+ *
+ * 邀请流程建议先完成**精简版**测评（几分钟即可），因此用种子数据里的
+ * `MBTI_LITE`。这里仍会去库里确认它存在且启用 —— 硬编码一个编码在种子改名后
+ * 会变成前端跳转到 404 页面。
+ */
+const SUGGESTED_TEST_CODE = 'MBTI_LITE';
+
 @Injectable()
 export class RelationshipService {
   private readonly logger = new Logger(RelationshipService.name);
@@ -463,6 +549,267 @@ export class RelationshipService {
       }
       throw error;
     }
+  }
+
+  // ==========================================================================
+  // 邀请详情（契约 §3.6.2）
+  // ==========================================================================
+
+  /**
+   * 邀请详情（扫码/点链接进入后展示）
+   *
+   * 契约 §3.6.2 标 🔑 **需登录**：不是为了拦住游客看内容，而是**避免游客用这个
+   * 接口探测邀请码**。登录只静默进行，不强制点头像昵称。
+   *
+   * 三种「异常」其实都是正常可预期的状态，按契约分别处理：
+   *   · 已过期 / 已撤销 → `410`（`60004`）
+   *   · 已被**他人**接受 → `409`（`60005`）
+   *   · 已被**我**接受 → **200** 并附 `acceptedRelationshipId`（契约规则 5）
+   *
+   * 自邀（`blockedReason = SELF_INVITE`）同样返回 **200**，只在 `canAccept` 上体现
+   * （契约错误码表明确写「本接口仍返回 200，只在接受时拒绝」）。
+   */
+  async getInviteDetail(userId: string, rawCode: string): Promise<InviteDetailView> {
+    const code = parseInviteCode(rawCode);
+
+    const invite = await this.prisma.relationshipInvite.findFirst({
+      where: { code, deletedAt: null },
+      select: {
+        id: true,
+        code: true,
+        inviterId: true,
+        inviteeId: true,
+        relationType: true,
+        status: true,
+        message: true,
+        expiresAt: true,
+        relationshipId: true,
+        createdAt: true,
+      },
+    });
+
+    if (invite === null) {
+      throw BusinessException.notFound(ErrorCode.RELATIONSHIP_INVITE_NOT_FOUND);
+    }
+
+    if (invite.status === 'REVOKED') {
+      throw new BusinessException(ErrorCode.RELATIONSHIP_INVITE_EXPIRED, '邀请已被撤销', {
+        httpStatus: HttpStatus.GONE,
+      });
+    }
+
+    if (invite.status === 'ACCEPTED') {
+      return this.buildAcceptedInviteDetail(userId, invite);
+    }
+
+    if (invite.expiresAt.getTime() <= Date.now()) {
+      throw new BusinessException(ErrorCode.RELATIONSHIP_INVITE_EXPIRED, '邀请已过期', {
+        httpStatus: HttpStatus.GONE,
+      });
+    }
+
+    const [inviter, inviterProfile, myProfile, existing, sameTypeCount, activeCount, liteTest] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: invite.inviterId },
+        // 只取公开字段：手机号密文、openid 等**不进入查询**，从源头杜绝泄露
+        select: { id: true, nickname: true, avatarUrl: true },
+      }),
+      this.prisma.personalityProfile.findFirst({
+        where: { userId: invite.inviterId, isCurrent: true },
+        select: { mbtiType: true, version: true },
+      }),
+      this.prisma.personalityProfile.findFirst({
+        where: { userId, isCurrent: true },
+        select: { mbtiType: true, version: true },
+      }),
+      this.prisma.relationship.findFirst({
+        where: {
+          deletedAt: null,
+          status: { in: ['PENDING_A_CONFIRM', 'ACTIVE'] },
+          OR: [
+            { userAId: userId, userBId: invite.inviterId },
+            { userAId: invite.inviterId, userBId: userId },
+          ],
+        },
+        select: { id: true, status: true },
+      }),
+      // 同类型关系数（契约的 TYPE_MISMATCH：如我已有 COUPLE）
+      this.prisma.relationship.count({
+        where: {
+          deletedAt: null,
+          status: { in: ['PENDING_A_CONFIRM', 'ACTIVE'] },
+          type: invite.relationType,
+          OR: [{ userAId: userId }, { userBId: userId }],
+        },
+      }),
+      this.prisma.relationship.count({
+        where: { deletedAt: null, status: 'ACTIVE', OR: [{ userAId: userId }, { userBId: userId }] },
+      }),
+      // `suggestedTestCode` 去库里确认：种子改名后硬编码会指向前端 404 页
+      this.prisma.testDefinition.findFirst({
+        where: { code: SUGGESTED_TEST_CODE, isActive: true, deletedAt: null },
+        select: { code: true },
+      }),
+    ]);
+
+    const isInviter = invite.inviterId === userId;
+    const hasExistingRelationship = existing !== null;
+
+    const acceptability = resolveInviteAcceptability({
+      isInviter,
+      iHaveProfile: myProfile !== null,
+      hasExistingRelationship,
+      // 与邀请人的那条已由 `hasExistingRelationship` 覆盖，这里只数**其他人**的
+      sameTypeRelationshipCount: hasExistingRelationship ? Math.max(0, sameTypeCount - 1) : sameTypeCount,
+      relationType: invite.relationType,
+      activeRelationshipCount: activeCount,
+    });
+
+    this.logger.log(
+      `邀请详情已读取 inviteId=${invite.id} viewer=${userId} canAccept=${acceptability.canAccept} reason=${acceptability.blockedReason ?? '无'}`,
+    );
+
+    return {
+      inviteId: invite.id,
+      inviteCode: invite.code,
+      relationType: invite.relationType,
+      relationTypeName: relationTypeName(invite.relationType),
+      status: invite.status,
+      canAccept: acceptability.canAccept,
+      blockedReason: acceptability.blockedReason,
+      blockedReasonLabel: acceptability.blockedReasonLabel,
+      inviter: {
+        userId: invite.inviterId,
+        nickname: inviter?.nickname ?? null,
+        avatarUrl: inviter?.avatarUrl ?? null,
+        mbtiType: inviterProfile?.mbtiType ?? null,
+        typeName: mbtiTypeName(inviterProfile?.mbtiType ?? null),
+        profileVersion: inviterProfile?.version ?? null,
+      },
+      inviteeName: null,
+      message: invite.message,
+      createdAt: invite.createdAt.toISOString(),
+      expiresAt: invite.expiresAt.toISOString(),
+      remainingSeconds: inviteRemainingSeconds(invite.expiresAt, new Date()),
+      suggestedTestCode: liteTest?.code ?? null,
+      myStatus: {
+        hasProfile: myProfile !== null,
+        mbtiType: myProfile?.mbtiType ?? null,
+        profileVersion: myProfile?.version ?? null,
+        isInviter,
+        existingRelationshipId: existing?.id ?? null,
+        existingRelationshipStatus: existing?.status ?? null,
+      },
+      flow: {
+        steps: buildInviteFlow({
+          hasProfile: myProfile !== null,
+          canAccept: acceptability.canAccept,
+          isAccepted: false,
+          isActive: false,
+        }),
+      },
+      disclaimer: RELATIONSHIP_DISCLAIMER,
+    };
+  }
+
+  /**
+   * 已接受邀请的详情分支（契约规则 5）
+   *
+   * 只看**一条**事实：接受者是不是当前用户。是则带回既有关系（200，体验优先）；
+   * 否则一律 `409`「邀请已被使用」——
+   * 不能给出任何关于"谁接受了它"的信息，否则这个接口就成了「凭邀请码查他人关系」
+   * 的入口。
+   */
+  private async buildAcceptedInviteDetail(
+    userId: string,
+    invite: {
+      readonly id: string;
+      readonly code: string;
+      readonly inviterId: string;
+      readonly inviteeId: string | null;
+      readonly relationType: string;
+      readonly status: string;
+      readonly message: string | null;
+      readonly expiresAt: Date;
+      readonly relationshipId: string | null;
+      readonly createdAt: Date;
+    },
+  ): Promise<InviteDetailView> {
+    if (invite.inviteeId !== userId || invite.relationshipId === null) {
+      throw BusinessException.conflict(ErrorCode.RELATIONSHIP_INVITE_USED);
+    }
+
+    const [relationship, inviter, inviterProfile, myProfile] = await Promise.all([
+      this.prisma.relationship.findUnique({
+        where: { id: invite.relationshipId },
+        select: { id: true, status: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: invite.inviterId },
+        select: { id: true, nickname: true, avatarUrl: true },
+      }),
+      this.prisma.personalityProfile.findFirst({
+        where: { userId: invite.inviterId, isCurrent: true },
+        select: { mbtiType: true, version: true },
+      }),
+      this.prisma.personalityProfile.findFirst({
+        where: { userId, isCurrent: true },
+        select: { mbtiType: true, version: true },
+      }),
+    ]);
+
+    if (relationship === null) {
+      // 关系已不存在（软删/硬删）时不能假装成功：附一个空的 relationshipId
+      // 会让前端跳到不存在的页面
+      throw BusinessException.conflict(ErrorCode.RELATIONSHIP_INVITE_USED);
+    }
+
+    const isActive = relationship.status === 'ACTIVE';
+
+    return {
+      inviteId: invite.id,
+      inviteCode: invite.code,
+      relationType: invite.relationType,
+      relationTypeName: relationTypeName(invite.relationType),
+      status: invite.status,
+      // 已接受：无需再"接受"，前端应直接跳关系详情（契约规则 5）
+      canAccept: false,
+      blockedReason: null,
+      blockedReasonLabel: null,
+      inviter: {
+        userId: invite.inviterId,
+        nickname: inviter?.nickname ?? null,
+        avatarUrl: inviter?.avatarUrl ?? null,
+        mbtiType: inviterProfile?.mbtiType ?? null,
+        typeName: mbtiTypeName(inviterProfile?.mbtiType ?? null),
+        profileVersion: inviterProfile?.version ?? null,
+      },
+      inviteeName: null,
+      message: invite.message,
+      createdAt: invite.createdAt.toISOString(),
+      expiresAt: invite.expiresAt.toISOString(),
+      remainingSeconds: inviteRemainingSeconds(invite.expiresAt, new Date()),
+      suggestedTestCode: null,
+      myStatus: {
+        hasProfile: myProfile !== null,
+        mbtiType: myProfile?.mbtiType ?? null,
+        profileVersion: myProfile?.version ?? null,
+        // 接受者不是我发起的，因此这里恒为 false；但仍如实回读我的现有关系
+        isInviter: false,
+        existingRelationshipId: relationship.id,
+        existingRelationshipStatus: relationship.status,
+      },
+      flow: {
+        steps: buildInviteFlow({
+          hasProfile: myProfile !== null,
+          canAccept: false,
+          isAccepted: true,
+          isActive,
+        }),
+      },
+      disclaimer: RELATIONSHIP_DISCLAIMER,
+      acceptedRelationshipId: relationship.id,
+    };
   }
 
   /**

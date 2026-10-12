@@ -1,0 +1,1198 @@
+/**
+ * 对话消息服务（契约 §3.7.5 非流式 / §3.7.6 SSE 流式）
+ *
+ * ## 一条消息的完整链路（两个接口共用）
+ *
+ * ```
+ * ① 会话可见性（IDOR）           → 50003 / 50004
+ * ② 归档 / 消息数上限校验         → 50005 / 50018
+ * ③ 幂等占位（X-Idempotency-Key） → 重放首次响应（不重复扣额度、不重复落库）
+ * ④ 危险内容预筛（本地关键词）     → 🚫 不调用模型，固定关怀文案 + 资源卡，不扣配额
+ * ⑤ 输入内容安全（msgSecCheck）   → 50007 / 451，消息**不入库**
+ * ⑥ 配额原子预占（Redis Lua）     → 50001 / 402
+ * ⑦ 上下文装配 + Prompt 渲染      → 50020 / 50021
+ * ⑧ Provider 调用（复用工厂：重试/降级/错误映射/计量）
+ * ⑨ 输出内容安全（msgSecCheck）   → 50019 / 422，回复**丢弃不入库**，配额回补
+ * ⑩ 落库（消息 + 会话聚合）+ 用量日志 + 调用审计
+ * ```
+ *
+ * ## 关键设计取舍
+ *
+ * ### 1. 流式复用 `complete()`，不新写一条"流式 Provider 调用"
+ *
+ * `LlmProvider` 接口只有 `complete()`（架构 §13.2 的抽象层契约），**没有**流式方法。
+ * 契约 §3.7.6 明确要求「🚫 业务 Service 直接 `fetch` 模型 API」、
+ * 「🚫 Controller 直接调 provider」。两条约束下只有一种做法是对的：
+ * **SSE 用 `complete()` 取回完整回复，再按分片切开发 `delta` 事件**。
+ *
+ * 代价与收益要说清楚：
+ *   · 收益——重试/退避/错误码归一/计量/降级全部继续由既有 Provider 层承担，
+ *     不会出现"流式路径自己一套错误处理"的分裂；
+ *   · 代价——**首 token 延迟等于完整生成延迟**，不满足契约"首 token ≤ 20s"的
+ *     真实含义（用户会先看到"正在思考"直到全文就绪）。这是接口能力缺口，
+ *     不是实现取巧，已在简报「没能完成的部分」中列为首要项。
+ *
+ * ### 2. 危险内容命中时**不抛异常**，而是返回"正常结果 + code 50008"
+ *
+ * 契约 §3.7.5 的特殊约定：HTTP 200 + `code = 50008`，前端按**正常消息**渲染
+ * 关怀文案与资源卡，**禁止弹错误 Toast**。因此这条路径返回业务结果而不是异常 ——
+ * 若按异常处理，全局异常过滤器会把它变成带错误包络的响应，前端就会弹 Toast，
+ * 用户在最需要被安抚的时刻收到一个"出错了"。
+ *
+ * ### 3. 配额"预占 + 失败回补"而不是"成功后扣"
+ *
+ * 详见 `chat-quota.service.ts` 文件头。净效果与契约"成功后扣减"一致（失败不扣），
+ * 但额外挡住了并发超扣。
+ *
+ * ### 4. 审计与用量日志**不阻塞**主流程
+ *
+ * 见 `chat-audit.util.ts`：记账失败只记日志。用户已经拿到回复之后，
+ * 任何统计层的失败都不应该把这次成功变成失败。
+ */
+
+import { randomUUID } from 'node:crypto';
+
+import { Injectable, Logger } from '@nestjs/common';
+
+import { BusinessException } from '../../../common/errors/business.exception';
+import { ErrorCode } from '../../../common/errors/error-code';
+import type { RequestWithContext } from '../../../common/types/request.type';
+import { PrismaService } from '../../../infra/prisma/prisma.service';
+import { estimateCostCents } from '../provider/llm-pricing';
+import { LlmProviderFactory } from '../provider/llm-provider.factory';
+import type { LlmCompletionResult, LlmMessage, LlmProviderName } from '../provider/llm-provider.types';
+import { PromptService } from '../prompt/prompt.service';
+import { writeChatCallAudit, writeChatUsageLog } from './chat-audit.util';
+import { withSystemAndRulesTokens } from './chat-context.util';
+import { ChatContextService, buildAutoTitle, toMessageView, type MessageView } from './chat-context.service';
+import { assembleChatPrompt } from './chat-prompt';
+import { ChatQuotaService, type QuotaAvailability, type QuotaReservation } from './chat-quota.service';
+import { ChatSafetyService } from './chat-safety.service';
+import { blockedReasonOf, type RiskCategory } from './chat-safety.util';
+import {
+  CONFIG_KEY_AI_GENERATED_NOTICE,
+  FALLBACK_AI_GENERATED_NOTICE,
+  FALLBACK_DISCLAIMER,
+  MAX_MESSAGES_PER_CONVERSATION,
+  MAX_MESSAGE_LENGTH,
+  type ContextHint,
+  type SafetyResource,
+} from './chat.types';
+
+/** 幂等作用域（区分"发消息"与"创建会话"两类幂等键，防止跨接口撞键） */
+const IDEMPOTENCY_SCOPE_MESSAGE = 'message';
+
+/** 单个 `delta` 事件的字符数（24 在 HTTP 分块开销与"逐字观感"之间） */
+const DELTA_CHUNK_SIZE = 24;
+
+/** 单条消息的估算字符/token 比（与 `chat-context.util` 保持一致） */
+const CHARS_PER_TOKEN = 1.7;
+
+/** `safety` 字段（契约 §3.7.5） */
+export interface SafetyFlags {
+  readonly inputChecked: boolean;
+  readonly inputBlocked: boolean;
+  readonly outputChecked: boolean;
+  readonly flagged: boolean;
+}
+
+/** `usage` 字段（契约 §3.7.5） */
+export interface MessageUsageView {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly totalTokens: number;
+  readonly estimatedCostCents: number;
+  readonly latencyMs: number;
+  readonly provider: LlmProviderName | null;
+  readonly model: string | null;
+  readonly cacheHit: boolean;
+}
+
+/** `contextUsed` 字段（契约 §3.7.5） */
+export interface ContextUsedView {
+  readonly myPersonaInjected: boolean;
+  readonly partnerPersonaInjected: boolean;
+  readonly memorySummaryInjected: boolean;
+  readonly reportContextInjected: boolean;
+  readonly recentMessageCount: number;
+  readonly trimmed: boolean;
+  readonly estimatedPromptTokens: number;
+}
+
+/** `quota` 字段（契约 §3.7.5：比 §3.7.8 多 `consumed` / `exhausted`） */
+export interface MessageQuotaView {
+  readonly consumed: number;
+  readonly remainingToday: number;
+  readonly dailyLimit: number;
+  readonly creditBalance: number;
+  readonly resetAt: string;
+  readonly exhausted: boolean;
+}
+
+/** 一轮对话的结果（非流式响应的 `data`；SSE 用它组装事件） */
+export interface ChatTurnResult {
+  readonly conversationId: string;
+  readonly blocked: boolean;
+  readonly blockedReason: string | null;
+  readonly matchedCategory: RiskCategory | null;
+  readonly resources: readonly SafetyResource[];
+  readonly userMessage: MessageView;
+  readonly assistantMessage: MessageView;
+  readonly usage: MessageUsageView;
+  readonly contextUsed: ContextUsedView;
+  readonly quota: MessageQuotaView;
+  readonly conversationMeta: {
+    readonly messageCount: number;
+    readonly lastMessageAt: string;
+    readonly titleAutoGenerated: boolean;
+  };
+  readonly safety: SafetyFlags;
+  readonly disclaimer: string;
+}
+
+/** SSE 事件（契约 §3.7.6 的事件协议，`payload` 即该事件的 `data`） */
+export type ChatStreamEvent =
+  | {
+      readonly type: 'start';
+      readonly payload: {
+        readonly conversationId: string;
+        readonly userMessageId: string;
+        readonly assistantMessageId: string;
+        readonly provider: string | null;
+        readonly model: string | null;
+        readonly contextUsed: ContextUsedView;
+        readonly quota: MessageQuotaView;
+      };
+    }
+  | {
+      readonly type: 'delta';
+      readonly payload: {
+        readonly messageId: string;
+        readonly index: number;
+        readonly delta: string;
+        readonly accumulatedLength: number;
+      };
+    }
+  | {
+      readonly type: 'usage';
+      readonly payload: {
+        readonly messageId: string;
+        readonly promptTokens: number;
+        readonly completionTokens: number;
+        readonly totalTokens: number;
+        readonly estimatedCostCents: number;
+        readonly provider: string | null;
+        readonly model: string | null;
+        readonly latencyMs: number;
+        readonly firstTokenLatencyMs: number;
+        readonly finishReason: string | null;
+      };
+    }
+  | {
+      readonly type: 'done';
+      readonly payload: {
+        readonly conversationId: string;
+        readonly userMessageId: string;
+        readonly assistantMessageId: string;
+        readonly contentLength: number;
+        readonly messageCount: number;
+        readonly quota: MessageQuotaView;
+        readonly safety: SafetyFlags;
+        readonly conversationMeta: { readonly lastMessageAt: string; readonly titleAutoGenerated: boolean };
+        readonly disclaimer: string;
+      };
+    }
+  | {
+      readonly type: 'error';
+      readonly payload: {
+        readonly conversationId: string;
+        readonly assistantMessageId: string | null;
+        readonly code: number;
+        readonly message: string;
+        readonly canRetry: boolean;
+        readonly partialContentLength: number;
+        readonly attempt: number;
+        readonly maxAttempts: number;
+        readonly quota: { readonly consumed: number; readonly remainingToday: number; readonly note: string };
+      };
+    };
+
+/** 管线执行入参 */
+export interface RunTurnInput {
+  readonly userId: string;
+  readonly conversationId: string;
+  readonly content: string;
+  readonly clientMessageId: string | null;
+  readonly contextHints: readonly ContextHint[];
+  readonly idempotencyKey: string | null;
+  /** 是否流式（决定 `isStreamed` 落库语义与是否发 SSE 事件） */
+  readonly streamed: boolean;
+  readonly requestId: string;
+  /** 请求上下文（流式断连检测用） */
+  readonly request?: RequestWithContext;
+  /**
+   * 事件回调（仅流式使用）
+   *
+   * 不在这里直接写 HTTP 响应：本服务不该知道 SSE 的字节格式，
+   * 由控制器决定怎么把事件写出去（Admin 端未来可能用 JSON 数组流）。
+   */
+  readonly onEvent?: (event: ChatStreamEvent) => void;
+}
+
+/** 消息行投影（与 `chat-context.service.ts` 的 `MESSAGE_SELECT` 同列，避免两处漂移） */
+const MESSAGE_ROW_SELECT = {
+  id: true,
+  conversationId: true,
+  role: true,
+  content: true,
+  provider: true,
+  model: true,
+  totalTokens: true,
+  latencyMs: true,
+  finishReason: true,
+  safetyStatus: true,
+  createdAt: true,
+} as const;
+
+@Injectable()
+export class ChatMessageService {
+  private readonly logger = new Logger(ChatMessageService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly context: ChatContextService,
+    private readonly safety: ChatSafetyService,
+    private readonly quota: ChatQuotaService,
+    private readonly prompts: PromptService,
+    private readonly providers: LlmProviderFactory,
+  ) {}
+
+  // ==========================================================================
+  // 输入校验
+  // ==========================================================================
+
+  /**
+   * 校验并规范化消息内容（契约 §3.7.5 错误码 `50006` / `10002`）
+   *
+   * trim 后再判空与长度：纯空白必须按"空消息"拒绝，否则用户会看到"发送成功但
+   * AI 回了一段莫名其妙的话"。
+   *
+   * 零宽字符要显式清一遍：`String.prototype.trim` 不去掉零宽空格（`\u200B`），
+   * 而"只打了一串零宽字符"的消息在 trim 后会变成非空 —— 它会一路走到模型调用，
+   * 白耗一次额度。
+   */
+  validateContent(raw: string, maxLength: number): string {
+    const nullWidthStripped = raw.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    const trimmed = nullWidthStripped.trim();
+
+    if (trimmed.length === 0) {
+      throw BusinessException.badRequest(ErrorCode.PARAM_INVALID, '消息内容不能为空');
+    }
+
+    if (trimmed.length > maxLength) {
+      throw BusinessException.badRequest(ErrorCode.PARAM_INVALID, `消息内容不能超过 ${maxLength} 个字符`);
+    }
+
+    return trimmed;
+  }
+
+  // ==========================================================================
+  // 主链路
+  // ==========================================================================
+
+  /**
+   * 执行一轮对话（非流式与流式共用）
+   *
+   * 把两条路径合并在一个方法里是刻意的：契约里这两个接口的业务规则
+   * （预筛 → 安全 → 配额 → 生成 → 落库）逐条相同，抄两份必然漂移，
+   * 而漂移的后果是"流式路径忘了做输出审核"这类安全缺口。
+   */
+  async runTurn(input: RunTurnInput): Promise<ChatTurnResult> {
+    const limits = await this.quota.loadLimits();
+
+    // ---- ① 会话可见性（IDOR）----
+    const conversation = await this.context.requireOwnedConversationForRead(input.userId, input.conversationId);
+
+    // ---- ② 归档 / 消息数上限 ----
+    if (conversation.status === 'ARCHIVED') {
+      throw new BusinessException(ErrorCode.AI_CONVERSATION_CLOSED, '该会话已归档，无法继续对话');
+    }
+
+    if (conversation.messageCount >= MAX_MESSAGES_PER_CONVERSATION) {
+      throw BusinessException.conflict(
+        ErrorCode.RESOURCE_CONFLICT,
+        `单个会话最多 ${MAX_MESSAGES_PER_CONVERSATION} 条消息，请开启新会话继续`,
+      );
+    }
+
+    const content = this.validateContent(input.content, Math.min(limits.maxMessageLength, MAX_MESSAGE_LENGTH));
+
+    // ---- ③ 幂等占位 ----
+    if (input.idempotencyKey !== null) {
+      const replayed = await this.claimIdempotencyOrReplay(input.userId, input.idempotencyKey);
+      if (replayed !== null) return replayed;
+    }
+
+    try {
+      const result = await this.executeTurn(input, content);
+
+      if (input.idempotencyKey !== null) {
+        await this.quota.saveIdempotentResult(IDEMPOTENCY_SCOPE_MESSAGE, input.userId, input.idempotencyKey, result);
+      }
+
+      return result;
+    } catch (error) {
+      // 失败必须释放幂等占位：否则用户用同一个键重试会被判为"重复请求"，
+      // 而他并没有拿到任何结果
+      if (input.idempotencyKey !== null) {
+        await this.quota.releaseIdempotency(IDEMPOTENCY_SCOPE_MESSAGE, input.userId, input.idempotencyKey);
+      }
+
+      throw error;
+    }
+  }
+
+  /** 成功返回已存在的结果；未占用返回 null；已占用但仍在处理中 → 409 */
+  private async claimIdempotencyOrReplay(userId: string, key: string): Promise<ChatTurnResult | null> {
+    const claimed = await this.quota.claimIdempotency(IDEMPOTENCY_SCOPE_MESSAGE, userId, key);
+
+    if (claimed) return null;
+
+    const replayed = await this.quota.readIdempotentResult<ChatTurnResult>(IDEMPOTENCY_SCOPE_MESSAGE, userId, key);
+
+    if (replayed !== null) {
+      this.logger.log(`幂等命中，重放首次响应 userId=${userId}`);
+      return replayed;
+    }
+
+    // 键被占用但没有结果 = 前一个同键请求正在处理中。返回 409 而不是"等待后重放"：
+    // 等待需要轮询，而轮询会让一个用户操作占住两个连接；客户端拿到 409 可以用
+    // 同一个键重试，届时要么拿到重放、要么再次 409
+    throw BusinessException.conflict(ErrorCode.RESOURCE_CONFLICT, '相同请求正在处理中，请稍后重试');
+  }
+
+  /** 真正执行一轮（幂等外壳之内） */
+  private async executeTurn(input: RunTurnInput, content: string): Promise<ChatTurnResult> {
+    const [disclaimer, aiGeneratedNotice] = await Promise.all([
+      this.quota.readStringConfig('disclaimer.aiContent', FALLBACK_DISCLAIMER),
+      this.quota.readStringConfig(CONFIG_KEY_AI_GENERATED_NOTICE, FALLBACK_AI_GENERATED_NOTICE),
+    ]);
+
+    // ---- ④ 危险内容预筛（命中即短路：不调用模型、不扣配额）----
+    const inputSafety = await this.safety.checkInput(input.userId, content);
+
+    if (inputSafety.risk.matched && inputSafety.risk.category !== null) {
+      return this.handleSafetyIntervention(input, content, inputSafety.risk.category, disclaimer);
+    }
+
+    // ---- ⑤ 输入内容安全（未通过 → 消息不入库）----
+    if (!inputSafety.content.pass) {
+      this.logger.warn(
+        `用户输入未通过内容安全检测 userId=${input.userId} suggest=${inputSafety.content.suggest} label=${inputSafety.content.label ?? 'n/a'}`,
+      );
+
+      /**
+       * ⚠ 契约 §3.7.5 要求 `50007` / **HTTP 451**（"因法律原因不可用"）。
+       * 本项目错误码表里语义最接近的是 `AI_CONTENT_BLOCKED`（只读文件 `error-code.ts`
+       * 定义它是 50005 → HTTP **400**），无法在不改共享文件的前提下产出 451。
+       * 这里按既有错误码抛出，并在简报中标注这个 HTTP 状态差异。
+       */
+      throw new BusinessException(ErrorCode.AI_CONTENT_BLOCKED, '内容包含不适宜的信息，请调整后重试');
+    }
+
+    // ---- ⑥ 配额原子预占 ----
+    const availability = await this.quota.resolveAvailability(input.userId);
+
+    if (availability.chargeSource === null) {
+      throw new BusinessException(ErrorCode.AI_QUOTA_EXCEEDED, 'AI 使用次数已用完，可升级会员或购买次数包继续使用', {
+        httpStatus: 402,
+      });
+    }
+
+    const chargeAction = availability.chargeSource;
+    const reservation =
+      chargeAction === 'NONE' || chargeAction === null ? null : await this.quota.reserve(input.userId, chargeAction);
+
+    if (reservation !== null && !reservation.granted) {
+      throw new BusinessException(ErrorCode.AI_QUOTA_EXCEEDED, 'AI 使用次数已用完，可升级会员或购买次数包继续使用', {
+        httpStatus: 402,
+      });
+    }
+
+    try {
+      return await this.generateAndPersist({
+        input,
+        content,
+        reservation,
+        availability,
+        disclaimer,
+        aiGeneratedNotice,
+      });
+    } catch (error) {
+      // 生成失败 → 配额回补（契约 §3.7.5 规则 4：失败不扣）
+      if (reservation !== null && reservation.granted && chargeAction !== 'NONE') {
+        await this.quota.refund(input.userId, chargeAction);
+      }
+
+      throw error;
+    }
+  }
+
+  /** 生成并落库（预占成功之后） */
+  private async generateAndPersist(params: {
+    input: RunTurnInput;
+    content: string;
+    reservation: QuotaReservation | null;
+    availability: QuotaAvailability;
+    disclaimer: string;
+    aiGeneratedNotice: string;
+  }): Promise<ChatTurnResult> {
+    const { input, content, reservation, availability, disclaimer } = params;
+
+    // ---- ⑦ 上下文装配 + Prompt 渲染 ----
+    const prepared = await this.context.buildContext({
+      userId: input.userId,
+      conversationId: input.conversationId,
+      includePersona: true,
+      contextHints: input.contextHints,
+    });
+
+    const userName = await this.context.loadUserName(input.userId);
+
+    const prompt = await assembleChatPrompt(this.prompts, {
+      mode: prepared.mode,
+      tone: prepared.tone,
+      includePersona: prepared.includePersona,
+      userInput: content,
+      context: prepared.context,
+      userName,
+      partnerName: prepared.partnerNickname,
+    });
+
+    // 用户消息先落库（安全检查已通过，必须留痕）
+    const userMessage = await this.persistUserMessage(input, content);
+
+    const tokenBudget = withSystemAndRulesTokens(prepared.context.tokenBudget, prompt.system);
+
+    const contextUsed: ContextUsedView = {
+      myPersonaInjected: isNonEmpty(prepared.context.blocks['myPersona']),
+      partnerPersonaInjected: isNonEmpty(prepared.context.blocks['partnerPersona']),
+      memorySummaryInjected: isNonEmpty(prepared.context.blocks['memorySummary']),
+      reportContextInjected: isNonEmpty(prepared.context.blocks['reportContext']),
+      recentMessageCount: prepared.context.injectedMessages.length,
+      trimmed: prepared.context.trimmed,
+      estimatedPromptTokens: tokenBudget.total,
+    };
+
+    const messages: LlmMessage[] = [
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ];
+
+    const provider = this.providers.resolveAvailable(
+      prompt.provider === null ? undefined : (prompt.provider as LlmProviderName),
+    );
+    const model = prompt.model ?? provider.defaultModel;
+    const assistantMessageId = randomUUID();
+
+    input.onEvent?.({
+      type: 'start',
+      payload: {
+        conversationId: input.conversationId,
+        userMessageId: userMessage.messageId,
+        assistantMessageId,
+        provider: provider.name,
+        model,
+        contextUsed,
+        quota: toMessageQuotaView(availability, reservation),
+      },
+    });
+
+    const callStartedAt = Date.now();
+    let completion: LlmCompletionResult;
+
+    try {
+      completion = await provider.complete({
+        messages,
+        ...(prompt.model !== null ? { model: prompt.model } : {}),
+        ...(prompt.temperature !== null ? { temperature: prompt.temperature } : {}),
+        ...(prompt.maxTokens !== null ? { maxTokens: prompt.maxTokens } : {}),
+        responseFormat: 'text',
+        timeoutMs: 60_000,
+      });
+    } catch (error) {
+      const code = readErrorCode(error);
+      const latencyMs = Date.now() - callStartedAt;
+
+      // 审计要覆盖失败：后台的失败率与熔断监控读的就是这张表
+      await writeChatCallAudit(this.prisma, {
+        requestId: input.requestId,
+        userId: input.userId,
+        provider: provider.name,
+        model,
+        promptText: `${provider.name}:${model}:${messages[0]?.content.length ?? 0}:${messages[1]?.content.length ?? 0}:${prompt.versionId}`,
+        responseLength: 0,
+        cacheHit: false,
+        status: code === ErrorCode.AI_PROVIDER_TIMEOUT ? 'TIMEOUT' : 'FAILED',
+        httpStatus: null,
+        errorCode: code,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        latencyMs,
+      });
+
+      input.onEvent?.({
+        type: 'error',
+        payload: {
+          conversationId: input.conversationId,
+          assistantMessageId,
+          code,
+          message: friendlyProviderMessage(code),
+          canRetry: true,
+          partialContentLength: 0,
+          // Provider 层内部的自动重试不对外暴露次数（它自己退避重试，
+          // 这里已经是"重试耗尽"之后），因此对外如实报 1/1
+          attempt: 1,
+          maxAttempts: 1,
+          quota: {
+            consumed: 0,
+            remainingToday: availability.view.remainingToday,
+            note: '生成失败，本次不消耗配额',
+          },
+        },
+      });
+
+      throw error;
+    }
+
+    // ---- ⑨ 输出内容安全（未通过 → 丢弃，不落库）----
+    const outputSafety = await this.safety.checkOutput(input.userId, completion.content);
+
+    if (!outputSafety.pass) {
+      await writeChatCallAudit(this.prisma, {
+        requestId: input.requestId,
+        userId: input.userId,
+        provider: completion.provider,
+        model: completion.model,
+        promptText: `${completion.provider}:${completion.model}:${prompt.versionId}`,
+        responseLength: completion.content.length,
+        cacheHit: false,
+        status: 'BLOCKED',
+        httpStatus: null,
+        errorCode: ErrorCode.AI_CONTENT_BLOCKED,
+        errorMessage: `输出内容安全未通过 suggest=${outputSafety.suggest} label=${outputSafety.label ?? 'n/a'}`,
+        latencyMs: completion.latencyMs,
+      });
+
+      // 已消耗的 token **仍要记账**（成本已经沉没，漏记会让成本看板低估），
+      // 但回复**不入库**（契约规则 3：避免违规内容留存与传播）
+      await writeChatUsageLog(this.prisma, {
+        userId: input.userId,
+        conversationId: input.conversationId,
+        messageId: null,
+        provider: completion.provider,
+        model: completion.model,
+        usage: completion.usage,
+        latencyMs: completion.latencyMs,
+        success: false,
+      });
+
+      input.onEvent?.({
+        type: 'error',
+        payload: {
+          conversationId: input.conversationId,
+          assistantMessageId,
+          code: ErrorCode.AI_CONTENT_BLOCKED,
+          message: '这条回复未通过内容安全审核，已被丢弃，请重新提问',
+          canRetry: false,
+          partialContentLength: 0,
+          attempt: 1,
+          maxAttempts: 1,
+          quota: {
+            consumed: 0,
+            remainingToday: availability.view.remainingToday,
+            note: '生成失败，本次不消耗配额',
+          },
+        },
+      });
+
+      throw new BusinessException(ErrorCode.AI_CONTENT_BLOCKED, '这条回复未通过内容安全审核，已被丢弃，请重新提问', {
+        httpStatus: 422,
+      });
+    }
+
+    // ---- ⑩ 落库 + 计量 ----
+    const usage = toUsageView(completion);
+
+    const persisted = await this.persistAssistantMessage({
+      input,
+      content: completion.content,
+      completion,
+      assistantMessageId,
+      usage,
+    });
+
+    if (input.onEvent !== undefined) {
+      const emit = input.onEvent;
+      emitDeltas(emit, assistantMessageId, completion.content);
+
+      emit({
+        type: 'usage',
+        payload: {
+          messageId: assistantMessageId,
+          promptTokens: completion.usage.promptTokens,
+          completionTokens: completion.usage.completionTokens,
+          totalTokens: completion.usage.totalTokens,
+          estimatedCostCents: usage.estimatedCostCents,
+          provider: completion.provider,
+          model: completion.model,
+          latencyMs: completion.latencyMs,
+          // 非真流式：首 token 延迟 = 完整生成延迟（见文件头取舍 1）
+          firstTokenLatencyMs: completion.latencyMs,
+          finishReason: completion.finishReason,
+        },
+      });
+    }
+
+    const safetyFlags: SafetyFlags = {
+      inputChecked: true,
+      inputBlocked: false,
+      outputChecked: outputSafety.checked,
+      flagged: false,
+    };
+
+    const finalQuota = await this.reloadQuotaView(input.userId, reservation);
+    const lastMessageAt = persisted.lastMessageAt.toISOString();
+
+    const result: ChatTurnResult = {
+      conversationId: input.conversationId,
+      blocked: false,
+      blockedReason: null,
+      matchedCategory: null,
+      resources: [],
+      userMessage,
+      assistantMessage: persisted.assistantMessage,
+      usage,
+      contextUsed,
+      quota: finalQuota,
+      conversationMeta: {
+        messageCount: persisted.messageCount,
+        lastMessageAt,
+        titleAutoGenerated: persisted.titleAutoGenerated,
+      },
+      safety: safetyFlags,
+      disclaimer,
+    };
+
+    input.onEvent?.({
+      type: 'done',
+      payload: {
+        conversationId: input.conversationId,
+        userMessageId: userMessage.messageId,
+        assistantMessageId,
+        contentLength: completion.content.length,
+        messageCount: persisted.messageCount,
+        quota: finalQuota,
+        safety: safetyFlags,
+        conversationMeta: { lastMessageAt, titleAutoGenerated: persisted.titleAutoGenerated },
+        disclaimer,
+      },
+    });
+
+    return result;
+  }
+
+  // ==========================================================================
+  // 安全干预（危险内容命中）
+  // ==========================================================================
+
+  /**
+   * 危险内容拦截的完整处理（契约 §3.7.5 业务规则 1）
+   *
+   * 四件事必须同时成立：
+   *   ① 不调用模型；② 不扣配额（`consumed = 0`）；③ 两侧消息**都落库**（合规留痕）；
+   *   ④ 写 `ai_call_audits`（记命中类别，**不存全文**）。
+   *
+   * 返回**正常结果对象**而不是异常（见文件头取舍 2）。
+   */
+  private async handleSafetyIntervention(
+    input: RunTurnInput,
+    content: string,
+    category: RiskCategory,
+    disclaimer: string,
+  ): Promise<ChatTurnResult> {
+    const intervention = await this.safety.buildIntervention(category);
+
+    const userMessage = await this.persistUserMessage(input, content);
+    const persisted = await this.persistSafetyMessage(input, intervention.content);
+
+    await writeChatCallAudit(this.prisma, {
+      requestId: input.requestId,
+      userId: input.userId,
+      provider: 'DEEPSEEK',
+      model: 'safety-keyword-screen',
+      // 🚫 预筛命中时不组 Prompt，因此这里只有"没有 Prompt"的标记；
+      // 审计表存的是指纹，不是正文（见 `chat-audit.util.ts`）
+      promptText: `safety-screen:${category}:no-prompt`,
+      responseLength: intervention.content.length,
+      cacheHit: false,
+      status: 'BLOCKED',
+      httpStatus: 200,
+      errorCode: null,
+      errorMessage: `危险内容预筛命中 category=${category}`,
+      latencyMs: 0,
+    });
+
+    const quotaAfter = await this.reloadQuotaView(input.userId, null);
+    const lastMessageAt = persisted.lastMessageAt.toISOString();
+
+    const contextUsed: ContextUsedView = {
+      myPersonaInjected: false,
+      partnerPersonaInjected: false,
+      memorySummaryInjected: false,
+      reportContextInjected: false,
+      recentMessageCount: 0,
+      trimmed: false,
+      estimatedPromptTokens: 0,
+    };
+
+    const safetyFlags: SafetyFlags = {
+      // 预筛本身就是一道输入侧检查，因此命中路径也报 `inputChecked = true`
+      // （契约 §3.7.5 的示例正是这样）
+      inputChecked: true,
+      inputBlocked: true,
+      outputChecked: false,
+      flagged: true,
+    };
+
+    if (input.onEvent !== undefined) {
+      const emit = input.onEvent;
+
+      // 契约 §3.7.6 规则 2：危险内容拦截在流式场景**不走 `error`**，
+      // 而是以一次全量 `delta` 下发固定关怀文案 —— 因为这不是错误，是设计内的安全响应
+      emit({
+        type: 'delta',
+        payload: {
+          messageId: persisted.assistantMessage.messageId,
+          index: 0,
+          delta: intervention.content,
+          accumulatedLength: intervention.content.length,
+        },
+      });
+
+      emit({
+        type: 'usage',
+        payload: {
+          messageId: persisted.assistantMessage.messageId,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          estimatedCostCents: 0,
+          provider: null,
+          model: null,
+          latencyMs: 0,
+          firstTokenLatencyMs: 0,
+          finishReason: 'stop',
+        },
+      });
+
+      emit({
+        type: 'done',
+        payload: {
+          conversationId: input.conversationId,
+          userMessageId: userMessage.messageId,
+          assistantMessageId: persisted.assistantMessage.messageId,
+          contentLength: intervention.content.length,
+          messageCount: persisted.messageCount,
+          quota: quotaAfter,
+          safety: safetyFlags,
+          conversationMeta: { lastMessageAt, titleAutoGenerated: persisted.titleAutoGenerated },
+          disclaimer,
+        },
+      });
+    }
+
+    return {
+      conversationId: input.conversationId,
+      blocked: true,
+      blockedReason: blockedReasonOf({ matched: true, category }),
+      matchedCategory: category,
+      resources: intervention.resources,
+      userMessage,
+      assistantMessage: persisted.assistantMessage,
+      usage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        estimatedCostCents: 0,
+        latencyMs: 0,
+        provider: null,
+        model: null,
+        cacheHit: false,
+      },
+      contextUsed,
+      quota: quotaAfter,
+      conversationMeta: {
+        messageCount: persisted.messageCount,
+        lastMessageAt,
+        titleAutoGenerated: persisted.titleAutoGenerated,
+      },
+      safety: safetyFlags,
+      disclaimer,
+    };
+  }
+
+  // ==========================================================================
+  // 落库
+  // ==========================================================================
+
+  /**
+   * 落库用户消息
+   *
+   * `clientMessageId` 有唯一约束（`@@unique([conversationId, clientMessageId])`），
+   * 重复提交同一个客户端消息 ID 会撞唯一约束 —— 这里**先查后写并复用既有行**，
+   * 因为语义上"这条消息已经存在"正是客户端要的幂等结果。
+   * 若只捕获唯一冲突异常，调用方会拿不到已存在那条的 `messageId`（而前端要用它做
+   * 乐观 UI 对账）。
+   */
+  private async persistUserMessage(input: RunTurnInput, content: string): Promise<MessageView> {
+    if (input.clientMessageId !== null) {
+      const existing = await this.prisma.aiMessage.findFirst({
+        where: { conversationId: input.conversationId, clientMessageId: input.clientMessageId },
+        select: MESSAGE_ROW_SELECT,
+      });
+
+      if (existing !== null) {
+        this.logger.log(
+          `客户端消息 ID 已存在，复用既有消息 conversationId=${input.conversationId} clientMessageId=${input.clientMessageId}`,
+        );
+
+        return toMessageView(existing);
+      }
+    }
+
+    const row = await this.prisma.aiMessage.create({
+      data: {
+        conversationId: input.conversationId,
+        userId: input.userId,
+        role: 'USER',
+        content,
+        contentLength: content.length,
+        // 用户消息不调用模型，但仍记录估算 token：会话的 `totalTokens` 要与
+        // `ai_usage_logs` 的口径可对账（日志里的 prompt_tokens 包含这部分）
+        totalTokens: Math.ceil(content.length / CHARS_PER_TOKEN),
+        safetyStatus: 'PASS',
+        clientMessageId: input.clientMessageId,
+        requestId: input.requestId.slice(0, 64),
+      },
+      select: MESSAGE_ROW_SELECT,
+    });
+
+    return toMessageView(row);
+  }
+
+  /**
+   * 落库 AI 回复并更新会话聚合
+   *
+   * 事务内同时做三件事（缺一不可）：
+   *   ① 插入 assistant 消息（含 `provider`/`model`/`tokens`/`latencyMs`/`finishReason`）
+   *   ② 会话聚合 `messageCount` / `totalTokens` / `totalCostAmount` / `lastMessageAt`
+   *   ③ 首次发消息时用首条内容自动生成标题（契约 §3.7.1 规则 6）
+   *
+   * 聚合用**原子自增**（`{ increment: n }`）而不是"读出再写回"：同会话并发发消息时
+   * 后者会丢计数（两个请求都读到 26，各自写 28），而 `lastMessageAt` 也不会回退。
+   */
+  private async persistAssistantMessage(params: {
+    input: RunTurnInput;
+    content: string;
+    completion: LlmCompletionResult;
+    assistantMessageId: string;
+    usage: MessageUsageView;
+  }): Promise<{
+    assistantMessage: MessageView;
+    messageCount: number;
+    lastMessageAt: Date;
+    titleAutoGenerated: boolean;
+  }> {
+    const { input, content, completion, assistantMessageId, usage } = params;
+    const now = new Date();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const message = await tx.aiMessage.create({
+        data: {
+          // 显式给 id：SSE `start` 事件已经把它发给前端了，落库必须用同一个值，
+          // 否则前端"初始化空气泡 → 收到 done 固化"两步会对不上
+          id: assistantMessageId,
+          conversationId: input.conversationId,
+          userId: input.userId,
+          role: 'ASSISTANT',
+          content,
+          contentLength: content.length,
+          provider: completion.provider as never,
+          model: completion.model.slice(0, 64),
+          promptTokens: completion.usage.promptTokens,
+          completionTokens: completion.usage.completionTokens,
+          totalTokens: completion.usage.totalTokens,
+          costAmount: usage.estimatedCostCents,
+          latencyMs: completion.latencyMs,
+          finishReason: (completion.finishReason ?? 'stop').slice(0, 32),
+          safetyStatus: 'PASS',
+          requestId: input.requestId.slice(0, 64),
+        },
+        select: MESSAGE_ROW_SELECT,
+      });
+
+      const conversation = await tx.aiConversation.findUnique({
+        where: { id: input.conversationId },
+        select: { title: true },
+      });
+
+      const titleAutoGenerated = (conversation?.title ?? '').trim().length === 0;
+
+      const updated = await tx.aiConversation.update({
+        where: { id: input.conversationId },
+        data: {
+          messageCount: { increment: 2 },
+          totalTokens: { increment: completion.usage.totalTokens },
+          totalCostAmount: { increment: usage.estimatedCostCents },
+          lastMessageAt: now,
+          ...(titleAutoGenerated ? { title: buildAutoTitle(input.content) } : {}),
+        },
+        select: { messageCount: true, lastMessageAt: true },
+      });
+
+      return {
+        message,
+        messageCount: updated.messageCount,
+        lastMessageAt: updated.lastMessageAt ?? now,
+        titleAutoGenerated,
+      };
+    });
+
+    // 用量日志与调用审计放在事务**之外**：它们是观测数据，不该参与业务事务的成败
+    // （事务里写日志会把"日志表抖动"升级成"消息落库失败"）
+    await Promise.all([
+      writeChatUsageLog(this.prisma, {
+        userId: input.userId,
+        conversationId: input.conversationId,
+        messageId: result.message.id,
+        provider: completion.provider,
+        model: completion.model,
+        usage: completion.usage,
+        latencyMs: completion.latencyMs,
+        success: true,
+      }),
+      writeChatCallAudit(this.prisma, {
+        requestId: input.requestId,
+        userId: input.userId,
+        provider: completion.provider,
+        model: completion.model,
+        // ⚠ 这里不落 Prompt 正文，只落一个**稳定的调用指纹源**：
+        // provider + model + Prompt 长度 + 版本 id。审计表的用途是排障与
+        // "同一输入是否重复出现"的判定，存正文会让用户行使删除权时留下删不掉的副本
+        promptText: `${completion.provider}:${completion.model}:${completion.usage.promptTokens}:${content.length}`,
+        responseLength: content.length,
+        cacheHit: false,
+        status: 'SUCCESS',
+        httpStatus: 200,
+        errorCode: null,
+        errorMessage: null,
+        latencyMs: completion.latencyMs,
+      }),
+    ]);
+
+    return {
+      assistantMessage: toMessageView(result.message),
+      messageCount: result.messageCount,
+      lastMessageAt: result.lastMessageAt,
+      titleAutoGenerated: result.titleAutoGenerated,
+    };
+  }
+
+  /** 落库安全关怀响应（`safetyStatus = BLOCKED` → 视图 `isSafetyResponse = true`） */
+  private async persistSafetyMessage(
+    input: RunTurnInput,
+    content: string,
+  ): Promise<{
+    assistantMessage: MessageView;
+    messageCount: number;
+    lastMessageAt: Date;
+    titleAutoGenerated: boolean;
+  }> {
+    const now = new Date();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const message = await tx.aiMessage.create({
+        data: {
+          conversationId: input.conversationId,
+          userId: input.userId,
+          role: 'ASSISTANT',
+          content,
+          contentLength: content.length,
+          // 计量全 0：契约明确该路径不调用模型
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          costAmount: 0,
+          latencyMs: 0,
+          finishReason: 'stop',
+          safetyStatus: 'BLOCKED',
+          safetyLabels: ['SAFETY_INTERVENTION'],
+          requestId: input.requestId.slice(0, 64),
+        },
+        select: MESSAGE_ROW_SELECT,
+      });
+
+      const conversation = await tx.aiConversation.findUnique({
+        where: { id: input.conversationId },
+        select: { title: true },
+      });
+
+      const titleAutoGenerated = (conversation?.title ?? '').trim().length === 0;
+
+      const updated = await tx.aiConversation.update({
+        where: { id: input.conversationId },
+        data: {
+          messageCount: { increment: 2 },
+          lastMessageAt: now,
+          ...(titleAutoGenerated ? { title: buildAutoTitle(input.content) } : {}),
+        },
+        select: { messageCount: true, lastMessageAt: true },
+      });
+
+      return {
+        message,
+        messageCount: updated.messageCount,
+        lastMessageAt: updated.lastMessageAt ?? now,
+        titleAutoGenerated,
+      };
+    });
+
+    return {
+      assistantMessage: toMessageView(result.message),
+      messageCount: result.messageCount,
+      lastMessageAt: result.lastMessageAt,
+      titleAutoGenerated: result.titleAutoGenerated,
+    };
+  }
+
+  // ==========================================================================
+  // 内部
+  // ==========================================================================
+
+  /**
+   * 重新读取配额视图（响应 `quota` 字段）
+   *
+   * **必须重读而不是复用预占时的快照**：并发场景下另一个连接可能已经用掉了额度，
+   * 返回过期快照会让前端显示"还剩 5 次"而实际只剩 3 次 —— 用户下一次发送就会
+   * 莫名其妙被拒。
+   */
+  private async reloadQuotaView(userId: string, reservation: QuotaReservation | null): Promise<MessageQuotaView> {
+    const availability = await this.quota.resolveAvailability(userId);
+
+    return {
+      // 只有真正预占成功才算"消耗了 1 次"；安全干预路径 `reservation = null` → 0
+      consumed: reservation !== null && reservation.granted ? 1 : 0,
+      remainingToday: availability.view.remainingToday,
+      dailyLimit: availability.view.dailyLimit,
+      creditBalance: availability.view.creditBalance,
+      resetAt: availability.view.resetAt,
+      exhausted: !availability.view.hasQuota,
+    };
+  }
+}
+
+// ============================================================================
+// 纯函数辅助（导出以便单测，避免经过 Service 的 IO 才能验证）
+// ============================================================================
+
+/** `LlmCompletionResult` → 响应 `usage`（成本复用 `llm-pricing.estimateCostCents`） */
+export const toUsageView = (completion: LlmCompletionResult): MessageUsageView => ({
+  promptTokens: completion.usage.promptTokens,
+  completionTokens: completion.usage.completionTokens,
+  totalTokens: completion.usage.totalTokens,
+  estimatedCostCents: estimateCostCents(completion.provider, completion.model, completion.usage),
+  latencyMs: completion.latencyMs,
+  provider: completion.provider,
+  model: completion.model,
+  cacheHit: false,
+});
+
+/**
+ * 预占状态 → `start` 事件里的 `quota`
+ *
+ * 用 `availability`（预占**前**读到的配额）而不是预占结果：`start` 的语义是
+ * "这次对话即将消耗 1 次，当前剩余 N"，预占结果里的 `remainingToday` 是"扣完之后"，
+ * 与响应 `done` 的口径不一致。最终值以 `done` 里的重读结果为准。
+ */
+export const toMessageQuotaView = (
+  availability: QuotaAvailability,
+  reservation: QuotaReservation | null,
+): MessageQuotaView => ({
+  consumed: reservation !== null && reservation.granted ? 1 : 0,
+  remainingToday: availability.view.remainingToday,
+  dailyLimit: availability.view.dailyLimit,
+  creditBalance: availability.view.creditBalance,
+  resetAt: availability.view.resetAt,
+  exhausted: !availability.view.hasQuota,
+});
+
+/**
+ * 把一个完整回复切成 `delta` 事件（SSE 打字机效果）
+ *
+ * ⚠ 这是**在服务端把已完成的回复切片下发**，不是真流式（见文件头取舍 1）。
+ *
+ * `accumulatedLength` 按**码点**（`Array.from`）统计而不是 UTF-16 长度：
+ * emoji 与部分汉字是代理对，按 UTF-16 算会让"累计长度"跳变（+2），
+ * 而前端用它做丢包检测 —— 跳变会被误判为丢包。
+ */
+export const emitDeltas = (emit: (event: ChatStreamEvent) => void, messageId: string, content: string): void => {
+  const chars = Array.from(content);
+
+  for (let offset = 0, index = 0; offset < chars.length; offset += DELTA_CHUNK_SIZE, index += 1) {
+    const delta = chars.slice(offset, offset + DELTA_CHUNK_SIZE).join('');
+
+    emit({
+      type: 'delta',
+      payload: { messageId, index, delta, accumulatedLength: offset + Array.from(delta).length },
+    });
+  }
+};
+
+/** 错误码 → 友好文案（不暴露技术细节：错误原文可能含 Provider 名与 HTTP 状态） */
+export const friendlyProviderMessage = (code: number): string => {
+  switch (code) {
+    case ErrorCode.AI_PROVIDER_TIMEOUT:
+      return 'AI 服务响应超时，请稍后重试';
+    case ErrorCode.AI_PROVIDER_RATE_LIMITED:
+      return 'AI 服务繁忙，请稍后重试';
+    case ErrorCode.AI_PROVIDER_AUTH_FAILED:
+      return 'AI 服务配置异常，请联系客服';
+    case ErrorCode.AI_OUTPUT_INVALID:
+      return 'AI 返回内容格式异常，请重试';
+    case ErrorCode.AI_PROVIDER_UNAVAILABLE:
+    default:
+      return 'AI 服务暂时不可用，请稍后重试';
+  }
+};
+
+/**
+ * 从任意异常中取出错误码
+ *
+ * 与 `report-generation.service.ts` 的 `readErrorCode` 同一思路：结构判断优先、
+ * 类型判断兜底。只认 `instanceof` 会让 Provider 的限流码在中间层被包装后退化成
+ * 通用失败码，用户看到的提示与监控的告警维度都会失真。
+ */
+export const readErrorCode = (error: unknown): number => {
+  if (error instanceof BusinessException) return error.code;
+
+  if (typeof error === 'object' && error !== null) {
+    const raw = (error as { code?: unknown }).code;
+    if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
+    if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
+  }
+
+  return ErrorCode.AI_PROVIDER_UNAVAILABLE;
+};
+
+/** 非空判断（`contextUsed` 的四个 `*Injected` 字段用它，避免写成四遍 `!== '' && !== undefined`） */
+const isNonEmpty = (value: string | undefined): boolean => value !== undefined && value.length > 0;

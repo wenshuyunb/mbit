@@ -10,13 +10,14 @@
  * 任何「前端调用即发权益」的接口都等于免费送。
  */
 
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
 import { CurrentUser } from '../../common/decorators';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { EntitlementService, type MembershipView } from './entitlement.service';
+import { ListEntitlementsQueryDto } from './dto/entitlement.dto';
+import { EntitlementService, type EntitlementListView, type MembershipView } from './entitlement.service';
 
 /** 商品视图（只暴露前端需要的字段） */
 export interface ProductView {
@@ -74,6 +75,54 @@ export class MembershipController {
   @ApiResponse({ status: 200, description: '查询成功（非会员时 `expireAt` 与 `remainingDays` 为 `null`）' })
   async getMembership(@CurrentUser('userId') userId: string): Promise<MembershipView> {
     return this.entitlements.getMembership(userId);
+  }
+
+  @Get('entitlements')
+  @Throttle({ global: { limit: 120, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '权益清单（分页）',
+    description: [
+      '分页返回**当前用户**的全部权益记录（含已过期/已消耗），用于「我的权益」页与客服排查。',
+      '',
+      '**强归属过滤** `WHERE userId = 当前用户`：本接口没有任何按 ID 读取他人权益的入口。',
+      '',
+      '**脱敏**：响应不含内部发放备注、操作人 ID、`idempotencyKey` 等字段 ——',
+      '它们**不进入数据库查询**，而不是"查出来再删"（后者迟早会被某次 select 改动带出去）。',
+      '人工发放的权益只在 `sourceType` 上体现为 `ADMIN`，`sourceId` 刻意留空。',
+      '',
+      '**`status` 是派生值**（状态列 + 到期时间 + 剩余次数）：`entitlements.status` 由',
+      '到期任务维护，可能延迟刷新，因此服务端综合判定后下发；`isUsable` 同理，',
+      '复用与报告付费墙**完全相同**的判定函数，避免「权益页说可用、点进去被挡住」。',
+      '',
+      '**不传 `status` 时返回全部状态**（契约用途栏要求含已过期/已消耗）。',
+      '排序上 `status` 为第一排序键，保证可用权益置顶（契约规则 5）。',
+      '',
+      '本接口**只读**：权益只能由支付回调或后台人工补发产生，没有任何客户端写入入口。',
+    ].join('\n'),
+  })
+  @ApiResponse({
+    status: 200,
+    description: '查询成功（`items` + `total` + `page` + `pageSize` + `hasNext` + `summary` + `membership`）',
+  })
+  @ApiResponse({
+    status: 400,
+    description: '`type` / `status` 含非法枚举值、`sortBy` 不在白名单或 `pageSize > 100`（均返回 `10001`）',
+  })
+  @ApiResponse({ status: 401, description: '未登录或登录态失效（`20000`/`20001`）' })
+  @ApiResponse({ status: 429, description: '超出限流（120 次/60s）' })
+  async listEntitlements(
+    @CurrentUser('userId') userId: string,
+    @Query() query: ListEntitlementsQueryDto,
+  ): Promise<EntitlementListView> {
+    return this.entitlements.listEntitlements(userId, {
+      ...(query.page !== undefined ? { page: query.page } : {}),
+      ...(query.pageSize !== undefined ? { pageSize: query.pageSize } : {}),
+      ...(query.type !== undefined ? { type: query.type } : {}),
+      ...(query.status !== undefined ? { status: query.status } : {}),
+      ...(query.resourceId !== undefined ? { resourceId: query.resourceId } : {}),
+      ...(query.sortBy !== undefined ? { sortBy: query.sortBy } : {}),
+      ...(query.order !== undefined ? { order: query.order } : {}),
+    });
   }
 
   @Get('products')

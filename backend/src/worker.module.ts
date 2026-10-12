@@ -20,6 +20,10 @@ import { Module } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { AdminOrderJobsModule } from './modules/admin/order/admin-order-jobs.module';
 import { AiJobsModule } from './modules/ai/jobs/ai-jobs.module';
+// 订单生命周期：超时自动关单 + 退款对账。
+// ⚠ 不接线不会报任何错，只会**安静地不工作** —— 过期订单永远停在 PENDING_PAY，
+//  微信返回 PROCESSING 的退款永远停在 PENDING（用户永远看到「处理中」）。
+import { PaymentJobsModule } from './modules/payment/payment-jobs.module';
 import { RelationshipJobsModule } from './modules/relationship/jobs/relationship-jobs.module';
 import { UserJobsModule } from './modules/user/jobs/user-jobs.module';
 
@@ -33,6 +37,8 @@ import { UserJobsModule } from './modules/user/jobs/user-jobs.module';
     RelationshipJobsModule,
     // 管理端订单导出（`export.data` 队列，job name = `admin.order.export`）
     AdminOrderJobsModule,
+    // 订单超时关单 + 退款对账（BullMQ repeatable，60s/次）
+    PaymentJobsModule,
   ],
 })
 export class WorkerModule {}

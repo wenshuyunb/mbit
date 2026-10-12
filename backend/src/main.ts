@@ -76,6 +76,10 @@ async function bootstrap(): Promise<void> {
       'X-Client-Version',
       'X-Platform',
       'Accept-Language',
+      // 敏感操作（退款/封禁/发布 Prompt/改配置）的二次确认密码头（契约 §3.14 核心契约第 3 条）。
+      // 漏在这里的表现很隐蔽：管理后台跨域调用会**在预检阶段就被浏览器拦下**，
+      // 浏览器控制台只报 CORS 错误，后端日志里连请求都看不到 —— 很容易误判成后端故障。
+      'X-Confirm-Password',
     ],
     exposedHeaders: ['X-Request-Id'],
     maxAge: 86_400,

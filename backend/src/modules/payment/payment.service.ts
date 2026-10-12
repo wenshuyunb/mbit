@@ -83,6 +83,14 @@ export interface CreateOrderInput {
   readonly clientIp?: string;
 }
 
+/** 查单补偿 / 补发货的结果 */
+export interface PaidOrderFulfillment {
+  /** 本次是否真的推进了订单状态（`false` = 此前已处理，幂等命中） */
+  readonly fulfilled: boolean;
+  /** 本次**新发放**的权益 ID（幂等命中时为空数组） */
+  readonly grantedEntitlementIds: string[];
+}
+
 /** 订单 → 权益的映射规则（`productType` 决定发什么） */
 interface EntitlementGrant {
   readonly type: 'REPORT_UNLOCK' | 'MEMBERSHIP_ACTIVE' | 'AI_CREDITS';
@@ -364,11 +372,195 @@ export class PaymentService {
   }
 
   /**
+   * 把「微信已支付但本地未更新」的订单推进到 `FULFILLED`（幂等）
+   *
+   * 契约 §3.9.5 的补偿链路与 §3.9.8 的回调链路**必须走同一套本地状态机**：
+   * 两条路径各写一份「改订单状态 + 发权益」的代码，迟早会在某次改动后不一致
+   * （例如一边补了 `fulfilledAt`、另一边没有），而这类不一致只在补偿路径触发时
+   * 才暴露 —— 也就是在事故当天才发现。
+   *
+   * 因此回调路径（`fulfill`）与本方法共用 `grantEntitlement`，本方法只负责
+   * 「按订单 ID 重放一次发货」，不做商户号/解密之类的回调专属校验。
+   *
+   * ⚠ 调用方**必须**在调用前确认「微信侧确实 `SUCCESS` 且金额与本地订单一致」，
+   * 本方法不做任何金额校验（金额一律以本地 `orders` 为准，绝不采信外部传入金额）。
+   *
+   * @returns `fulfilled` 表示本次是否真的推进了状态；`entitlementIds` 是**本次新发放**的权益
+   */
+  async fulfillPaidOrder(params: {
+    orderId: string;
+    transactionId: string | null;
+    /** 实付金额（分），由调用方从**本地订单**读取 */
+    paidAmount: number;
+    paidAt: Date;
+  }): Promise<PaidOrderFulfillment> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: params.orderId, deletedAt: null },
+      select: {
+        id: true,
+        orderNo: true,
+        userId: true,
+        productType: true,
+        status: true,
+        relatedReportId: true,
+        relatedRelationshipId: true,
+      },
+    });
+
+    if (order === null) return { fulfilled: false, grantedEntitlementIds: [] };
+
+    const grantedEntitlementIds: string[] = [];
+    let fulfilled = false;
+
+    await this.prisma.$transaction(async (tx) => {
+      // 条件更新是**唯一**的并发闸门：两条补偿同时到达时只会有一条改到行
+      const updated = await tx.order.updateMany({
+        where: { id: order.id, status: { in: ['CREATED', 'PENDING_PAY'] } },
+        data: {
+          status: 'FULFILLED',
+          paidAmount: params.paidAmount,
+          paidAt: params.paidAt,
+          fulfilledAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+
+      if (updated.count === 0) {
+        this.logger.log(`订单已处于支付后状态，补偿跳过 orderNo=${order.orderNo} status=${order.status}`);
+
+        return;
+      }
+
+      fulfilled = true;
+
+      for (const grant of this.grantsFor(order.productType)) {
+        const id = await this.grantEntitlement(tx, {
+          userId: order.userId,
+          orderId: order.id,
+          orderNo: order.orderNo,
+          reportId: order.relatedReportId,
+          relationshipId: order.relatedRelationshipId,
+          grant,
+        });
+
+        if (id !== null) grantedEntitlementIds.push(id);
+      }
+    });
+
+    // 支付单同步放在**事务之外**：它是对账与退款的辅助记录，写失败不该让
+    // 「付了必给货」回滚（订单与权益已经落库）。退款链路另有"找不到支付单就补建"
+    // 的兜底，因此这里的失败不会造成无法退款的死角。
+    if (fulfilled) {
+      await this.syncPaymentRow(this.prisma, {
+        orderId: order.id,
+        userId: order.userId,
+        orderNo: order.orderNo,
+        transactionId: params.transactionId,
+        amount: params.paidAmount,
+        paidAt: params.paidAt,
+      });
+    }
+
+    return { fulfilled, grantedEntitlementIds };
+  }
+
+  /**
+   * 同步支付单行（回调与补偿共用）
+   *
+   * ## 为什么要在这里"补建"支付单
+   *
+   * 当前仓库里**没有任何代码写入 `payments` 表**（下单只拿到 `prepayId` 就结束）。
+   * 而 `refunds.payment_id` 是非空外键，没有支付单行就**无法创建退款记录** ——
+   * 于是「用户付了钱要退款」会直接失败。
+   *
+   * 这里采取「有则更新、无则补建」：补建行的 `outTradeNo = orderNo`（微信侧的
+   * `out_trade_no` 就是它，天然唯一），金额取本地订单的实付额。
+   * 这是**兜底**，不是设计意图；正确做法是下单时创建 `INIT` 支付单、回调时更新它
+   * （已列入交付简报的待接线清单）。
+   */
+  private async syncPaymentRow(
+    client: Pick<PrismaService, 'payment'>,
+    params: {
+      orderId: string;
+      userId: string;
+      orderNo: string;
+      transactionId: string | null;
+      amount: number;
+      paidAt: Date;
+    },
+  ): Promise<void> {
+    try {
+      const existing = await client.payment.findUnique({
+        where: { outTradeNo: params.orderNo },
+        select: { id: true, transactionId: true },
+      });
+
+      // `transaction_id` 有唯一约束：先确认这个微信单号没被别的本地支付单占用，
+      // 否则写入会抛 P2002 并让本次同步整体失败（交易号留空只是少了一条对账线索，
+      // 由同步失败告警与对账任务兜住）
+      const canSetTransactionId =
+        params.transactionId !== null &&
+        (existing === null || existing.transactionId === null || existing.transactionId === params.transactionId);
+
+      if (params.transactionId !== null && !canSetTransactionId) {
+        const owner = await client.payment.findUnique({
+          where: { transactionId: params.transactionId },
+          select: { outTradeNo: true },
+        });
+
+        this.logger.error(
+          `支付单交易号冲突，已跳过写入（需人工核对）outTradeNo=${params.orderNo} 占用方=${owner?.outTradeNo ?? '未知'}`,
+        );
+      }
+
+      if (existing === null) {
+        await client.payment.create({
+          data: {
+            orderId: params.orderId,
+            userId: params.userId,
+            outTradeNo: params.orderNo,
+            ...(canSetTransactionId ? { transactionId: params.transactionId } : {}),
+            channel: 'WECHAT_JSAPI',
+            status: 'SUCCESS',
+            amount: params.amount,
+            payerAmount: params.amount,
+            currency: 'CNY',
+            successTime: params.paidAt,
+            notifyReceivedAt: new Date(),
+          },
+        });
+
+        return;
+      }
+
+      await client.payment.update({
+        where: { id: existing.id },
+        data: {
+          ...(canSetTransactionId ? { transactionId: params.transactionId } : {}),
+          status: 'SUCCESS',
+          amount: params.amount,
+          successTime: params.paidAt,
+          notifyReceivedAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+    } catch (error) {
+      // 支付单只是对账与退款的**辅助**记录，写失败不应让"付了必给货"失败；
+      // 但必须留痕：没有支付单行会导致后续退款被拒
+      this.logger.error(
+        `同步支付单失败 orderNo=${params.orderNo}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
    * 发放一份权益
    *
    * `idempotencyKey` 有唯一约束，因此这里**捕获唯一冲突并视为成功** ——
    * 冲突意味着"这份权益已经发过了"，正是幂等要的结果。
    * 让它抛错会把一次正常的重复投递变成"处理失败"，进而触发微信重投。
+   *
+   * @returns 新发放的权益 ID；幂等命中（已存在）时返回 `null`
    */
   private async grantEntitlement(
     tx: Pick<PrismaService, 'entitlement'>,
@@ -380,7 +572,7 @@ export class PaymentService {
       relationshipId: string | null;
       grant: EntitlementGrant;
     },
-  ): Promise<void> {
+  ): Promise<string | null> {
     const { grant } = params;
 
     // 会员到期时间：从**现在**起算而不是从下单时间 —— 用户等了一天才付款的话，
@@ -389,7 +581,7 @@ export class PaymentService {
       grant.membershipDays === undefined ? null : new Date(Date.now() + grant.membershipDays * 86_400_000);
 
     try {
-      await tx.entitlement.create({
+      const created = await tx.entitlement.create({
         data: {
           userId: params.userId,
           type: grant.type,
@@ -402,13 +594,16 @@ export class PaymentService {
           totalQuota: null,
           idempotencyKey: entitlementIdempotencyKey(params.orderNo, grant.suffix),
         },
+        select: { id: true },
       });
+
+      return created.id;
     } catch (error) {
       // 唯一冲突 = 已经发过了，这正是幂等要的结果
       if (isUniqueConstraintError(error)) {
         this.logger.log(`权益已存在，跳过重复发放 orderNo=${params.orderNo} suffix=${grant.suffix}`);
 
-        return;
+        return null;
       }
       throw error;
     }

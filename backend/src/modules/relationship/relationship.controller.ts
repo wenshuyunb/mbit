@@ -8,16 +8,20 @@
  * | 契约     | 方法与路径                                          |
  * | -------- | --------------------------------------------------- |
  * | §3.6.1   | `POST /relationships/invites`                       |
+ * | §3.6.2   | `GET  /relationships/invites/{code}`（邀请详情）    |
  * | §3.6.3   | `POST /relationships/invites/{code}/accept`         |
  * | §3.6.6   | `POST /relationships/{id}/confirm`                  |
  * | §3.6.7   | `DELETE /relationships/{id}`                        |
  *
- * ## 尚未实现的端点（读操作与匹配报告）
+ * 后续轮次又补齐了读端点：`GET /relationships`（§3.6.4）、
+ * `GET /relationships/{id}`（§3.6.5）、`POST|GET /relationships/{id}/compatibility`
+ * （§3.6.8/§3.6.9）。按**报告 ID** 查的 §3.6.10/§3.6.11 在
+ * `compatibility-report.controller.ts`（同一模块、同一 Service）。
  *
- * `GET /relationships`（§3.6.4）、`GET /relationships/{id}`（§3.6.5）、
- * `POST|GET /relationships/{id}/compatibility`（§3.6.8/3.6.9）——
- * 前两者需要带伙伴画像联查的列表/详情查询（Service 尚未实现），
- * 后者依赖 `compatibility.calc` 队列与 `compatibility_reports` 落库链路。
+ * §3.6.2 的实现要点：**只下发邀请人的公开资料**（昵称/头像/MBTI），
+ * 手机号密文、openid、画像明细既不在 DTO 里也**不在查询里**；
+ * 自邀与"被我自己接受过"仍返回 200（契约错误码表如此要求），
+ * 被他人接受才返回 409 且不透露接受者。
  *
  * ## 响应体与契约的差距（**有意为之，已在 README 记录**）
  *
@@ -68,6 +72,7 @@ import {
 import {
   RelationshipService,
   type AcceptedRelationshipView,
+  type InviteDetailView,
   type InviteView,
   type RelationshipDetailView,
   type RelationshipListView,
@@ -153,6 +158,43 @@ export class RelationshipController {
 
     // 在控制器内取一次时间，保证同一响应里的字段基于同一时刻
     return toInviteCreatedView(view, Date.now());
+  }
+
+  @Get('invites/:code')
+  @Throttle({ global: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '邀请详情（扫码进入时展示）',
+    description: [
+      '**需登录**（契约 §3.6.2）：不是为了拦住游客看内容，而是**避免游客用这个接口',
+      '探测邀请码**。登录只静默进行，不强制点头像昵称。',
+      '',
+      '**只返回邀请人的公开资料**：昵称、头像、MBTI 类型。手机号密文、openid、',
+      '画像详情（大五分数）等字段**根本没有进入查询** —— 从源头杜绝泄露，',
+      '而不是查出来再删（后者迟早会被某次 select 改动带出去）。',
+      '',
+      '**自邀仍返回 200**：`canAccept = false` 且 `blockedReason = SELF_INVITE`',
+      '（契约错误码表明确如此），前端据此展示「这是你自己的邀请」并隐藏接受按钮。',
+      '',
+      '**已被我自己接受的邀请也返回 200**，并附 `acceptedRelationshipId`，',
+      '前端直接跳关系详情；被**他人**接受则返回 `409`（`60005`），',
+      '且不透露接受者是谁 —— 否则这个接口就成了"凭邀请码查他人关系"的入口。',
+    ].join('\n'),
+  })
+  @ApiResponse({
+    status: 200,
+    description: '查询成功（含 `inviter` 公开资料、`canAccept` / `blockedReason`、`myStatus`、`flow`）',
+  })
+  @ApiResponse({ status: 400, description: '邀请码长度不为 8（`10001`）' })
+  @ApiResponse({ status: 401, description: '未登录或登录态失效（`20000`/`20001`）' })
+  @ApiResponse({ status: 404, description: '邀请码不存在或含非法字符（`60003`）' })
+  @ApiResponse({ status: 409, description: '邀请已被他人接受（`60005`）' })
+  @ApiResponse({ status: 410, description: '邀请已过期或已被撤销（`60004`）' })
+  @ApiResponse({ status: 429, description: '超出限流（30 次/60s，防邀请码暴力枚举）' })
+  async getInviteDetail(
+    @CurrentUser('userId') userId: string,
+    @Param() params: InviteCodeParamDto,
+  ): Promise<InviteDetailView> {
+    return this.relationshipService.getInviteDetail(userId, params.code);
   }
 
   @Post('invites/:code/accept')

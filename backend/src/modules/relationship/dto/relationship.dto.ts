@@ -195,6 +195,61 @@ export class RelationshipIdParamDto {
 }
 
 // ============================================================================
+// GET /compatibility-reports/{id} 与 /progress（契约 §3.6.10 / §3.6.11）
+// ============================================================================
+
+export class CompatibilityReportIdParamDto {
+  @ApiProperty({
+    description: '匹配报告 ID（UUID v7）',
+    example: '0195f3a2-e57b-7db9-9e24-a0db7e8f9c78',
+    format: 'uuid',
+  })
+  @IsUUID(undefined, { message: '匹配报告 ID 必须是合法 UUID' })
+  id!: string;
+}
+
+/**
+ * 查询参数里的布尔值
+ *
+ * ⚠ **必须显式转换**：全局 `ValidationPipe` 开了 `enableImplicitConversion`，
+ * 而 class-transformer 对 `boolean` 目标类型用的是 `Boolean(value)` ——
+ * 字符串 `'false'` 会变成 `true`。于是 `previewOnly=false`（本意"看全文"）
+ * 反而会强制进入预览模式，用户付了钱却只看到前 20%。
+ *
+ * `@IsBoolean()` 仍然保留：无法识别的值（如 `maybe`）会原样透出并被它拒绝。
+ */
+const toBoolean = ({ value }: { value: unknown }): unknown => {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === '1' || value === 1) return true;
+  if (value === 'false' || value === '0' || value === 0) return false;
+
+  return value;
+};
+
+export class GetCompatibilityReportQueryDto {
+  @ApiPropertyOptional({
+    description: '是否返回算分明细（默认 `true`）。置 `false` 可减小响应体',
+    example: true,
+    default: true,
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  includeScoreBreakdown?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      '强制仅返回免费预览（默认 `false`）。用于"看看解锁后能得到什么"的落地页与客服排查；**会员同样会被裁剪**',
+    example: false,
+    default: false,
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  previewOnly?: boolean;
+}
+
+// ============================================================================
 // GET /relationships
 // ============================================================================
 

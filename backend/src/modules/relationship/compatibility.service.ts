@@ -30,6 +30,7 @@ import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { QUEUE_COMPATIBILITY_CALC } from '../../infra/queue/queue.module';
 import { ReportService } from '../ai/report/report.service';
+import { EntitlementService } from '../membership/entitlement.service';
 import {
   COMPATIBILITY_ENGINE_VERSION,
   computeCompatibility,
@@ -43,8 +44,31 @@ import {
   type CompatibilityBlockedReason,
 } from './compatibility.util';
 import {
+  AI_MAX_ATTEMPTS,
+  AI_TARGET_ITEM_COUNT,
+  POLLING_ADVICE,
+  buildAiInsights,
+  buildFreePreview,
+  buildProfileComparison,
+  buildRelatedActions,
+  buildScoreBreakdownDimensions,
+  buildStageTimeline,
+  countGeneratedItems,
+  PROGRESS_STATUS_LABELS,
+  resolveOverallStatus,
+  resolveProgressPercent,
+  resolveRetryAdvice,
+  scoreRingColor,
+  type CompatibilityAiInsightsView,
+  type CompatibilityProgressStatus,
+  type CompatibilityStageView,
+  type ProfileComparisonView,
+  type ScoreBreakdownDimensionView,
+} from './compatibility-report.util';
+import {
   compatibilityScoreLabel,
   compatibilityScoreLevel,
+  relationTypeName,
   type CompatibilityScoreLevel,
 } from './relationship-view.util';
 
@@ -89,6 +113,112 @@ const ESTIMATED_SECONDS = 5;
 /** 无可用权重矩阵时的错误码（属配置事故，不是用户问题） */
 const MISSING_WEIGHTS_MESSAGE = '匹配权重矩阵未配置，请稍后重试';
 
+/** 免责声明（合规要求由服务端下发，前端不得硬编码） */
+const COMPATIBILITY_DISCLAIMER =
+  '匹配结果基于人格测评框架与确定性算法计算，仅供关系自我探索参考，不构成情感诊断、心理咨询或医疗建议。';
+
+/** AI 生成内容提示（合规） */
+const AI_GENERATED_NOTICE = '本报告的解读部分由人工智能生成，算分部分由确定性算法计算，已通过内容安全检测。';
+
+/** 解锁来源（契约 §3.6.10 的 `unlockType`） */
+export type CompatibilityUnlockType = 'MEMBERSHIP_ACTIVE' | 'REPORT_UNLOCK';
+
+/** 免费预览说明（未解锁时下发） */
+export interface FreePreviewView {
+  readonly ratio: number;
+  readonly includes: readonly string[];
+  readonly excludes: readonly string[];
+}
+
+/** 报告详情视图（契约 §3.6.10） */
+export interface CompatibilityReportDetailView extends CompatibilityReportView {
+  /** 契约 §3.6.10 的字段名（`CompatibilityReportView` 沿用 §3.6.9 的 `reportId`，两者同值） */
+  readonly compatibilityReportId: string;
+  readonly relationType: string;
+  readonly relationTypeName: string;
+  readonly isUnlocked: boolean;
+  readonly unlockType: CompatibilityUnlockType | null;
+  /**
+   * 解锁时间
+   *
+   * `entitlements` 表没有「何时被判为解锁」的列（`startAt` 是权益生效时间，
+   * 与"这份报告何时被解锁"不是一回事）。因此如实返回 `null`。
+   */
+  readonly unlockedAt: string | null;
+  /** 契约 §3.6.10 的字段名（= `totalScore`） */
+  readonly overallScore: number | null;
+  /** 契约 §3.6.10 的字段名（= `engineVersion`） */
+  readonly algorithmVersion: string;
+  /** AI 报告摘要；未解锁或解读未生成时为 `null` */
+  readonly summary: string | null;
+  readonly scoreRingColor: string | null;
+  /** 算分明细的**数组形态**（既有 `scoreBreakdown` 仍透传引擎 JSONB，见 util 注释） */
+  readonly scoreBreakdownDimensions: readonly ScoreBreakdownDimensionView[];
+  /** AI 解读全文；未解锁或未生成时为 `null`（契约规则 2：绝不下发 AI 全文） */
+  readonly aiInsights: CompatibilityAiInsightsView | null;
+  /** 双方画像对比；**未解锁时为 `null`**（大五明细属付费内容） */
+  readonly profileComparison: ProfileComparisonView | null;
+  readonly freePreview: FreePreviewView | null;
+  readonly generatedAt: string | null;
+  readonly aiGeneratedAt: string | null;
+  readonly disclaimer: string;
+  readonly aiGeneratedNotice: string;
+  readonly relatedActions: {
+    readonly canStartChat: boolean;
+    readonly chatUrl: string | null;
+    readonly canExportPdf: boolean;
+    readonly canShare: boolean;
+  };
+}
+
+/** 进度视图（契约 §3.6.11） */
+export interface CompatibilityProgressView {
+  readonly compatibilityReportId: string;
+  readonly relationshipId: string;
+  readonly status: CompatibilityProgressStatus;
+  readonly statusLabel: string;
+  readonly progress: number;
+  readonly stage: CompatibilityProgressStatus;
+  readonly stageLabel: string;
+  readonly stages: readonly CompatibilityStageView[];
+  readonly scoring: {
+    readonly isDone: boolean;
+    /**
+     * 算分耗时
+     *
+     * **无列可查** → `null`。刻意不用 `computedAt - createdAt` 冒充：那个差值里
+     * 还包含排队等待时间，会显示成"算分用了 3 秒"，而算分实际是毫秒级。
+     */
+    readonly durationMs: number | null;
+    readonly overallScore: number | null;
+    readonly scoreLevel: CompatibilityScoreLevel | null;
+    readonly algorithmVersion: string;
+    readonly weightsVersion: string;
+    readonly computedAt: string | null;
+    readonly partialAvailable: boolean;
+  };
+  readonly ai: {
+    readonly isDone: boolean;
+    readonly provider: string | null;
+    readonly model: string | null;
+    readonly attempt: number;
+    readonly maxAttempts: number;
+    readonly isRetrying: boolean;
+    readonly generatedItemCount: number;
+    readonly targetItemCount: number;
+    readonly estimatedRemainingSeconds: number | null;
+  };
+  readonly elapsedSeconds: number;
+  readonly estimatedRemainingSeconds: number | null;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+  readonly canRetry: boolean;
+  readonly retryScope: 'AI_ONLY' | 'FULL' | null;
+  /** 失败时的友好文案（**不透出上游错误原文**） */
+  readonly failureReason?: string;
+  readonly pollingAdvice: { readonly intervalMs: number; readonly maxPolls: number };
+}
+
 @Injectable()
 export class CompatibilityService {
   private readonly logger = new Logger(CompatibilityService.name);
@@ -99,6 +229,10 @@ export class CompatibilityService {
     // 用普通 import 而非 `import type`：Nest 的构造参数注入依赖
     // `design:paramtypes` 元数据里的运行时类引用，`import type` 会被编译期擦除
     private readonly reports: ReportService,
+    // 报告详情的**付费裁剪**需要它（契约 §3.6.10 规则 2：未解锁时不下发 AI 全文）。
+    // 复用 `EntitlementService` 而不是自己查 `entitlements` 表：解锁判定必须与
+    // 个人报告、AI 报告用的是**同一套规则**，否则同一份权益在不同页面结论不同
+    private readonly entitlements: EntitlementService,
   ) {}
 
   /**
@@ -379,9 +513,372 @@ export class CompatibilityService {
     };
   }
 
+  // ==========================================================================
+  // 按报告 ID 查询（契约 §3.6.10 / §3.6.11）
+  // ==========================================================================
+
   /**
-   * 触发 AI 解读（第二阶段）
+   * 匹配报告详情（契约 §3.6.10）
    *
+   * ## 归属校验链
+   *
+   * `compatibilityReport → relationship → (userAId === me || userBId === me)`
+   *
+   * 任一层不满足都返回 `60010`（404），**包括非双方本人的情况** ——
+   * 契约规则 1 明确要求「不泄露报告是否存在」。返回 403 会让攻击者知道
+   * 这个报告 ID 是真实的，可以据此枚举。
+   *
+   * ## 服务端裁剪（契约规则 2）
+   *
+   * `isUnlocked = false` 时只下发**确定性算分结果**（总分、等级、四维拆解），
+   * `aiInsights` 与 `profileComparison` 置 `null`，并在 `freePreview.excludes`
+   * 中列出被隐藏的板块。**绝不下发 AI 解读全文** —— 付费内容的裁剪必须在
+   * 服务端完成，靠前端"不渲染"等于把内容白送。
+   */
+  async getReportById(
+    userId: string,
+    reportId: string,
+    options: { readonly includeScoreBreakdown: boolean; readonly previewOnly: boolean },
+  ): Promise<CompatibilityReportDetailView> {
+    const report = await this.loadOwnedReport(userId, reportId);
+
+    // 报告仍在生成中：契约 §3.6.10 要求 409 并引导前端改订阅进度接口。
+    // 若这里返回 200 + 半成品，前端会渲染出一份"总分 null"的报告
+    if ((ACTIVE_COMPATIBILITY_STATUSES as readonly string[]).includes(report.status)) {
+      throw new BusinessException(ErrorCode.COMPATIBILITY_GENERATING, '匹配报告正在生成中，请稍候', {
+        logContext: { reportId, relationshipId: report.relationshipId },
+      });
+    }
+
+    const unlock = await this.resolveUnlock(userId, report.id, report.aiReportId);
+    // `previewOnly` 强制裁剪：运营/客服预览、以及"看看买了能得到什么"的落地页
+    const isUnlocked = unlock.isUnlocked && !options.previewOnly;
+
+    const level = report.totalScore === null ? null : compatibilityScoreLevel(report.totalScore);
+    const aiInsights = isUnlocked
+      ? buildAiInsights({
+          advantages: report.advantages,
+          conflicts: report.conflicts,
+          suggestions: report.suggestions,
+          communicationScripts: null,
+          provider: report.provider,
+          model: report.model,
+          generatedAt: report.aiGeneratedAt,
+        })
+      : null;
+
+    return {
+      reportId: report.id,
+      compatibilityReportId: report.id,
+      relationshipId: report.relationshipId,
+      relationType: report.relationshipType,
+      relationTypeName: relationTypeName(report.relationshipType),
+      status: report.status,
+      isUnlocked,
+      unlockType: isUnlocked ? unlock.unlockType : null,
+      unlockedAt: null,
+      totalScore: report.totalScore,
+      overallScore: report.totalScore,
+      mbtiScore: report.mbtiScore,
+      bigFiveScore: report.bigFiveScore,
+      attachmentScore: report.attachmentScore,
+      communicationScore: report.communicationScore,
+      scoreLevel: level,
+      scoreLabel: level === null ? null : compatibilityScoreLabel(level),
+      scoreRingColor: scoreRingColor(level),
+      scoreBreakdown: options.includeScoreBreakdown
+        ? ((report.scoreBreakdown as Record<string, unknown> | null) ?? null)
+        : null,
+      scoreBreakdownDimensions: options.includeScoreBreakdown
+        ? buildScoreBreakdownDimensions({
+            scoreBreakdown: report.scoreBreakdown,
+            scores: {
+              mbti: report.mbtiScore,
+              bigFive: report.bigFiveScore,
+              attachment: report.attachmentScore,
+              communication: report.communicationScore,
+            },
+          })
+        : [],
+      summary: isUnlocked ? report.aiSummary : null,
+      aiInsights,
+      profileComparison: isUnlocked ? report.profileComparison : null,
+      freePreview: isUnlocked ? null : buildFreePreview(),
+      engineVersion: report.engineVersion,
+      algorithmVersion: report.engineVersion,
+      weightsVersion: report.weightsVersion,
+      computedAt: report.computedAt?.toISOString() ?? null,
+      generatedAt: report.generatedAt?.toISOString() ?? null,
+      aiGeneratedAt: report.aiGeneratedAt?.toISOString() ?? null,
+      createdAt: report.createdAt.toISOString(),
+      ...(report.status === 'FAILED' ? { failureReason: '匹配分析暂时不可用，请稍后重试' } : {}),
+      aiInterpretation: { available: aiInsights !== null, aiReportId: report.aiReportId },
+      disclaimer: COMPATIBILITY_DISCLAIMER,
+      aiGeneratedNotice: AI_GENERATED_NOTICE,
+      relatedActions: buildRelatedActions(report.relationshipId, {
+        isUnlocked,
+        isActiveRelationship: report.relationshipStatus === 'ACTIVE',
+      }),
+    };
+  }
+
+  /**
+   * 匹配报告生成进度（契约 §3.6.11）
+   *
+   * `status = ERROR / PARTIAL` 同样以 **200** 返回（契约规则 4：失败不返回 5xx），
+   * 并附 `canRetry` 与 `retryScope`。用 5xx 表达"这份报告生成失败了"会让前端
+   * 把它当成网络故障去重试请求，而真正该重试的是**生成任务**。
+   *
+   * 归属校验与 §3.6.10 完全一致（契约规则 5）。
+   */
+  async getReportProgress(userId: string, reportId: string): Promise<CompatibilityProgressView> {
+    const report = await this.loadOwnedReport(userId, reportId);
+
+    const now = new Date();
+    const status = resolveOverallStatus({ reportStatus: report.status, aiStatus: report.aiStatus });
+    const progress = resolveProgressPercent({ status, aiProgress: report.aiProgress });
+    const retry = resolveRetryAdvice(status);
+
+    const scoringDone = report.computedAt !== null || report.status === 'SUCCEEDED';
+    const level = report.totalScore === null ? null : compatibilityScoreLevel(report.totalScore);
+    const isDone = status === 'DONE' || status === 'PARTIAL';
+    const canReportPartial = scoringDone && report.totalScore !== null;
+
+    // 收尾时间里 `generatedAt` 是报告生成完成、`computedAt` 是算分完成；
+    // 失败时没有这两个时间，用 `updatedAt` 表示"最后一次状态变更"
+    const finishedAt =
+      status === 'DONE'
+        ? (report.generatedAt ?? report.computedAt)
+        : status === 'PARTIAL' || status === 'ERROR'
+          ? report.updatedAt
+          : null;
+
+    return {
+      compatibilityReportId: report.id,
+      relationshipId: report.relationshipId,
+      status,
+      statusLabel: PROGRESS_STATUS_LABELS[status],
+      progress,
+      stage: status,
+      stageLabel: PROGRESS_STATUS_LABELS[status],
+      stages: buildStageTimeline({
+        status,
+        hasScoring: report.computedAt !== null,
+        aiStatus: report.aiStatus,
+        createdAt: report.createdAt,
+        computedAt: report.computedAt,
+        aiStartedAt: report.aiStartedAt,
+        aiFinishedAt: report.aiFinishedAt,
+      }),
+      scoring: {
+        isDone: scoringDone,
+        durationMs: null,
+        overallScore: report.totalScore,
+        scoreLevel: level,
+        algorithmVersion: report.engineVersion,
+        weightsVersion: report.weightsVersion,
+        computedAt: report.computedAt?.toISOString() ?? null,
+        // 算分已完成即可先展示总分与拆解（契约规则 1 的 PARTIAL 语义）
+        partialAvailable: canReportPartial,
+      },
+      ai: {
+        isDone: report.aiStatus === 'SUCCEEDED',
+        provider: report.provider,
+        model: report.model,
+        // 契约的 `attempt` 从 1 开始计数，库里存的是**已重试次数**
+        attempt: report.aiRetryCount + 1,
+        maxAttempts: AI_MAX_ATTEMPTS,
+        isRetrying: report.aiRetryCount > 0,
+        generatedItemCount: report.generatedItemCount,
+        targetItemCount: AI_TARGET_ITEM_COUNT,
+        estimatedRemainingSeconds: estimateAiRemainingSeconds(report.generatedItemCount, isDone),
+      },
+      elapsedSeconds: Math.max(0, Math.floor((now.getTime() - report.createdAt.getTime()) / 1000)),
+      estimatedRemainingSeconds: estimateAiRemainingSeconds(report.generatedItemCount, isDone),
+      startedAt: report.createdAt.toISOString(),
+      finishedAt: finishedAt?.toISOString() ?? null,
+      canRetry: retry.canRetry,
+      retryScope: retry.retryScope,
+      ...(status === 'ERROR' || status === 'PARTIAL'
+        ? {
+            // 友好文案：`errorMessage` 是内部原文（可能含 Prisma/引擎细节），不透出
+            failureReason: status === 'PARTIAL' ? '关系解读生成失败，可单独重试解读' : '匹配分析暂时不可用，请稍后重试',
+          }
+        : {}),
+      pollingAdvice: POLLING_ADVICE,
+    };
+  }
+
+  /**
+   * 读取报告并校验归属
+   *
+   * 把三段校验（报告存在 → 关系存在 → 我是双方之一）压在一个查询里：
+   * `compatibilityReport.findFirst` 带 `relationship: { OR: [userAId, userBId] }`
+   * 条件。分三次查会多两次往返，且中间的失败分支容易漏掉一个（漏掉就是越权）。
+   */
+  private async loadOwnedReport(userId: string, reportId: string): Promise<OwnedReportRow> {
+    const report = await this.prisma.compatibilityReport.findFirst({
+      where: {
+        id: reportId,
+        deletedAt: null,
+        relationship: { deletedAt: null, OR: [{ userAId: userId }, { userBId: userId }] },
+      },
+      select: {
+        id: true,
+        relationshipId: true,
+        status: true,
+        totalScore: true,
+        mbtiScore: true,
+        bigFiveScore: true,
+        attachmentScore: true,
+        communicationScore: true,
+        scoreBreakdown: true,
+        advantages: true,
+        conflicts: true,
+        suggestions: true,
+        engineVersion: true,
+        weightsVersion: true,
+        aiReportId: true,
+        provider: true,
+        model: true,
+        totalTokens: true,
+        retryCount: true,
+        computedAt: true,
+        generatedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        // ⚠ `profileAId` / `profileBId` / `weights` 属于 **CompatibilityReport**，
+        // 不属于 `Relationship` —— 放到 relationship.select 里会让 Prisma 直接编译报错
+        // （Relationship 只有 userAId/userBId，没有画像外键）
+        profileAId: true,
+        profileBId: true,
+        weights: { select: { attachmentMatrix: true } },
+        relationship: {
+          select: {
+            type: true,
+            status: true,
+            userAId: true,
+            userBId: true,
+          },
+        },
+        aiReport: {
+          select: {
+            status: true,
+            summary: true,
+            provider: true,
+            model: true,
+            progress: true,
+            retryCount: true,
+            generationStartedAt: true,
+            generationFinishedAt: true,
+          },
+        },
+      },
+    });
+
+    if (report === null) {
+      // 不存在与无权访问返回**同一个码**：不泄露报告是否存在（契约规则 1）
+      throw BusinessException.notFound(ErrorCode.COMPATIBILITY_REPORT_NOT_FOUND);
+    }
+
+    const { relationship, aiReport, profileAId, profileBId, weights, ...rest } = report;
+
+    const profileComparison =
+      // 画像对比需要双方画像；关系已解除时画像仍可读（历史报告要能看），
+      // 因此这里不额外限制关系状态 —— 限制在调用方（未解锁不下发）
+      await this.loadProfileComparison(profileAId, profileBId, weights?.attachmentMatrix);
+
+    return {
+      ...rest,
+      relationshipType: relationship.type,
+      relationshipStatus: relationship.status,
+      // 优先用匹配报告自己的 `provider` / `model`（AI 解读阶段写入）；
+      // 为空时回落到 `ai_reports` 的同名字段
+      provider: rest.provider ?? aiReport?.provider ?? null,
+      model: rest.model ?? aiReport?.model ?? null,
+      aiStatus: aiReport?.status ?? null,
+      aiSummary: aiReport?.summary ?? null,
+      aiProgress: aiReport?.progress ?? null,
+      aiRetryCount: aiReport?.retryCount ?? 0,
+      aiStartedAt: aiReport?.generationStartedAt ?? null,
+      aiFinishedAt: aiReport?.generationFinishedAt ?? null,
+      // 契约的 `aiGeneratedAt` = AI 解读完成时间；匹配报告用 `generatedAt` 表达
+      aiGeneratedAt: rest.generatedAt,
+      generatedItemCount: countGeneratedItems(rest),
+      profileComparison,
+    };
+  }
+
+  /** 读取双方画像并组装对比（任一画像缺失则返回 `null`，不抛错） */
+  private async loadProfileComparison(
+    profileAId: string,
+    profileBId: string,
+    attachmentMatrix: unknown,
+  ): Promise<ProfileComparisonView | null> {
+    const profiles = await this.prisma.personalityProfile.findMany({
+      where: { id: { in: [profileAId, profileBId] }, deletedAt: null },
+      select: {
+        id: true,
+        mbtiType: true,
+        version: true,
+        eiPercent: true,
+        snPercent: true,
+        tfPercent: true,
+        jpPercent: true,
+        openness: true,
+        conscientiousness: true,
+        extraversion: true,
+        agreeableness: true,
+        neuroticism: true,
+        attachmentStyle: true,
+        loveLanguages: true,
+      },
+    });
+
+    const profileA = profiles.find((profile) => profile.id === profileAId);
+    const profileB = profiles.find((profile) => profile.id === profileBId);
+
+    // 画像被硬删/清理后报告仍要能打开：对比块缺失而不是整页 500
+    if (profileA === undefined || profileB === undefined) return null;
+
+    return buildProfileComparison({
+      profileA: { ...profileA, loveLanguages: profileA.loveLanguages ?? [] },
+      profileB: { ...profileB, loveLanguages: profileB.loveLanguages ?? [] },
+      attachmentMatrix,
+    });
+  }
+
+  /**
+   * 报告是否已解锁（契约 §3.6.10 的 💎）
+   *
+   * 两个 ID 都要认：`REPORT_UNLOCK` 权益既可能指向**匹配报告**（契约 §3.6.9 的
+   * `entitlementRequired.resourceId` 就是 `latestReportId`），也可能指向 AI 解读
+   * 生成的那份 `ai_reports`（`entitlements.report_id` 是它的外键）。
+   * 只认其中一个会让另一条购买路径的用户被付费墙挡住 —— 付了钱却看不到。
+   */
+  private async resolveUnlock(
+    userId: string,
+    compatibilityReportId: string,
+    aiReportId: string | null,
+  ): Promise<{ isUnlocked: boolean; unlockType: CompatibilityUnlockType | null }> {
+    const byCompatibility = await this.entitlements.resolveReportUnlock(userId, compatibilityReportId);
+
+    if (byCompatibility.allUnlocked) {
+      return { isUnlocked: true, unlockType: toUnlockType(byCompatibility.source) };
+    }
+
+    if (aiReportId !== null) {
+      const byAiReport = await this.entitlements.resolveReportUnlock(userId, aiReportId);
+
+      if (byAiReport.allUnlocked) {
+        return { isUnlocked: true, unlockType: toUnlockType(byAiReport.source) };
+      }
+    }
+
+    return { isUnlocked: false, unlockType: null };
+  }
+
+  /**
    * 用关系双方中的**任一方**作为 `userId` 创建报告：报告内容对双方相同
    * （上下文按阅读者视角分别渲染，但都由同一份算分结果决定），
    * 而 `ai_reports.userId` 只是归属与用量归集字段。
@@ -521,3 +1018,75 @@ export class CompatibilityService {
     };
   }
 }
+
+// ============================================================================
+// 模块级工具
+// ============================================================================
+
+/**
+ * `loadOwnedReport` 的返回行
+ *
+ * 单独命名而不是 `Awaited<ReturnType<...>>`：它同时被详情与进度两个接口消费，
+ * 字段含义（尤其 `aiStatus` / `generatedItemCount` 这类派生字段）写成显式接口
+ * 才能在改动时看出「谁依赖它」。
+ */
+interface OwnedReportRow {
+  readonly id: string;
+  readonly relationshipId: string;
+  readonly relationshipType: string;
+  readonly relationshipStatus: string;
+  readonly status: string;
+  readonly totalScore: number | null;
+  readonly mbtiScore: number | null;
+  readonly bigFiveScore: number | null;
+  readonly attachmentScore: number | null;
+  readonly communicationScore: number | null;
+  readonly scoreBreakdown: unknown;
+  readonly advantages: unknown;
+  readonly conflicts: unknown;
+  readonly suggestions: unknown;
+  readonly engineVersion: string;
+  readonly weightsVersion: string;
+  readonly aiReportId: string | null;
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly computedAt: Date | null;
+  readonly generatedAt: Date | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  /** AI 解读报告的状态（无 AI 报告时为 `null`） */
+  readonly aiStatus: string | null;
+  /** AI 报告摘要（付费内容，未解锁不下发） */
+  readonly aiSummary: string | null;
+  /** AI 阶段自身进度（`ai_reports.progress`，0–100）；无 AI 报告时为 `null` */
+  readonly aiProgress: number | null;
+  readonly aiRetryCount: number;
+  readonly aiStartedAt: Date | null;
+  readonly aiFinishedAt: Date | null;
+  readonly aiGeneratedAt: Date | null;
+  /** 已完成条目数（优势 + 冲突 + 建议） */
+  readonly generatedItemCount: number;
+  readonly profileComparison: ProfileComparisonView | null;
+}
+
+/** 权益解锁来源 → 契约的 `unlockType` */
+const toUnlockType = (source: string): CompatibilityUnlockType => {
+  if (source === 'MEMBERSHIP') return 'MEMBERSHIP_ACTIVE';
+
+  return 'REPORT_UNLOCK';
+};
+
+/**
+ * AI 解读剩余耗时估算
+ *
+ * 按**未完成条目数**估算（契约 §3.6.11 规则 3 的 `targetItemCount = 13`）：
+ * 契约示例里「2/13 完成、剩余 11 秒」正好是 `13 - 2 = 11`，即每个条目约 1 秒。
+ *
+ * 这是一个**粗略提示**而不是承诺，所以它只用于进度条文案；
+ * 已完成（`isDone`）时返回 `null`，避免展示"还剩 0 秒"。
+ */
+const estimateAiRemainingSeconds = (generatedItemCount: number, isDone: boolean): number | null => {
+  if (isDone) return null;
+
+  return Math.max(0, AI_TARGET_ITEM_COUNT - generatedItemCount);
+};
