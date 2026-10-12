@@ -135,9 +135,9 @@ onShow(() => {
     <view class="profile__card card">
       <button class="profile__avatar-button" open-type="chooseAvatar" @chooseavatar="onChooseAvatar">
         <image
-          v-if="authStore.userInfo?.avatar || avatarTempPath"
+          v-if="authStore.userInfo?.avatarUrl || avatarTempPath"
           class="profile__avatar"
-          :src="avatarTempPath || authStore.userInfo?.avatar || ''"
+          :src="avatarTempPath || authStore.userInfo?.avatarUrl || ''"
           mode="aspectFill"
         />
         <view v-else class="profile__avatar profile__avatar--placeholder">
