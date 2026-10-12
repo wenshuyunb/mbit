@@ -44,6 +44,15 @@ export interface ExportJobData {
   scope: ExportScope;
 }
 
+/**
+ * 本处理器负责的 job name
+ *
+ * ⚠ 必须与 `data-export.service.ts` 投递时使用的 name 一致（那里是字面量 `'generate'`，
+ * 写在 `this.exportQueue.add('generate', ...)` 处）。本文件之外的改动不在本次范围内，
+ * 因此在此再声明一份，并在两处都注明来源。
+ */
+const EXPORT_DATA_JOB_NAME = 'generate';
+
 /** 队列并发（契约 §3.2.7 规则 1：并发 2） */
 const EXPORT_CONCURRENCY = 2;
 
@@ -64,6 +73,23 @@ export class DataExportProcessor extends WorkerHost {
   }
 
   async process(job: Job<ExportJobData>): Promise<void> {
+    // 🚨 job name 过滤是**必需**的（不是防御性代码）。
+    //
+    // `export.data` 队列上同时挂着管理端订单导出处理器
+    // （`admin/order/admin-order-export.processor.ts`，job name = 'admin.order.export'，
+    // 契约附录 A.13 指定两者共用本队列）。BullMQ 是**按队列消费、不按 job name 过滤**：
+    // 不过滤时，订单导出任务会落到这里被执行，而两个服务的任务状态 Redis 键不同
+    // （本侧 `export:task:{taskId}`，订单侧 `admin:order:export:task:{taskId}`），
+    // 于是 `loadTask` 读到 null → 只记一条 warn 就正常 return → BullMQ 把该 job
+    // 标记为 **completed**。结果是订单导出**永远不会执行**，且没有任何失败/重试信号，
+    // 管理员侧只能看到任务一直停在 PENDING。
+    //
+    // 因此这里只处理自己投递的 'generate' 任务，把其余任务留给同队列上的另一个处理器
+    // （对称的过滤已在订单导出处理器中实现：`if (job.name !== ORDER_EXPORT_JOB_NAME) return;`）。
+    if (job.name !== EXPORT_DATA_JOB_NAME) {
+      return;
+    }
+
     const { taskId, userId, scope } = job.data;
 
     const task = await this.exportService.loadTask(taskId);

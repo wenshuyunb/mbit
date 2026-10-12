@@ -18,6 +18,7 @@
 import { Module } from '@nestjs/common';
 
 import { AppModule } from './app.module';
+import { AdminOrderJobsModule } from './modules/admin/order/admin-order-jobs.module';
 import { AiJobsModule } from './modules/ai/jobs/ai-jobs.module';
 import { RelationshipJobsModule } from './modules/relationship/jobs/relationship-jobs.module';
 import { UserJobsModule } from './modules/user/jobs/user-jobs.module';
@@ -30,6 +31,8 @@ import { UserJobsModule } from './modules/user/jobs/user-jobs.module';
     UserJobsModule,
     AiJobsModule,
     RelationshipJobsModule,
+    // 管理端订单导出（`export.data` 队列，job name = `admin.order.export`）
+    AdminOrderJobsModule,
   ],
 })
 export class WorkerModule {}

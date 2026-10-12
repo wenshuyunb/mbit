@@ -69,10 +69,20 @@ import { RolesGuard } from './rbac/guards/roles.guard';
     // 审计
     AdminAuditService,
   ],
-  // 业务域控制器需要复用这些能力：
-  //   · AdminAuthGuard + RolesGuard  → 守卫链
-  //   · AdminAuditService           → 写操作审计
-  //   · AdminRbacService            → 角色与权限查询（管理员管理接口用）
-  exports: [AdminAuthService, AdminTokenService, AdminRbacService, AdminAuditService, PasswordService],
+  // 业务域模块需要复用这些能力（域模块 `imports: [AdminModule]` 后，
+  // 守卫类才能在该模块上下文里被 @UseGuards 解析）：
+  //   · AdminAuthGuard / RolesGuard / ConfirmPasswordGuard → 守卫链
+  //   · AdminAuditService → 写操作审计
+  //   · AdminRbacService  → 角色与权限查询（管理员管理接口用）
+  exports: [
+    AdminAuthService,
+    AdminTokenService,
+    AdminRbacService,
+    AdminAuditService,
+    PasswordService,
+    AdminAuthGuard,
+    RolesGuard,
+    ConfirmPasswordGuard,
+  ],
 })
 export class AdminModule {}

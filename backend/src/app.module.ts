@@ -36,6 +36,26 @@ import { RedisModule } from './infra/redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AdminModule } from './modules/admin/admin.module';
+// ------------------------------------------------ 管理端业务域（§3.14）
+// 这些域模块统一**注册在这里而不是 AdminModule 内**，原因有两条：
+//   ① `AdminConfigModule` 等自身 `imports: [AdminModule]` 以复用守卫链，
+//      若 AdminModule 反过来 import 它们会形成**模块循环依赖**；
+//   ② 注册点集中在一处，读 app.module 就能看清「管理端有哪些域」。
+import { AdminUserModule as AdminAccountModule } from './modules/admin/admin-user/admin-user.module';
+import { AdminAiStatsModule } from './modules/admin/ai-stats/admin-ai-stats.module';
+import { AdminAuditLogModule } from './modules/admin/audit-log/admin-audit-log.module';
+import { AdminConfigModule } from './modules/admin/config/admin-config.module';
+import { AdminDashboardModule } from './modules/admin/dashboard/admin-dashboard.module';
+import { AdminOrderModule } from './modules/admin/order/admin-order.module';
+import { AdminPromptModule } from './modules/admin/prompt/prompt.module';
+import { AdminQuestionModule } from './modules/admin/question/admin-question.module';
+import { AdminReportModule } from './modules/admin/report/admin-report.module';
+import { AdminRoleModule } from './modules/admin/role/admin-role.module';
+import { AdminTestDefinitionModule } from './modules/admin/test-definition/test-definition.module';
+// ⚠ 命名冲突（待重构）：本模块管的是**终端用户**（`/admin/users`），
+// 而 `admin/admin-user/` 管的是**管理员账号**（`/admin/admins`），两者却都叫 `AdminUserModule`。
+// 这里先用别名导入把装配跑通；后续应把后者改名为 `AdminAccountModule` 并调整目录名。
+import { AdminUserModule } from './modules/admin/user/admin-user.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { MembershipModule } from './modules/membership/membership.module';
@@ -43,6 +63,8 @@ import { PaymentModule } from './modules/payment/payment.module';
 import { PersonalityModule } from './modules/personality/personality.module';
 import { RelationshipModule } from './modules/relationship/relationship.module';
 import { StorageModule } from './modules/storage/storage.module';
+// 用户端系统配置（`GET /system/config`、`/system/disclaimers`）：小程序所有页面都依赖它
+import { SystemModule } from './modules/system/system.module';
 import { TestModule } from './modules/test/test.module';
 import { UserModule } from './modules/user/user.module';
 
@@ -157,8 +179,24 @@ import { UserModule } from './modules/user/user.module';
     RelationshipModule,
     StorageModule,
     TestModule,
-    // 后台管理（独立 realm：AdminJwtStrategy + AdminAuthGuard + RolesGuard）
+    // 用户端系统配置（公开接口；小程序每个页面都依赖功能开关与合规免责声明）
+    SystemModule,
+    // 后台管理基础层（独立 realm：AdminJwtStrategy + AdminAuthGuard + RolesGuard + 审计）
     AdminModule,
+    // 后台管理业务域（契约 §3.14；共 38 个接口，覆盖用户/题库/测试定义/Prompt/
+    // 订单/AI 统计/报告关系/看板/配置/审计/管理员/角色）
+    AdminAccountModule,
+    AdminAiStatsModule,
+    AdminAuditLogModule,
+    AdminConfigModule,
+    AdminDashboardModule,
+    AdminOrderModule,
+    AdminPromptModule,
+    AdminQuestionModule,
+    AdminReportModule,
+    AdminRoleModule,
+    AdminTestDefinitionModule,
+    AdminUserModule,
     // Phase 5+ 待接入：NotificationModule
 
     // ---------------------------------------------------------------- 运维

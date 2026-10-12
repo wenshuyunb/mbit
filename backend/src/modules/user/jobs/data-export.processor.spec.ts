@@ -289,8 +289,16 @@ const createHarness = (): Harness => {
   return { processor, prisma, storage, exportService };
 };
 
-const job = (overrides: { attemptsMade?: number; attempts?: number } = {}): Job<ExportJobData> =>
+/**
+ * 任务桩
+ *
+ * `name` 必须给：真实的 BullMQ Job 一定有 name（由 `add(name, ...)` 传入），
+ * 处理器的 job name 过滤（只认 `generate`）依赖它。缺了它桩对象就不是一个
+ * 真实的 Job，会让「只处理自己的任务」的过滤器把测试任务一并跳过。
+ */
+const job = (overrides: { attemptsMade?: number; attempts?: number; name?: string } = {}): Job<ExportJobData> =>
   ({
+    name: overrides.name ?? 'generate',
     data: { taskId: TASK_ID, userId: USER_ID, scope: 'ALL' },
     attemptsMade: overrides.attemptsMade ?? 0,
     opts: { attempts: overrides.attempts ?? 2 },
@@ -358,6 +366,23 @@ describe('DataExportProcessor', () => {
 
     await expect(harness.processor.process(job())).resolves.toBeUndefined();
     expect(harness.storage.uploadServerObject).not.toHaveBeenCalled();
+  });
+
+  it('【关键】不吞同队列上的其他任务：job name 非 generate 时直接返回', async () => {
+    // `export.data` 队列由用户端数据导出与管理端订单导出共用（契约附录 A.13）。
+    // BullMQ 按队列消费、不按 job name 过滤：若本处理器不过滤，
+    // 订单导出任务（name = 'admin.order.export'）会落到这里，而两侧的任务状态
+    // Redis 键不同（本侧 export:task:*，订单侧 admin:order:export:task:*），
+    // loadTask 会读到 null → 正常 return → BullMQ 把该 job 标记 completed，
+    // 订单导出**永远不执行**且没有失败信号。因此这里必须确认它被跳过且不触碰任何数据。
+    const harness = createHarness();
+
+    await expect(harness.processor.process(job({ name: 'admin.order.export' }))).resolves.toBeUndefined();
+
+    expect(harness.exportService.loadTask).not.toHaveBeenCalled();
+    expect(harness.storage.uploadServerObject).not.toHaveBeenCalled();
+    expect(harness.exportService.saveTask).not.toHaveBeenCalled();
+    expect(harness.exportService.releaseActiveSlot).not.toHaveBeenCalled();
   });
 
   it('【关键】失败时标记 FAILED 并抛出（让 BullMQ 重试）', async () => {

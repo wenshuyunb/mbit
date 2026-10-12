@@ -351,13 +351,19 @@ export class TokenService {
   // 撤销
   // ==========================================================================
 
-  /** 撤销单个会话（按 jti 精确撤销当前设备） */
+  /**
+   * 撤销单个会话（按 jti 精确撤销当前设备）
+   *
+   * 与 `revokeAllSessions` 同样要把 AT 加黑名单：登出的语义是「这个令牌立刻不能用」，
+   * 只删会话键会让当前设备的 AccessToken 继续有效到过期。
+   */
   async revokeSessionByJti(userId: string, jti: string, reason: string): Promise<boolean> {
     const deleted = await this.redis.del(this.sessionKey(jti));
     await this.redis.sRem(this.userSessionsKey(userId), jti);
 
     // 留下「已使用」标记，使后续使用该令牌能被识别为复用（而非「不存在」）
     await this.redis.set(this.usedKey(jti), userId, this.refreshTtlSeconds);
+    await this.redis.set(this.blacklistKey(jti), '1', this.accessTtlSeconds);
 
     await this.prisma.userSession.updateMany({
       where: { userId, jti, revokedAt: null },
@@ -367,7 +373,17 @@ export class TokenService {
     return deleted > 0;
   }
 
-  /** 撤销某用户的全部会话（退出全部设备 / 检测到令牌复用 / 封禁） */
+  /**
+   * 撤销某用户的全部会话（退出全部设备 / 检测到令牌复用 / 封禁）
+   *
+   * ⚠ 必须**同时把 AccessToken 加入黑名单**：用户端的 AT 与 RT 共用同一个 `jti`，
+   * 只删会话键不足以让**已签发的 AT** 失效 —— 它会继续可用到自己的 `exp`
+   * （默认 2 小时）。这对下列场景都是真实的安全缺口：
+   *   · 退出全部设备：用户以为已经登出，令牌却还能用
+   *   · 检测到 RefreshToken 复用：正处应急响应中，攻击者的 AT 仍然有效
+   *   · 封禁账号：封禁的意义就是立刻切断访问
+   * 黑名单 TTL 取 AT 的配置寿命（宁可多留一会儿，也不放过正在流通的令牌）。
+   */
   async revokeAllSessions(userId: string, reason: string): Promise<number> {
     const sessionsKey = this.userSessionsKey(userId);
     const jtis = await this.redis.sMembers(sessionsKey);
@@ -379,6 +395,7 @@ export class TokenService {
       if (deleted > 0) revoked += 1;
       // 同样留下复用标记，使被盗令牌被再次使用时能被识别
       await this.redis.set(this.usedKey(jti), userId, this.refreshTtlSeconds);
+      await this.redis.set(this.blacklistKey(jti), '1', this.accessTtlSeconds);
     }
 
     await this.redis.del(sessionsKey);
