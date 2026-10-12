@@ -23,6 +23,7 @@ import {
   ALL_ADMIN_PERMISSIONS,
 } from '../../src/modules/admin/rbac/admin-permission.constants';
 import { BIG_FIVE_QUESTIONS, MBTI_QUESTIONS } from './data';
+import { MEMBERSHIP_PLANS, PRODUCTS } from './data/catalog';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
 import { PROMPT_TEMPLATES } from './data/prompt-templates';
@@ -54,6 +55,10 @@ interface SeedSummary {
   promptTemplates?: number;
   /** 匹配权重矩阵数 */
   compatibilityWeights?: number;
+  /** 会员套餐数 */
+  membershipPlans?: number;
+  /** 可售商品数 */
+  products?: number;
   /** 管理端权限点数 */
   adminPermissions?: number;
   /** 管理端角色数 */
@@ -118,6 +123,57 @@ const validateSeedData = (): void => {
   );
   if (!hasFallback) {
     errors.push('关系风格规则缺少兜底规则（可能导致部分用户得不到任何风格）');
+  }
+
+  // 可售目录：价格是收款的唯一依据，错误的价格会直接造成资损，必须在灌库前拦住
+  for (const plan of MEMBERSHIP_PLANS) {
+    if (!Number.isInteger(plan.priceAmount) || plan.priceAmount <= 0) {
+      errors.push(`套餐 ${plan.code} 的现价必须是正整数分（当前 ${plan.priceAmount}）`);
+    }
+    if (plan.originalAmount < plan.priceAmount) {
+      errors.push(`套餐 ${plan.code} 的划线价 ${plan.originalAmount} 低于现价 ${plan.priceAmount}（会显示成涨价）`);
+    }
+    if (plan.durationDays <= 0) {
+      errors.push(`套餐 ${plan.code} 的时长必须为正数（当前 ${plan.durationDays}）`);
+    }
+    if (plan.benefits.length === 0) {
+      errors.push(`套餐 ${plan.code} 没有任何权益项（会员页会渲染出空权益列表）`);
+    }
+  }
+
+  const seenProductCodes = new Set<string>();
+
+  for (const product of PRODUCTS) {
+    if (seenProductCodes.has(product.code)) {
+      errors.push(`商品编码重复：${product.code}`);
+    }
+    seenProductCodes.add(product.code);
+
+    if (!Number.isInteger(product.priceAmount) || product.priceAmount <= 0) {
+      errors.push(`商品 ${product.code} 的现价必须是正整数分（当前 ${product.priceAmount}）`);
+    }
+    if (product.originalAmount !== null && product.originalAmount < product.priceAmount) {
+      errors.push(`商品 ${product.code} 的划线价低于现价`);
+    }
+
+    // 三类商品各自的必填语义：漏填会导致前端展示缺项或权益发放错误
+    if (product.type === 'MEMBERSHIP' && (product.durationDays === null || product.durationDays <= 0)) {
+      errors.push(`会员商品 ${product.code} 必须设置 durationDays`);
+    }
+    if (product.type === 'AI_CREDITS' && (product.credits === null || product.credits <= 0)) {
+      errors.push(`次数包商品 ${product.code} 必须设置 credits`);
+    }
+    if (product.type.startsWith('REPORT_') && product.reportType === null) {
+      errors.push(`报告商品 ${product.code} 必须设置 reportType`);
+    }
+  }
+
+  // 会员商品的 productCode 必须能找到对应套餐，否则商品的 membershipPlanId 会为空，
+  // 支付成功后无法据套餐发放会员权益
+  for (const plan of MEMBERSHIP_PLANS) {
+    if (!seenProductCodes.has(plan.productCode)) {
+      errors.push(`套餐 ${plan.code} 指向的商品 ${plan.productCode} 不存在`);
+    }
   }
 
   if (errors.length > 0) {
@@ -353,6 +409,89 @@ const seedCompatibilityWeights = async (): Promise<number> => {
 };
 
 // ============================================================================
+// 可售目录（会员套餐 + 商品）
+// ============================================================================
+
+/**
+ * 灌入会员套餐
+ *
+ * 必须在商品之前执行：商品通过 `membershipPlanId` 外键指向套餐。
+ */
+const seedMembershipPlans = async (): Promise<number> => {
+  for (const plan of MEMBERSHIP_PLANS) {
+    const data = {
+      name: plan.name,
+      description: plan.description,
+      durationDays: plan.durationDays,
+      priceAmount: plan.priceAmount,
+      originalAmount: plan.originalAmount,
+      currency: 'CNY',
+      // 权益项是 JsonB：Prisma 的 InputJsonValue 要求索引签名，而接口类型没有，
+      // 这是 Prisma 的已知类型摩擦，值本身是合法 JSON
+      benefits: plan.benefits as unknown as Prisma.InputJsonValue,
+      dailyAiQuota: plan.dailyAiQuota,
+      totalAiQuota: plan.totalAiQuota,
+      pdfExportQuota: plan.pdfExportQuota,
+      sortOrder: plan.sortOrder,
+      isActive: true,
+      isRecommended: plan.isRecommended,
+      tags: plan.tags,
+    };
+
+    await prisma.membershipPlan.upsert({
+      where: { code: plan.code },
+      create: { code: plan.code, ...data },
+      update: data,
+    });
+  }
+
+  return MEMBERSHIP_PLANS.length;
+};
+
+/**
+ * 灌入可售商品
+ *
+ * 状态一律置为 `ON_SALE`：只有该状态才会出现在 `GET /membership/products`
+ * 与 `POST /payment/orders` 的可售集合里。契约说定价「可后台配置」，
+ * 而配置的前提是初始目录存在 —— 此前该表为空，导致整条支付链路无法验证。
+ */
+const seedProducts = async (): Promise<number> => {
+  const plans = await prisma.membershipPlan.findMany({ select: { id: true, code: true } });
+  const planIdByCode = new Map(plans.map((plan) => [plan.code, plan.id]));
+
+  for (const product of PRODUCTS) {
+    // 会员商品与同名套餐一一对应（`productCode` ↔ `planCode`）
+    const planCode = MEMBERSHIP_PLANS.find((plan) => plan.productCode === product.code)?.code;
+    const membershipPlanId = planCode === undefined ? null : (planIdByCode.get(planCode) ?? null);
+
+    const data = {
+      name: product.name,
+      type: product.type,
+      description: product.description,
+      priceAmount: product.priceAmount,
+      originalAmount: product.originalAmount,
+      currency: 'CNY',
+      credits: product.credits,
+      durationDays: product.durationDays,
+      membershipPlanId,
+      reportType: product.reportType,
+      tags: product.tags,
+      sortOrder: product.sortOrder,
+      status: 'ON_SALE' as const,
+      isRecommended: product.isRecommended,
+    };
+
+    await prisma.product.upsert({
+      where: { code: product.code },
+      create: { code: product.code, ...data },
+      update: data,
+    });
+  }
+
+  return PRODUCTS.length;
+};
+
+// ============================================================================
 // 管理端 RBAC
 // ============================================================================
 
@@ -542,6 +681,10 @@ async function main(): Promise<void> {
   summary.promptTemplates = await seedPromptTemplates();
   summary.compatibilityWeights = await seedCompatibilityWeights();
 
+  // 顺序不可颠倒：商品通过 membershipPlanId 引用套餐
+  summary.membershipPlans = await seedMembershipPlans();
+  summary.products = await seedProducts();
+
   const adminRbac = await seedAdminRbac();
   summary.adminPermissions = adminRbac.permissions;
   summary.adminRoles = adminRbac.roles;
@@ -558,6 +701,8 @@ async function main(): Promise<void> {
       `  关系规则 : ${summary.rules}`,
       `  Prompt   : ${summary.promptTemplates ?? 0}`,
       `  匹配权重 : ${summary.compatibilityWeights ?? 0}`,
+      `  会员套餐 : ${summary.membershipPlans ?? 0}`,
+      `  商品     : ${summary.products ?? 0}`,
       `  权限点   : ${summary.adminPermissions ?? 0}`,
       `  角色     : ${summary.adminRoles ?? 0}`,
       `  角色权限 : ${summary.adminRolePermissions ?? 0}`,
