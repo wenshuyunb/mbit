@@ -56,13 +56,25 @@ describe('maskNickname / maskUserId', () => {
   it('昵称保留首字符，其余打码（契约示例 小满 → 小*）', () => {
     expect(maskNickname('小满')).toBe('小*');
     expect(maskNickname('阿泽')).toBe('阿*');
-    // 5 个字符 = 保留 1 个 + 打码 4 个（口径就是「其余全部打码」，不截断掩码长度；
-    // 与本文件同目录的 report / ai-stats 两份同名实现保持同一口径）
-    expect(maskNickname('测试用户甲')).toBe('测****');
+    // 5 个字符 = 保留 1 个 + 打码 3 个（**星号数封顶 3**，见 mask.util.ts 的说明）
+    expect(maskNickname('测试用户甲')).toBe('测***');
+  });
+
+  it('星号数封顶 3 个：长昵称不会被打成一长串星号', () => {
+    // 不封顶时星号数等于昵称长度，等于把「昵称有多长」也泄露了出去，
+    // 且长昵称在列表/导出里会挤占列宽
+    expect(maskNickname('这是一个非常非常长的昵称')).toBe('这***');
+    expect(maskNickname('abcdefghijklmnop')).toBe('a***');
   });
 
   it('单字昵称至少给出一个掩码位，避免「掩码后仍是原文」', () => {
     expect(maskNickname('甲')).toBe('甲*');
+  });
+
+  it('2–4 字昵称的星号数等于其余字符数（未触及封顶）', () => {
+    expect(maskNickname('小明')).toBe('小*');
+    expect(maskNickname('张小三')).toBe('张**');
+    expect(maskNickname('欧阳小明')).toBe('欧***');
   });
 
   it('空昵称返回 null（前端据此渲染占位，而非空白用户名）', () => {

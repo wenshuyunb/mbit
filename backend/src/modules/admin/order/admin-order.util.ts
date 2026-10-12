@@ -17,7 +17,7 @@
 
 import type { Entitlement, Order, OrderStatus, Payment, Product, Refund } from '@prisma/client';
 
-import { maskMiddle, maskPhone } from '../../../common/utils/mask.util';
+import { maskMiddle, maskNickname, maskPhone } from '../../../common/utils/mask.util';
 
 /** 订单状态中文名（契约 §3.14.6.1 的 `statusLabel`，`FULFILLED` → 「已完成」） */
 const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
@@ -35,18 +35,14 @@ const ORDER_STATUS_LABELS: Readonly<Record<OrderStatus, string>> = {
 export const orderStatusLabel = (status: string): string => ORDER_STATUS_LABELS[status as OrderStatus] ?? status;
 
 /**
- * 昵称掩码：保留首字符，其余打码（契约示例 `小满` → `小*`、`阿泽` → `阿*`）
+ * 昵称掩码：**统一由公共脱敏工具提供**（`common/utils/mask.util.ts`），此处仅再导出
  *
- * 空昵称为 null（而不是空串）：前端据此渲染「未设置昵称」占位，
- * 空串会被渲染成一个空白的用户名，看起来像数据缺失。
+ * 原先 order / report / ai-stats 三个管理端模块各写了一份 `maskNickname`，
+ * 口径还不一致（有的封顶、有的不封顶）。脱敏是**有合规含义**的规则，
+ * 复制多份必然漂移 —— 同一昵称在不同页面打码不同，既难发现也难以向审计解释。
+ * 因此收敛到单一实现，其余位置一律从这里导入以保持既有调用方不变。
  */
-export const maskNickname = (nickname: string | null | undefined): string | null => {
-  if (!nickname) return null;
-  const trimmed = nickname.trim();
-  if (trimmed.length === 0) return null;
-  if (trimmed.length === 1) return `${trimmed}*`;
-  return `${trimmed.slice(0, 1)}${'*'.repeat(trimmed.length - 1)}`;
-};
+export { maskNickname };
 
 /** 用户 ID 掩码（导出用；契约 §3.14.6.4：`maskSensitive` 掩码昵称与用户 ID） */
 export const maskUserId = (userId: string | null | undefined): string | null => maskMiddle(userId, 8, 4);

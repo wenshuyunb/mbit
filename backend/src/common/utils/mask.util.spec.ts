@@ -5,7 +5,7 @@
  * 因此测试重点在于「异常输入不会导致明文泄露」以及年龄计算的边界正确性。
  */
 
-import { calculateAge, maskMiddle, maskPhone, toAgeRange } from './mask.util';
+import { calculateAge, maskMiddle, maskNickname, maskPhone, toAgeRange } from './mask.util';
 
 describe('maskPhone', () => {
   it('标准 11 位手机号保留前 3 后 4', () => {
@@ -140,5 +140,47 @@ describe('toAgeRange', () => {
 
   it('超过 120 岁（数据异常）返回 null', () => {
     expect(toAgeRange(new Date('1850-01-01T00:00:00.000Z'), now)).toBeNull();
+  });
+});
+
+/**
+ * 昵称掩码
+ *
+ * 这组用例是**唯一权威**：order / report / ai-stats 三个管理端模块原先各写了一份
+ * `maskNickname`，口径还不一致（有的封顶、有的不封顶），现统一到本文件。
+ * 因此「星号数封顶 3」这条产品规则只在本文件断言，其余位置只做再导出。
+ */
+describe('maskNickname', () => {
+  it('保留首字符，其余打码（契约示例 小满 → 小*、阿泽 → 阿*）', () => {
+    expect(maskNickname('小满')).toBe('小*');
+    expect(maskNickname('阿泽')).toBe('阿*');
+  });
+
+  it('【产品规则】星号数封顶 3 个', () => {
+    // 不封顶时星号数等于昵称长度：既泄露「昵称有多长」，长昵称又会挤占列表/导出列宽
+    expect(maskNickname('测试用户甲')).toBe('测***'); // 5 字 → 1 + 3（而非 4）
+    expect(maskNickname('这是一个非常非常长的昵称')).toBe('这***'); // 13 字 → 1 + 3
+    expect(maskNickname('abcdefghijklmnop')).toBe('a***');
+  });
+
+  it('2–4 字昵称的星号数等于其余字符数（尚未触及封顶）', () => {
+    expect(maskNickname('张小三')).toBe('张**');
+    expect(maskNickname('欧阳小明')).toBe('欧***');
+  });
+
+  it('单字昵称仍给出一个掩码位，避免「掩码后仍是原文」', () => {
+    expect(maskNickname('甲')).toBe('甲*');
+    expect(maskNickname('A')).toBe('A*');
+  });
+
+  it('空值 / 空白一律返回 null（前端渲染占位而非空白用户名）', () => {
+    expect(maskNickname(null)).toBeNull();
+    expect(maskNickname(undefined)).toBeNull();
+    expect(maskNickname('')).toBeNull();
+    expect(maskNickname('   ')).toBeNull();
+  });
+
+  it('两端空白先裁剪再掩码（不把空格算进星号数）', () => {
+    expect(maskNickname('  小明  ')).toBe('小*');
   });
 });

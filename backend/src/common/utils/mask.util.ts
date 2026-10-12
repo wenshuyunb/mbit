@@ -114,3 +114,38 @@ export const calculateAge = (birthday: Date, now: Date = new Date()): number | n
 
   return age;
 };
+
+/**
+ * 昵称掩码的最大星号数
+ *
+ * **必须封顶**（产品要求）：不封顶时星号数等于原昵称长度，等于把「昵称有多长」
+ * 这一信息也泄露了出去；而长昵称会被打成一长串星号，在列表/导出里既难看又
+ * 挤占列宽。契约示例 `小满` → `小*`、`阿泽` → `阿*` 对应 1 个星号，
+ * 5 字昵称「测试用户甲」按本规则应为 `测***`（而非 4 个星号）。
+ */
+const NICKNAME_MASK_MAX_STARS = 3;
+
+/**
+ * 昵称掩码：保留首字符，其余打码，且**星号数封顶 3 个**
+ *
+ * 空昵称为 `null`（而不是空串）：前端据此渲染「未设置昵称」占位，
+ * 空串会被渲染成一个空白的用户名，看起来像数据缺失。
+ *
+ * ## 为什么收敛到公共工具
+ *
+ * 原先 order / report / ai-stats 三个管理端模块各写了一份 `maskNickname`，
+ * 且三份口径不同（有无封顶）。脱敏是有合规含义的规则，**同一规则复制多份
+ * 必然会漂移** —— 改一处忘两处就会出现「同一昵称在不同页面打码不同」，
+ * 既难发现也难以向审计解释。因此统一到本文件，其余位置一律从这里导入。
+ */
+export const maskNickname = (nickname: string | null | undefined): string | null => {
+  if (!nickname) return null;
+
+  const trimmed = nickname.trim();
+  if (trimmed.length === 0) return null;
+
+  // 单字昵称：本身不足以识别，但仍打 1 个星号，避免长度信息完全暴露
+  const starCount = Math.min(Math.max(trimmed.length - 1, 1), NICKNAME_MASK_MAX_STARS);
+
+  return `${trimmed.slice(0, 1)}${'*'.repeat(starCount)}`;
+};

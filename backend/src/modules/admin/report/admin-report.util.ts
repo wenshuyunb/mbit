@@ -43,18 +43,12 @@ export const UNLOCKED_ENTITLEMENT_STATUSES = ['ACTIVE', 'CONSUMED'] as const;
 export const COMPLETED_SESSION_STATUSES = ['SUBMITTED', 'SCORED', 'REPORT_READY'] as const;
 
 /**
- * 昵称掩码（契约示例 `小满` → `小*`）
+ * 昵称掩码：**统一由公共脱敏工具提供**（`common/utils/mask.util.ts`），此处仅再导出
  *
- * `common/utils/mask.util.ts` 未提供昵称脱敏函数且属共享文件（本轮不可改），
- * 故各模块各自持有这份 3 行实现，避免跨目录隐式依赖。
+ * 该实现原先在本模块、`order`、`ai-stats` 各存一份（口径还不一致）。
+ * 脱敏是有合规含义的规则，复制多份必然漂移，故收敛到单一实现。
  */
-export const maskNickname = (nickname: string | null | undefined): string | null => {
-  if (!nickname) return null;
-  const trimmed = nickname.trim();
-  if (trimmed.length === 0) return null;
-  if (trimmed.length === 1) return `${trimmed}*`;
-  return `${trimmed.slice(0, 1)}${'*'.repeat(trimmed.length - 1)}`;
-};
+export { maskNickname } from '../../../common/utils/mask.util';
 
 /**
  * 匹配分数等级
