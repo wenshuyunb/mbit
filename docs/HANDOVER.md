@@ -476,6 +476,39 @@ worker 没跑时这些任务会**停在排队态**，表现为"接口 202 了但
 > 建议顺序：① 修内部矛盾（含订单 TTL）→ ② 修静默失效（含隐私开关）→ ③ 按章修订契约（纯文档，可并行）
 > → ④ 逐项决策"未交付能力"（游客浏览套餐、`purchaseNotice` 合规文案、`benefitsCompare`）。
 
+### 3.12 🔴 查询串布尔值被静默取反（**全局缺陷，已部分修复**）
+
+**`?flag=false` 与 `?flag=true` 都会变成 `true`。**
+
+根因：全局管道开了 `enableImplicitConversion`，class-transformer **先**按属性的反射类型
+做隐式转换（`boolean` 走 `Boolean(value)`），而查询串的值**天生是字符串**
+—— `Boolean('false') === true`。更坑的是 `@Transform` 回调拿到的 `value`
+**已经是转换后的布尔值**，因此全仓 **7 份** `toBoolean({ value })` 副本
+（判 `value === 'false'`）**一次都没生效过**：它们看起来在防这个问题，实际永远走不到字符串分支。
+
+**影响**：每一个查询串布尔筛选都在**静默**给出相反结果 ——
+`?hasRefund=false` 只返回有退款的订单、`?includeContent=false` 仍下发正文、
+`?includeUsage=false` 仍返回用量，以及**§3.12 上一节刚做的隐私开关**
+`?keepHistory=false` 被当成 `true`（等于那个修复在线上从未生效）。不报错、不写日志。
+
+**已修**：
+
+- 唯一实现 `common/utils/query-boolean.util.ts`：从 `obj[key]` 读**原始字符串**
+  （`obj` 是未被隐式转换过的原始输入）；无法识别的值原样透出交给 `@IsBoolean()` 拒绝。
+- `relationship/dto/relationship.dto.ts`（含给 `keepHistory` **补上 `@Transform`**）
+  与 `ai/report/report-engagement.dto.ts`（10 处）已改用共享实现。
+- 新增 `query-boolean.util.spec.ts`，其中一组用例**走与 `main.ts` 同配置的真实 ValidationPipe**
+  —— 本缺陷恰恰是"函数写对了但接线不对"，只测函数必漏。
+
+**⏳ 仍待收敛（下一轮，判定方法：跑一次真实管道传 `'false'` 看是否得到 `false`）**：
+另有 5 份同类副本未改 —— `ai/chat/chat.dto.ts`、`payment/refund.dto.ts`、
+`admin/{user,config,prompt,test-definition}/dto/*.ts`；`admin/question/dto/admin-question.dto.ts`
+已经收 `{value, obj, key}`，可能部分可用，需逐个验证。
+
+**同类但危害较小**：**请求体**里的字符串布尔同样被隐式转换
+（`{"autoGenerateReport":"false"}` → `true`）。JSON 客户端本来会发真布尔，故危害小；
+要收紧就给字段加 `@Transform(parseQueryBoolean)`。
+
 ## 4. 下一步做什么（按这个顺序，别跳）
 
 ### 第 1 步：收干净新交付的四个域（**2026-10-12 已完成，见 §3.5**）
