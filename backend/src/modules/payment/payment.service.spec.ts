@@ -18,7 +18,9 @@
  */
 
 import type { PrismaService } from '../../infra/prisma/prisma.service';
+import type { RedisService } from '../../infra/redis/redis.service';
 import type { WechatPayService } from '../../infra/wechat/wechat-pay.service';
+import { ORDER_IDEMPOTENCY_TTL_SECONDS } from './order.util';
 import { PaymentService } from './payment.service';
 
 const PRODUCT = {
@@ -41,6 +43,7 @@ interface Harness {
   };
   tx: { order: { create: jest.Mock }; payment: { create: jest.Mock } };
   wechatPay: { createJsapiPrepay: jest.Mock; buildMiniAppPayParams: jest.Mock };
+  redis: { key: jest.Mock; getJson: jest.Mock; setJson: jest.Mock };
 }
 
 const createHarness = (options: { prepayFails?: boolean } = {}): Harness => {
@@ -74,16 +77,28 @@ const createHarness = (options: { prepayFails?: boolean } = {}): Harness => {
       .mockReturnValue({ timeStamp: '1', nonceStr: 'n', package: 'prepay_id=x', signType: 'RSA', paySign: 's' }),
   };
 
+  const redis = {
+    key: jest.fn((...parts: (string | number)[]): string => parts.join(':')),
+    // 默认未命中：绝大多数用例关心的是「首次下单」路径
+    getJson: jest.fn().mockResolvedValue(null),
+    setJson: jest.fn().mockResolvedValue(undefined),
+  };
+
   return {
-    service: new PaymentService(prisma as unknown as PrismaService, wechatPay as unknown as WechatPayService),
+    service: new PaymentService(
+      prisma as unknown as PrismaService,
+      wechatPay as unknown as WechatPayService,
+      redis as unknown as RedisService,
+    ),
     prisma,
     tx,
     wechatPay,
+    redis,
   };
 };
 
 const createOrder = (harness: Harness): ReturnType<PaymentService['createOrder']> =>
-  harness.service.createOrder({ userId: 'user-1', productId: 'product-1' });
+  harness.service.createOrder({ userId: 'user-1', productId: 'product-1', idempotencyKey: 'idem-key-12345678' });
 
 describe('PaymentService.createOrder —— INIT 支付单', () => {
   it('【关键】下单时创建 status=INIT 的支付单（此前 payments 表一行都不写）', async () => {
@@ -147,5 +162,101 @@ describe('PaymentService.createOrder —— INIT 支付单', () => {
     harness.prisma.payment.update.mockRejectedValue(new Error('db down'));
 
     await expect(createOrder(harness)).resolves.toMatchObject({ orderNo: 'SM20261013000000ABCD' });
+  });
+});
+
+/**
+ * 下单幂等（契约 §2.9.2）
+ *
+ * ## 守的是什么
+ *
+ * 契约把 `POST /payment/orders` 列为必须携带 `X-Idempotency-Key` 的接口，
+ * 小程序也确实在发这个头（`frontend/miniapp/src/api/order.ts`）——
+ * 但服务端此前**根本不读它**，于是文档承诺的 `10009` 永远不会出现，
+ * 而「网络超时后重试」会实打实地建出第二张订单、占两次库存与配额。
+ *
+ * ## 为什么重放要在业务校验之前
+ *
+ * 重放若走完整流程，商品在这期间下架就会让第二次请求拿到 `70001`，
+ * 而用户本该看到第一次的成功响应。顺序错了，幂等就只在「什么都没变」时成立。
+ */
+describe('PaymentService.createOrder —— 下单幂等', () => {
+  const REPLAY_VIEW = {
+    orderId: 'order-9',
+    orderNo: 'SM20261013000000ZZZZ',
+    amount: 3900,
+    currency: 'CNY',
+    expiresAt: '2026-10-13T12:30:00.000Z',
+    payment: { timeStamp: '1', nonceStr: 'n', package: 'prepay_id=z', signType: 'RSA', paySign: 's' },
+  };
+
+  it('首次下单后把整份响应写入幂等键，TTL 与订单有效期一致', async () => {
+    const harness = createHarness();
+
+    const view = await createOrder(harness);
+
+    expect(harness.redis.setJson).toHaveBeenCalledTimes(1);
+
+    const [key, cached, ttl] = harness.redis.setJson.mock.calls[0] as [string, unknown, number];
+
+    // 键里必须带 userId：两个用户偶然用了同一个幂等键不能互相顶掉重放结果
+    expect(key).toContain('user-1');
+    expect(cached).toEqual(view);
+    // 30 分钟 = 订单有效期：订单过期后重放应当建新单，否则用户永远付不了款
+    expect(ttl).toBe(ORDER_IDEMPOTENCY_TTL_SECONDS);
+    expect(ttl).toBe(30 * 60);
+  });
+
+  it('【关键】同一幂等键重放：原样返回首次响应，且不再建单、不再请求微信', async () => {
+    const harness = createHarness();
+    harness.redis.getJson.mockResolvedValue(REPLAY_VIEW);
+
+    const view = await createOrder(harness);
+
+    expect(view).toEqual(REPLAY_VIEW);
+    // 这两条才是"不产生第二张订单"的实证：没有事务、没有预支付调用
+    expect(harness.prisma.$transaction).not.toHaveBeenCalled();
+    expect(harness.wechatPay.createJsapiPrepay).not.toHaveBeenCalled();
+    // 重放不应覆盖首次的缓存值（否则 TTL 被反复续期，死单会一直活着）
+    expect(harness.redis.setJson).not.toHaveBeenCalled();
+  });
+
+  it('【关键】重放短路在任何业务校验之前 —— 商品已下架也照样返回首次成功响应', async () => {
+    const harness = createHarness();
+    harness.redis.getJson.mockResolvedValue(REPLAY_VIEW);
+    harness.prisma.product.findFirst.mockResolvedValue({ ...PRODUCT, status: 'OFF_SHELF' });
+
+    await expect(createOrder(harness)).resolves.toEqual(REPLAY_VIEW);
+    // 商品表根本不该被查
+    expect(harness.prisma.product.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('Redis 故障时降级为新建订单（资金链路不能因为缓存不可用而下不了单）', async () => {
+    const harness = createHarness();
+    harness.redis.getJson.mockRejectedValue(new Error('redis down'));
+
+    await expect(createOrder(harness)).resolves.toMatchObject({ orderNo: 'SM20261013000000ABCD' });
+    expect(harness.prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('写入幂等键失败只记日志，不让下单失败（订单已落库，缓存写失败是次要故障）', async () => {
+    const harness = createHarness();
+    harness.redis.setJson.mockRejectedValue(new Error('redis down'));
+
+    await expect(createOrder(harness)).resolves.toMatchObject({ orderNo: 'SM20261013000000ABCD' });
+  });
+
+  it('不同用户用同一个幂等键 → 落到不同的 Redis 键（不会互相顶掉）', async () => {
+    const harness = createHarness();
+
+    await harness.service.createOrder({ userId: 'user-1', productId: 'product-1', idempotencyKey: 'same-key-1234' });
+    await harness.service.createOrder({ userId: 'user-2', productId: 'product-1', idempotencyKey: 'same-key-1234' });
+
+    const firstKey = (harness.redis.key.mock.calls[0] as string[]).join(':');
+    const secondKey = (harness.redis.key.mock.calls[1] as string[]).join(':');
+
+    expect(firstKey).not.toBe(secondKey);
+    // 客户端键原样出现在键里会让可控字符串进入 Redis 键空间 —— 必须是摘要
+    expect(JSON.stringify(harness.redis.key.mock.calls)).not.toContain('same-key-1234');
   });
 });

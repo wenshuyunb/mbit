@@ -17,8 +17,16 @@
  */
 
 import { RequestMethod } from '@nestjs/common';
-import { GUARDS_METADATA, HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import {
+  GUARDS_METADATA,
+  HTTP_CODE_METADATA,
+  METHOD_METADATA,
+  PATH_METADATA,
+  ROUTE_ARGS_METADATA,
+} from '@nestjs/common/constants';
 
+import { BusinessException } from '../../common/errors/business.exception';
+import { ErrorCode } from '../../common/errors/error-code';
 import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
 import { IDEMPOTENCY_KEY_HEADER } from '../../common/decorators/idempotency-key.decorator';
 import { AdminAuthGuard } from '../admin/auth/admin-auth.guard';
@@ -29,6 +37,7 @@ import { ConfirmPasswordGuard } from '../admin/rbac/guards/confirm-password.guar
 import { RolesGuard } from '../admin/rbac/guards/roles.guard';
 import { AdminOrderRefundController } from './admin-order-refund.controller';
 import { OrdersController } from './orders.controller';
+import { PaymentController } from './payment.controller';
 import { RefundsController } from './refunds.controller';
 
 /** 控制器类（只取 `prototype`，避免把类本身当成元数据目标而读到 undefined） */
@@ -170,5 +179,58 @@ describe('AdminOrderRefundController 路由契约（§3.14.6.3）', () => {
   it('幂等键与二次确认密码的请求头常量与契约一致', () => {
     expect(IDEMPOTENCY_KEY_HEADER).toBe('x-idempotency-key');
     expect(CONFIRM_PASSWORD_HEADER).toBe('x-confirm-password');
+  });
+});
+
+/** Nest 存在 `ROUTE_ARGS_METADATA` 里的一条参数记录（键是装饰器生成的随机 id） */
+interface RouteArgEntry {
+  readonly index: number;
+  readonly factory: (data: unknown, context: unknown) => unknown;
+}
+
+/**
+ * 取控制器某个方法的参数元数据
+ *
+ * ⚠ 必须用**控制器类本身**作元数据目标，而不是原型方法：
+ * `createParamDecorator` 内部写的是 `Reflect.defineMetadata(META, ..., target.constructor, key)`
+ * （见 `@nestjs/common/decorators/http/create-route-param-metadata.decorator.js`）——
+ * 用 `handlerOf()` 取到的方法函数去读会永远拿到空对象，测试会静默变成"什么都没校验"。
+ */
+const routeArgsOf = (controller: ControllerClass, method: string): Record<string, RouteArgEntry> =>
+  (Reflect.getMetadata(ROUTE_ARGS_METADATA, controller, method) as Record<string, RouteArgEntry> | undefined) ?? {};
+
+/**
+ * 下单接口的幂等键（契约 §2.9.2）
+ *
+ * ## 为什么必须在这里测
+ *
+ * 契约把 `POST /payment/orders` 列为"必须携带 `X-Idempotency-Key`"的接口，
+ * 缺失应返回 `10009`；而**服务层完全测不到这件事** —— 服务只知道"有个字符串
+ * 传进来了"。装饰器一旦被删掉，所有单测照旧全绿，线上却退化成
+ * 「客户端以为服务端会拦重复下单，实际每次都新建订单」。
+ *
+ * 因此这里不只断言"存在某个参数"，而是**真的把参数装饰器的工厂函数调起来**：
+ * 请求头为空时必须抛出 `10009`。断言的是行为，不是元数据的形状。
+ */
+describe('PaymentController 下单幂等（§2.9.2）', () => {
+  it('【关键】POST /payment/orders 的幂等键参数必填：缺头即 10009，而不是被静默忽略', () => {
+    const context = {
+      switchToHttp: () => ({ getRequest: () => ({ headers: {}, user: { userId: 'user-1' } }) }),
+    };
+
+    const thrownCodes = Object.values(routeArgsOf(PaymentController, 'createOrder'))
+      .map((entry) => {
+        try {
+          entry.factory(undefined, context);
+
+          return null;
+        } catch (error) {
+          // 非业务异常单独标记，避免把"工厂本身炸了"误当成"幂等校验生效"
+          return error instanceof BusinessException ? error.code : -1;
+        }
+      })
+      .filter((code): code is number => code !== null);
+
+    expect(thrownCodes).toContain(ErrorCode.IDEMPOTENCY_KEY_MISSING);
   });
 });

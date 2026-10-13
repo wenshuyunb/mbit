@@ -18,6 +18,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { RedisService } from '../../infra/redis/redis.service';
 // ⚠ `WechatPayService` 必须用**普通 import**，只有请求头类型可用 `import type`：
 // Nest 的构造参数注入依赖 `design:paramtypes` 元数据里的**运行时类引用**，
 // `import type` 会被编译期擦除，元数据退化成 `Function`，启动时报
@@ -27,12 +28,15 @@ import { WechatPayService } from '../../infra/wechat/wechat-pay.service';
 import type { WechatPayCallbackHeaders } from '../../infra/wechat/wechat-pay.service';
 
 import {
+  buildOrderIdempotencyDigest,
   buildProductSnapshot,
   generateOrderIdempotencyKey,
   generateOrderNo,
   isValidPayAmount,
   normalizeClientIp,
   orderExpiresAt,
+  ORDER_IDEMPOTENCY_PREFIX,
+  ORDER_IDEMPOTENCY_TTL_SECONDS,
 } from './order.util';
 import {
   decideFulfillment,
@@ -77,6 +81,13 @@ export interface OrderCreatedView {
 export interface CreateOrderInput {
   readonly userId: string;
   readonly productId: string;
+  /**
+   * 客户端幂等键（`X-Idempotency-Key`，必填）
+   *
+   * 必填而非可选：契约 §2.9.2 把它列为必须携带幂等键的写接口之一，
+   * 而「可选」在实践中等于「没人传」，重复下单的窗口就一直敞着。
+   */
+  readonly idempotencyKey: string;
   /** 相关资源（购买单份报告 / 匹配报告时提供） */
   readonly reportId?: string;
   readonly relationshipId?: string;
@@ -120,6 +131,7 @@ export class PaymentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly wechatPay: WechatPayService,
+    private readonly redis: RedisService,
   ) {}
 
   /**
@@ -133,6 +145,26 @@ export class PaymentService {
    */
   async createOrder(input: CreateOrderInput): Promise<OrderCreatedView> {
     const now = new Date();
+
+    /**
+     * 幂等重放必须放在**任何业务校验之前**
+     *
+     * 否则重放会重新走一遍商品校验：商品恰好在这期间下架，第二次请求就会拿到
+     * `70001 PRODUCT_OFF_SHELF`，而用户本该看到第一次的成功响应与支付参数。
+     * 同一理由见 `data-export.service.ts` 的判定顺序注释。
+     */
+    const idempotencyRedisKey = this.redis.key(
+      ORDER_IDEMPOTENCY_PREFIX,
+      input.userId,
+      buildOrderIdempotencyDigest(input.userId, input.idempotencyKey),
+    );
+
+    const replayed = await this.readIdempotentOrder(idempotencyRedisKey);
+    if (replayed !== null) {
+      this.logger.log(`下单幂等命中，返回首次响应 orderNo=${replayed.orderNo} userId=${input.userId}`);
+
+      return replayed;
+    }
 
     const product = await this.prisma.product.findFirst({
       where: { id: input.productId, deletedAt: null },
@@ -231,7 +263,7 @@ export class PaymentService {
     // 预支付单号回填：出问题时运维能拿它直接去微信侧查这笔单，而不是只能凭 out_trade_no 猜
     await this.attachPrepayId(order.orderNo, payment.prepayId);
 
-    return {
+    const view: OrderCreatedView = {
       orderId: order.id,
       orderNo: order.orderNo,
       amount: order.totalAmount,
@@ -240,6 +272,39 @@ export class PaymentService {
       payment: payment.params,
       ...(payment.reason !== undefined ? { paymentUnavailableReason: payment.reason } : {}),
     };
+
+    // 首次响应整份缓存：重放必须**逐字段一致**，否则客户端拿到的支付参数会变
+    await this.saveIdempotentOrder(idempotencyRedisKey, view);
+
+    return view;
+  }
+
+  /**
+   * 读取幂等重放结果
+   *
+   * **Redis 故障一律降级为「未命中」**：下单是资金主链路，缓存不可用不该让用户
+   * 下不了单。代价是极端情况下可能重复下单 —— 但那个代价（一张未支付的订单）远小于
+   * 「支付功能整体不可用」。
+   */
+  private async readIdempotentOrder(key: string): Promise<OrderCreatedView | null> {
+    try {
+      return await this.redis.getJson<OrderCreatedView>(key);
+    } catch (error) {
+      this.logger.warn(
+        `读取下单幂等键失败（降级为新建订单）: ${error instanceof Error ? error.message : String(error)}`,
+      );
+
+      return null;
+    }
+  }
+
+  /** 保存首次下单响应；失败**只记日志** —— 订单已落库，缓存写入失败不该让下单失败 */
+  private async saveIdempotentOrder(key: string, view: OrderCreatedView): Promise<void> {
+    try {
+      await this.redis.setJson(key, view, ORDER_IDEMPOTENCY_TTL_SECONDS);
+    } catch (error) {
+      this.logger.warn(`写入下单幂等键失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**

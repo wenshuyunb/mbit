@@ -17,7 +17,7 @@ import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/commo
 import { ApiExcludeEndpoint, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 
-import { CurrentUser, Public, RawResponse } from '../../common/decorators';
+import { CurrentUser, IdempotencyKey, Public, RawResponse } from '../../common/decorators';
 import { CreateOrderDto } from './payment.dto';
 import type { RequestWithContext } from '../../common/types/request.type';
 import { PaymentService, type OrderCreatedView } from './payment.service';
@@ -54,20 +54,27 @@ export class PaymentController {
       '（订单已创建，可稍后重试拉起支付）—— 微信侧抖动不该让用户「什么都没发生」。',
       '',
       '订单 30 分钟未支付将关单。',
+      '',
+      '**幂等（契约 §2.9.2）**：必须携带 `X-Idempotency-Key`（8–64 位字母/数字/`_`/`-`），',
+      '缺失返回 `10009`、格式非法返回 `10001`。同一用户 + 同一幂等键在 **30 分钟内**重放，',
+      '会原样返回首次的下单响应（同一 `orderNo`、同一份支付参数），**不会产生第二张订单**；',
+      '订单过期后重放则建新单 —— 否则用户会永远卡在一张付不了款的过期订单上。',
     ].join('\n'),
   })
   @ApiResponse({ status: 201, description: '订单已创建，返回订单号、金额与支付参数' })
-  @ApiResponse({ status: 400, description: '参数不合法（`10001`）' })
+  @ApiResponse({ status: 400, description: '参数不合法（`10001`）；缺少幂等键（`10009`）' })
   @ApiResponse({ status: 404, description: '商品不存在（`70000`）' })
   @ApiResponse({ status: 409, description: '商品已下架（`70001`）' })
   async createOrder(
     @CurrentUser('userId') userId: string,
     @Body() dto: CreateOrderDto,
+    @IdempotencyKey() idempotencyKey: string,
     @Req() request: RequestWithContext,
   ): Promise<OrderCreatedView> {
     return this.payment.createOrder({
       userId,
       productId: dto.productId,
+      idempotencyKey,
       ...(dto.reportId !== undefined ? { reportId: dto.reportId } : {}),
       ...(dto.relationshipId !== undefined ? { relationshipId: dto.relationshipId } : {}),
       ...(request.ip !== undefined ? { clientIp: request.ip } : {}),

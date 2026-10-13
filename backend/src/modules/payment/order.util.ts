@@ -4,7 +4,7 @@
  * 契约 §3.7；架构 §13.3。
  */
 
-import { randomBytes, randomInt } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 
 /** 订单号前缀（商户自定义，微信要求 6–32 位字母数字与 `_-|*`） */
 const ORDER_NO_PREFIX = 'SM';
@@ -113,5 +113,35 @@ export const buildProductSnapshot = (product: ProductSnapshotInput, now: Date): 
   snapshotAt: now.toISOString(),
 });
 
-/** 幂等键的随机部分（客户端未传时服务端生成，避免"同一用户短时间重复下单"） */
+/** 幂等键的随机部分（写入 `orders.idempotency_key`，供微信侧下单幂等使用） */
 export const generateOrderIdempotencyKey = (): string => randomBytes(12).toString('hex');
+
+// ============================================================================
+// 下单幂等（契约 §2.9.2 —— `POST /payment/orders` 必须携带 X-Idempotency-Key）
+// ============================================================================
+
+/** 下单幂等键在 Redis 中的前缀 */
+export const ORDER_IDEMPOTENCY_PREFIX = 'idem:payment:order';
+
+/**
+ * 幂等重放窗口（秒）—— **刻意与订单有效期相等**
+ *
+ * 不做成"永久重放"：订单 30 分钟后失效，此后客户端拿同一个
+ * `X-Idempotency-Key` 重试时**应当拿到一张新订单**。否则用户会永久卡在
+ * 一张付不了款的过期订单上 —— 每次重试都只把那张死单还给他。
+ */
+export const ORDER_IDEMPOTENCY_TTL_SECONDS = ORDER_TTL_MINUTES * 60;
+
+/**
+ * 构造下单幂等键的摘要部分
+ *
+ * 客户端传来的键是**可控字符串**，原样拼进 Redis 键空间不合适
+ * （与 `data-export.service.ts` 的处理一致）；摘要里再带上 `userId`，
+ * 避免两个用户偶然用了同一个键（如前端写死的常量）而互相顶掉重放结果。
+ *
+ * 为什么不复用 `orders.idempotency_key` 列：该列是 `VarChar(64)` **全局唯一**，
+ * 且当前承载的是服务端随机生成的微信下单幂等值。把客户端键写进去会同时踩到
+ * 「跨用户撞键」与「超列长度」两个坑（同款推理见 `refund.util.ts`）。
+ */
+export const buildOrderIdempotencyDigest = (userId: string, clientKey: string): string =>
+  createHash('sha256').update(`${userId}:${clientKey}`).digest('hex').slice(0, 32);
