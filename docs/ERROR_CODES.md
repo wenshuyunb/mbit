@@ -133,7 +133,6 @@
 | `AI_CONTENT_BLOCKED` | 50005 | 400 | 内容包含不适宜的信息，请调整后重试 |
 | `AI_QUOTA_EXCEEDED` | 50006 | 403 | AI 使用次数已用完，可升级会员继续使用 |
 | `AI_COST_BUDGET_EXCEEDED` | 50007 | 503 | 今日 AI 服务已达上限，请明日再试 |
-| `AI_CONVERSATION_NOT_FOUND` | 50008 | 404 | 对话不存在 |
 | `AI_CONVERSATION_NOT_OWNED` | 50009 | 403 | 无权访问该对话 |
 | `AI_CONVERSATION_CLOSED` | 50010 | 409 | 该对话已结束 |
 | `AI_PROMPT_TEMPLATE_NOT_FOUND` | 50011 | 500 | 提示词模板不存在 |
@@ -147,6 +146,7 @@
 | `AI_REPORT_NOT_UNLOCKED` | 50019 | 403 | 该报告尚未解锁 |
 | `AI_REPORT_REGENERATE_FORBIDDEN` | 50020 | 403 | 当前权益不支持重新生成报告 |
 | `AI_REQUEST_REJECTED` | 50021 | 400 | AI 请求参数不被接受，请联系客服 |
+| `AI_CONVERSATION_NOT_FOUND` | 50022 | 404 | 对话不存在 |
 
 ## 7. 关系与匹配（60000–60999）
 

@@ -144,6 +144,16 @@ describe('requireOwnedConversation / requireOwnedConversationForRead — IDOR �
     });
   });
 
+  it('【关键】"对话不存在"的码必须与危险内容拦截的 50008 区分开', async () => {
+    // `50008` 是契约 §3.7.5 的**特殊约定**：危险内容命中时 HTTP 200 + code=50008，
+    // 前端据此把关怀文案当**正常消息**渲染（不弹错误 Toast）。而本错误码原先也是 50008，
+    // 于是"会话不存在"这条 404 会被只按 code 分支的前端渲染成关怀文案 ——
+    // 用户既看不到真实原因，也拿不到任何提示。
+    // 现已迁到空闲的 50022。这条断言防止它被改回去。
+    expect(ErrorCode.AI_CONVERSATION_NOT_FOUND).toBe(50022);
+    expect(ErrorCode.AI_CONVERSATION_NOT_FOUND).not.toBe(50008);
+  });
+
   it('已软删除的会话视同不存在', async () => {
     const h = createHarness();
     h.prisma.aiConversation.findUnique.mockResolvedValue(conversationRow({ status: 'DELETED', deletedAt: NOW }));

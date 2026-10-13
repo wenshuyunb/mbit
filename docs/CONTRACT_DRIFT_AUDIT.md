@@ -53,10 +53,15 @@
    > **仍未做的更彻底修法**：让 `orderExpiresAt` 直接读 `payment.orderExpireMinutes`
    > （与 `/system/config` 同源）。否则运营把配置改成 45 分钟后行为仍停在常量上，同类不一致会再次出现。
 
-2. **错误码 `50008` 一码两义**。契约 §3.7.5 用它表示"危险内容拦截（HTTP 200 + 关怀文案）"，
-   而 `error-code.ts` 的 `50008 = AI_CONVERSATION_NOT_FOUND`（会话不存在，404）。
-   `chat.controller.ts` 两处都在用同一个数字。只按 `code` 分支的前端会把"会话不存在"渲染成关怀文案。
-   HTTP 状态不同（200 vs 404）因此可区分，但**同一数字两种语义**本身就是隐患。
+2. ✅ **已修（2026-10-13）：错误码 `50008` 一码两义（危险内容拦截 vs 对话不存在）**。
+   `50008` 是契约 §3.7.5 的**特殊约定**：危险内容命中时 HTTP 200 + `code = 50008`，
+   前端据此把关怀文案当**正常消息**渲染（不弹错误 Toast）；而 `AI_CONVERSATION_NOT_FOUND`
+   原先也是 `50008` —— 只按 `code` 分支的前端会把"会话不存在"这条 404 渲染成关怀文案，
+   用户既看不到真实原因、也拿不到提示。
+   复核还发现**契约给"对话不存在"分配的是 `50003`**，而实现里 `50003 = AI_PROVIDER_AUTH_FAILED`
+   —— 两边都撞码。最终取空闲的 **`50022`**（`50000`–`50021` 已占用），
+   同步更新 `error-code.ts` 的 HTTP 状态表与文案表、重新生成 `docs/ERROR_CODES.md`
+   （CI 校验一致性）、契约 §2.4.5 与附录两处表格，并加一条断言防止改回 `50008`。
 
 3. **`GET /relationships/{id}/compatibility` 无报告时返回 `data: null`**，
    而契约明确要求 `200 + hasReport: false`。按文档写 `if (!res.data.hasReport)` 的前端会 `TypeError`。
