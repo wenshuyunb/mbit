@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 
 import { QueueModule } from '../../infra/queue/queue.module';
+import { WechatModule } from '../../infra/wechat/wechat.module';
 import { AiModule } from '../ai/ai.module';
 import { MembershipModule } from '../membership/membership.module';
+import { StorageModule } from '../storage/storage.module';
 import { CompatibilityReportController } from './compatibility-report.controller';
 import { CompatibilityService } from './compatibility.service';
 import { RelationshipController } from './relationship.controller';
@@ -37,7 +39,7 @@ import { RelationshipService } from './relationship.service';
  * 因此无循环依赖。
  */
 @Module({
-  imports: [QueueModule, AiModule, MembershipModule],
+  imports: [QueueModule, AiModule, MembershipModule, WechatModule, StorageModule],
   controllers: [RelationshipController, CompatibilityReportController],
   providers: [RelationshipService, CompatibilityService],
   exports: [RelationshipService, CompatibilityService],

@@ -29,6 +29,8 @@ import { isUniqueConstraintError } from '../../common/utils/prisma-error.util';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { QUEUE_COMPATIBILITY_CALC } from '../../infra/queue/queue.module';
 import { RedisService } from '../../infra/redis/redis.service';
+import { WechatService } from '../../infra/wechat/wechat.service';
+import { StorageService } from '../storage/storage.service';
 // 用普通 import 而非 `import type`：Nest 的构造参数注入依赖 `design:paramtypes`
 // 元数据里的**运行时类引用**，`import type` 会被编译期擦除，注入会静默失败。
 // 依赖方向是单向的（`relationship.service` → `compatibility.service`），无循环。
@@ -219,6 +221,14 @@ const RELATIONSHIP_DISCLAIMER = '匹配结果基于 MBTI 与大五人格的理�
 /** 邀请有效期（天）—— 契约 §3.6.1：7 天 */
 const INVITE_TTL_DAYS = 7;
 
+/**
+ * 小程序码要打开的目标页（含**分包前缀**）
+ *
+ * 必须与 `frontend/miniapp/src/pages.json` 里的一致：该页在 `pkgMatch` 分包下，
+ * 路径写成 `pages/invite` 会被微信侧判为页面不存在。改前端路由时这里要同步改。
+ */
+const INVITE_PAGE_PATH = 'pkgMatch/pages/invite';
+
 /** 邀请码 Redis 缓存前缀 */
 const INVITE_CODE_CACHE_PREFIX = 'invite:code';
 
@@ -352,7 +362,54 @@ export class RelationshipService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly compatibility: CompatibilityService,
+    private readonly wechat: WechatService,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * 生成邀请的小程序码并落库（**失败不影响邀请**）
+   *
+   * ## 为什么需要它
+   *
+   * `relationship_invites.qrCodeUrl` 这一列此前**只有读、没有写** ——
+   * 接口始终返回 `null`，而契约 §3.6.1 把它列为邀请响应的一部分（"扫码即可加入"）。
+   * 也就是说「扫码邀请」这条路一直是断的，只能靠分享文案/链接。
+   *
+   * ## 为什么"生成了就存、存不了就算了"
+   *
+   * 邀请本身靠 `code` 就能完成（对方输入邀请码或点链接）。二维码是**体验增强**，
+   * 微信侧抖动、OSS 未配置、页面尚未发布（`check_path`）都不该让邀请失败 ——
+   * 那会把可选能力变成整条链路的单点。失败时返回 `null`，前端不渲染二维码位。
+   *
+   * 返回值为最终写入库里的 URL（失败即 `null`），调用方直接用它构响应，
+   * 避免"先写库再读回来"这种多一次查询的写法。
+   */
+  private async attachInviteQrCode(inviteId: string, code: string): Promise<string | null> {
+    try {
+      const image = await this.wechat.getMiniAppCode({
+        scene: code,
+        // 分包页路径必须带分包前缀（`pkgMatch`），否则微信侧校验不通过
+        page: INVITE_PAGE_PATH,
+        width: 430,
+      });
+
+      if (image === null) return null;
+
+      const objectKey = `invite/qr/${code}.png`;
+      await this.storage.uploadServerObject({ objectKey, body: image, contentType: 'image/png' });
+
+      const url = this.storage.publicUrlOf(objectKey);
+      await this.prisma.relationshipInvite.update({ where: { id: inviteId }, data: { qrCodeUrl: url } });
+
+      return url;
+    } catch (error) {
+      this.logger.warn(
+        `邀请二维码生成失败（邀请本身不受影响）code=${code}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+
+      return null;
+    }
+  }
 
   /**
    * 创建邀请（契约 §3.6.1）
@@ -405,13 +462,16 @@ export class RelationshipService {
 
         this.logger.log(`邀请已创建 inviteId=${invite.id} inviter=${input.userId} type=${input.relationType}`);
 
+        // 小程序码是**增强能力**：生成失败不影响邀请（邀请码与分享文案已经可用）
+        const qrCodeUrl = await this.attachInviteQrCode(invite.id, invite.code);
+
         return {
           inviteId: invite.id,
           code: invite.code,
           relationType: invite.relationType,
           status: invite.status,
           expiresAt: invite.expiresAt.toISOString(),
-          qrCodeUrl: invite.qrCodeUrl,
+          qrCodeUrl,
         };
       } catch (error) {
         if (isUniqueConstraintError(error)) {

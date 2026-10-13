@@ -44,6 +44,9 @@ interface Harness {
     $transaction: jest.Mock;
   };
   redis: { key: jest.Mock; set: jest.Mock };
+  /** 小程序码：`getMiniAppCode` 返回 `null` 表示"生成不了"（未配置凭证/微信报错） */
+  wechat: { getMiniAppCode: jest.Mock };
+  storage: { uploadServerObject: jest.Mock; publicUrlOf: jest.Mock };
   tx: {
     relationship: { create: jest.Mock };
     relationshipInvite: { update: jest.Mock };
@@ -91,6 +94,17 @@ const createHarness = (): Harness => {
     set: jest.fn().mockResolvedValue(undefined),
   };
 
+  /**
+   * 邀请二维码是**增强能力**：默认"未配置微信凭证"（`getMiniAppCode` 返回 null），
+   * 因此默认路径下邀请照常成功、`qrCodeUrl` 为 null。二维码相关行为由
+   * `createInvite 的小程序码` 那组用例覆盖（它们会改写这两个桩的返回值）。
+   */
+  const wechat = { getMiniAppCode: jest.fn().mockResolvedValue(null) };
+  const storage = {
+    uploadServerObject: jest.fn().mockResolvedValue(undefined),
+    publicUrlOf: jest.fn((key: string) => `https://cdn.example.com/${key}`),
+  };
+
   const service = new RelationshipService(
     prisma as unknown as PrismaService,
     redis as unknown as RedisService,
@@ -99,9 +113,11 @@ const createHarness = (): Harness => {
     {
       requestCompatibility: jest.fn().mockResolvedValue({ reportId: 'report-1', queue: 'compatibility.calc' }),
     } as never,
+    wechat as never,
+    storage as never,
   );
 
-  return { service, prisma, redis, tx };
+  return { service, prisma, redis, tx, wechat, storage };
 };
 
 /** 构造 Prisma 唯一约束错误 */
@@ -128,6 +144,70 @@ describe('RelationshipService.createInvite', () => {
 
     expect(createdCode).toHaveLength(8);
     expect(harness.redis.set).toHaveBeenCalledWith(expect.stringContaining(createdCode), INVITE_ID, expect.any(Number));
+  });
+
+  /**
+   * 邀请的小程序码（契约 §3.6.1 的 `qrCodeUrl`）
+   *
+   * 这一列此前**只有读没有写**：接口始终返回 `null`，「扫码邀请」这条路一直是断的。
+   * 现在创建邀请时会生成小程序码并上传 OSS。
+   *
+   * 三条断言分别守：成功时确实写回 URL、失败时降级为空**且邀请仍然成功**、
+   * 上传失败同样降级 —— 二维码是体验增强，不能成为邀请链路的单点。
+   */
+  describe('小程序码', () => {
+    it('【关键】生成成功时上传 OSS 并把 URL 写回邀请行', async () => {
+      const harness = createHarness();
+      harness.wechat.getMiniAppCode.mockResolvedValue(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+      const view = await harness.service.createInvite(createInput());
+
+      // 服务端拿**落库返回行**的 code 作为 scene（本地生成的那个变量只用于写库前）；
+      // 替身返回的是固定行 `CODE`，因此这里对准它。
+      // 生产环境两者必然相同（DB 返回的就是刚写进去的那一行）。
+      const code = CODE;
+
+      expect(harness.wechat.getMiniAppCode).toHaveBeenCalledWith({
+        scene: code,
+        // 分包前缀不能少：写成 `pages/invite` 会被微信判为页面不存在
+        page: 'pkgMatch/pages/invite',
+        width: 430,
+      });
+      expect(harness.storage.uploadServerObject).toHaveBeenCalledWith({
+        objectKey: `invite/qr/${code}.png`,
+        body: expect.any(Buffer),
+        contentType: 'image/png',
+      });
+      expect(harness.prisma.relationshipInvite.update).toHaveBeenCalledWith({
+        where: { id: INVITE_ID },
+        data: { qrCodeUrl: `https://cdn.example.com/invite/qr/${code}.png` },
+      });
+      // 响应直接用写入的值，不需要再读一次库
+      expect(view.qrCodeUrl).toBe(`https://cdn.example.com/invite/qr/${code}.png`);
+    });
+
+    it('【关键】码生成失败时邀请**照常成功**，只是 qrCodeUrl 为空', async () => {
+      const harness = createHarness();
+      harness.wechat.getMiniAppCode.mockResolvedValue(null);
+
+      const view = await harness.service.createInvite(createInput());
+
+      expect(view.qrCodeUrl).toBeNull();
+      expect(view.code).toHaveLength(8);
+      expect(harness.storage.uploadServerObject).not.toHaveBeenCalled();
+      expect(harness.prisma.relationshipInvite.update).not.toHaveBeenCalled();
+    });
+
+    it('上传/写库抛错时同样降级（二维码不能拖垮邀请）', async () => {
+      const harness = createHarness();
+      harness.wechat.getMiniAppCode.mockResolvedValue(Buffer.from([0x89, 0x50]));
+      harness.storage.uploadServerObject.mockRejectedValue(new Error('oss down'));
+
+      const view = await harness.service.createInvite(createInput());
+
+      expect(view.qrCodeUrl).toBeNull();
+      expect(view.code).toHaveLength(8);
+    });
   });
 
   it('有效期设为 7 天', async () => {

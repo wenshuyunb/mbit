@@ -139,6 +139,9 @@ const createHarness = (relationshipOverrides: Record<string, unknown> = {}): Har
         .fn()
         .mockResolvedValue({ reportId: 'report-1', queue: 'compatibility.calc', estimatedSeconds: 5 }),
     } as never,
+    // 本文件只测状态机，不涉及二维码：桩成"未配置凭证"的形态
+    { getMiniAppCode: jest.fn().mockResolvedValue(null) } as never,
+    { uploadServerObject: jest.fn(), publicUrlOf: jest.fn(() => 'https://cdn.example.com/x.png') } as never,
   );
 
   return { service, prisma };

@@ -231,6 +231,9 @@ const createHarness = (invite: Record<string, unknown> = inviteRow()): Harness =
     prisma as unknown as PrismaService,
     { key: jest.fn(), set: jest.fn() } as unknown as RedisService,
     { requestCompatibility: jest.fn() } as unknown as CompatibilityService,
+    // 本文件只测详情查询，不涉及二维码：桩成"未配置凭证"的形态
+    { getMiniAppCode: jest.fn().mockResolvedValue(null) } as never,
+    { uploadServerObject: jest.fn(), publicUrlOf: jest.fn(() => 'https://cdn.example.com/x.png') } as never,
   );
 
   return { service, prisma };

@@ -106,6 +106,7 @@ const CODE2SESSION_URL = 'https://api.weixin.qq.com/sns/jscode2session';
 const ACCESS_TOKEN_URL = 'https://api.weixin.qq.com/cgi-bin/token';
 const MSG_SEC_CHECK_URL = 'https://api.weixin.qq.com/wxa/msg_sec_check';
 const PHONE_NUMBER_URL = 'https://api.weixin.qq.com/wxa/business/getuserphonenumber';
+const MINI_APP_CODE_URL = 'https://api.weixin.qq.com/wxa/getwxacodeunlimit';
 
 /**
  * 需要用户**重新授权**才能恢复的错误码
@@ -381,6 +382,100 @@ export class WechatService {
           : info.phoneNumber,
       countryCode: typeof info.countryCode === 'string' && info.countryCode.length > 0 ? info.countryCode : '86',
     };
+  }
+
+  // ==========================================================================
+  // 小程序码（wxacode.getUnlimited）
+  // ==========================================================================
+
+  /**
+   * 生成小程序码（微信 `wxacode.getUnlimited`）
+   *
+   * ## 为什么失败返回 `null` 而不是抛错
+   *
+   * 调用方都是「有更好、没有也能用」的增强能力：邀请靠邀请码与分享文案就能完成，
+   * 分享卡靠正文与卡片文案也能分享。码生成失败（未配置凭证、微信侧报错、超时）
+   * 不该让**邀请本身**失败 —— 那会把一个可选能力变成整条链路单点。
+   * 因此这里记日志并返回 `null`，调用方把 `qrCodeUrl` 留空、前端不渲染二维码位。
+   *
+   * ## 为什么不能复用 `postJson`
+   *
+   * 该接口**成功时返回图片二进制**，失败时才返回 JSON（`{"errcode":…,"errmsg":…}`），
+   * 且失败响应的 HTTP 状态码仍是 200 —— 直接 `response.json()` 会在成功路径上
+   * 抛解析错误，把一次正常生成变成故障。因此必须按 `Content-Type` 分流。
+   *
+   * @param scene 场景值（**上限 32 字符**，微信侧硬限制；本项目传邀请码/报告短 id）
+   * @param page  目标页面路径（含分包前缀，如 `pkgMatch/pages/invite`）；不传则打开首页
+   */
+  async getMiniAppCode(params: {
+    scene: string;
+    page?: string;
+    /** 二维码边长（px），微信默认 430 */
+    width?: number;
+    /** `false` 时微信不校验 `page` 是否存在（页面尚未发布时联调用） */
+    checkPath?: boolean;
+  }): Promise<Buffer | null> {
+    if (!this.isConfigured()) {
+      this.logger.warn('生成小程序码跳过：未配置微信凭证');
+      return null;
+    }
+
+    const accessToken = await this.getAccessToken();
+    if (accessToken === null) {
+      this.logger.warn('生成小程序码跳过：无法获取 access_token');
+      return null;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await fetch(`${MINI_APP_CODE_URL}?access_token=${encodeURIComponent(accessToken)}`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scene: params.scene,
+          ...(params.page !== undefined ? { page: params.page } : {}),
+          ...(params.width !== undefined ? { width: params.width } : {}),
+          ...(params.checkPath !== undefined ? { check_path: params.checkPath } : {}),
+        }),
+      });
+
+      const contentType = response.headers.get('content-type') ?? '';
+
+      if (contentType.includes('application/json')) {
+        const failure = (await response.json()) as { errcode?: number; errmsg?: string };
+
+        this.logger.error(
+          `生成小程序码失败 errcode=${failure.errcode ?? 'n/a'} errmsg=${failure.errmsg ?? ''} scene=${params.scene}`,
+        );
+        return null;
+      }
+
+      if (!response.ok) {
+        this.logger.error(`生成小程序码失败 HTTP ${response.status} scene=${params.scene}`);
+        return null;
+      }
+
+      const image = Buffer.from(await response.arrayBuffer());
+
+      // 空响应体不能当成"生成成功"：它会被存成一张坏图，前端渲染成空白二维码，
+      // 用户扫不出来却看不出哪里错了 —— 宁可当作失败让调用方降级
+      if (image.length === 0) {
+        this.logger.error(`生成小程序码返回空内容 scene=${params.scene}`);
+        return null;
+      }
+
+      return image;
+    } catch (error) {
+      this.logger.error(
+        `生成小程序码异常 scene=${params.scene}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ==========================================================================
