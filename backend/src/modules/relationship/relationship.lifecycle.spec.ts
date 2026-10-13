@@ -110,6 +110,8 @@ interface Harness {
   prisma: {
     relationship: { findFirst: jest.Mock; update: jest.Mock };
     relationshipInvite: { findFirst: jest.Mock };
+    /** `keepHistory=false` 时用它软删除历史匹配报告 */
+    compatibilityReport: { updateMany: jest.Mock };
   };
 }
 
@@ -127,6 +129,7 @@ const createHarness = (relationshipOverrides: Record<string, unknown> = {}): Har
       update: jest.fn().mockResolvedValue({ id: RELATIONSHIP_ID }),
     },
     relationshipInvite: { findFirst: jest.fn().mockResolvedValue({ inviterId: USER_A }) },
+    compatibilityReport: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
   };
 
   const service = new RelationshipService(
@@ -218,7 +221,7 @@ describe('RelationshipService.removeRelationship', () => {
   it('解除后状态为 REMOVED 并写入原因', async () => {
     const harness = createHarness({ status: 'ACTIVE' });
 
-    const view = await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, '双方协商结束');
+    const view = await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { reason: '双方协商结束' });
 
     expect(view.status).toBe('REMOVED');
     expect(view.unboundAt).not.toBeNull();
@@ -267,7 +270,7 @@ describe('RelationshipService.removeRelationship', () => {
     const firstUnboundAt = new Date('2026-10-01T08:30:00.000Z');
     const harness = createHarness({ status: 'REMOVED', unboundAt: firstUnboundAt });
 
-    const view = await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, '再次解绑');
+    const view = await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { reason: '再次解绑' });
 
     expect(view.status).toBe('REMOVED');
     expect(harness.prisma.relationship.update).not.toHaveBeenCalled();
@@ -287,11 +290,66 @@ describe('RelationshipService.removeRelationship', () => {
   it('原因超长时截断到 256（列长度限制）', async () => {
     const harness = createHarness({ status: 'ACTIVE' });
 
-    await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, 'x'.repeat(400));
+    await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { reason: 'x'.repeat(400) });
 
     const data = harness.prisma.relationship.update.mock.calls[0][0] as {
       data: { unboundReason: string };
     };
     expect(data.data.unboundReason).toHaveLength(256);
+  });
+
+  /**
+   * `keepHistory`（契约 §3.6.7 的隐私开关）
+   *
+   * 这一项此前**收下参数然后完全忽略** —— 用户明确要求"不保留历史"，
+   * 而解除后双方仍能读到全部匹配报告。**收下却做不到，比不声明更糟**：
+   * 用户以为记录已经消失。下面四条守的是"真的做了"以及"做的顺序对"。
+   */
+  describe('keepHistory（历史报告隐私开关）', () => {
+    it('【关键】keepHistory=false 时软删除该关系的全部历史匹配报告', async () => {
+      const harness = createHarness({ status: 'ACTIVE' });
+
+      await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { keepHistory: false });
+
+      expect(harness.prisma.compatibilityReport.updateMany).toHaveBeenCalledWith({
+        where: { relationshipId: RELATIONSHIP_ID, deletedAt: null },
+        // 软删除而非物理删除：所有匹配报告查询都带 `deletedAt: null`，
+        // 因此效果等同"对双方隐藏"，同时保留审计与误操作恢复的余地
+        data: { deletedAt: expect.any(Date) },
+      });
+    });
+
+    it('【关键】先隐藏报告、再改关系状态（顺序反了会留下"已解除但报告还在"且永远补不回来）', async () => {
+      const harness = createHarness({ status: 'ACTIVE' });
+
+      await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { keepHistory: false });
+
+      const hideOrder = harness.prisma.compatibilityReport.updateMany.mock.invocationCallOrder[0];
+      const unbindOrder = harness.prisma.relationship.update.mock.invocationCallOrder[0];
+
+      expect(hideOrder).toBeLessThan(unbindOrder);
+    });
+
+    it('keepHistory 未传或为 true 时**不动**历史报告（默认保留）', async () => {
+      const withoutFlag = createHarness({ status: 'ACTIVE' });
+      await withoutFlag.service.unbindRelationship(USER_A, RELATIONSHIP_ID);
+      expect(withoutFlag.prisma.compatibilityReport.updateMany).not.toHaveBeenCalled();
+
+      const withTrue = createHarness({ status: 'ACTIVE' });
+      await withTrue.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { keepHistory: true });
+      expect(withTrue.prisma.compatibilityReport.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('【关键】关系已是 REMOVED 时传 keepHistory=false 仍会补做隐藏（幂等早返回不吞掉隐私动作）', async () => {
+      const harness = createHarness({ status: 'REMOVED', unboundAt: new Date('2026-10-01T08:30:00.000Z') });
+
+      const view = await harness.service.unbindRelationship(USER_A, RELATIONSHIP_ID, { keepHistory: false });
+
+      expect(view.status).toBe('REMOVED');
+      expect(harness.prisma.compatibilityReport.updateMany).toHaveBeenCalledTimes(1);
+      // 幂等语义保持不变：不覆盖首次解除时间
+      expect(view.unboundAt).toBe('2026-10-01T08:30:00.000Z');
+      expect(harness.prisma.relationship.update).not.toHaveBeenCalled();
+    });
   });
 });

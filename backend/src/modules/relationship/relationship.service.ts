@@ -412,6 +412,25 @@ export class RelationshipService {
   }
 
   /**
+   * 隐藏某段关系的全部历史匹配报告（软删除）
+   *
+   * 用软删除（写 `deletedAt`）而不是物理删除：所有匹配报告的查询都带
+   * `deletedAt: null`（见 `compatibility.service.ts`、本文件的列表查询），
+   * 因此软删除即可满足契约「对双方隐藏」的效果，同时保留审计与误操作恢复的余地 ——
+   * 「用户要求删除」与「数据必须可追溯」在这类合规场景里通常需要同时成立。
+   *
+   * `updateMany` 天然幂等（条件里带 `deletedAt: null`），重复调用只会影响剩余未隐藏的行。
+   */
+  private async hideCompatibilityReports(relationshipId: string): Promise<number> {
+    const result = await this.prisma.compatibilityReport.updateMany({
+      where: { relationshipId, deletedAt: null },
+      data: { deletedAt: new Date() },
+    });
+
+    return result.count;
+  }
+
+  /**
    * 创建邀请（契约 §3.6.1）
    *
    * 邀请码碰撞的处理：`code` 有唯一约束，生成时可能撞上已存在的码。
@@ -990,7 +1009,13 @@ export class RelationshipService {
    * `WHERE status IN ('PENDING_A_CONFIRM','ACTIVE')` 保证 —— 本行进入终态后
    * 不再占用唯一键。此前的墓碑方案与契约冲突且有两个已证实的缺陷。
    */
-  async unbindRelationship(userId: string, relationshipId: string, reason?: string): Promise<RelationshipStateView> {
+  async unbindRelationship(
+    userId: string,
+    relationshipId: string,
+    options: { reason?: string; keepHistory?: boolean } = {},
+  ): Promise<RelationshipStateView> {
+    const { reason, keepHistory } = options;
+
     const relationship = await this.prisma.relationship.findFirst({
       where: { id: relationshipId, deletedAt: null },
       select: { id: true, status: true, userAId: true, userBId: true, unboundAt: true },
@@ -1002,6 +1027,25 @@ export class RelationshipService {
 
     if (relationship.userAId !== userId && relationship.userBId !== userId) {
       throw BusinessException.notFound(ErrorCode.RELATIONSHIP_NOT_FOUND);
+    }
+
+    /**
+     * `keepHistory === false`：把这段关系的历史匹配报告**一并隐藏**（契约 §3.6.7）
+     *
+     * 这是**隐私相关**能力。此前的实现收下这个参数然后完全忽略 —— 用户明确要求
+     * "不保留历史"，而解除后双方仍能读到全部匹配报告。**收下却做不到，比不声明更糟**：
+     * 用户以为记录已经消失。
+     *
+     * 刻意放在**状态变更之前**、且**不受下面幂等早返回影响**：
+     *   · 放在前面 → 若隐藏失败会抛错，此时关系状态还没动，用户可以重试；
+     *     反过来（先改状态再隐藏）一旦隐藏失败，就变成"关系已解除、报告却还在"，
+     *     而重试会命中幂等早返回、永远不会再补做；
+     *   · 不受早返回影响 → 已处于 `REMOVED` 的关系再传 `keepHistory=false` 也能补做隐藏。
+     */
+    if (keepHistory === false) {
+      const hidden = await this.hideCompatibilityReports(relationship.id);
+
+      this.logger.log(`已按用户要求隐藏关系历史报告 relationshipId=${relationship.id} 隐藏 ${hidden} 份`);
     }
 
     // 幂等：已进入任一终态则直接返回现状，不覆盖首次的原因与时间。

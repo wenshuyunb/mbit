@@ -340,8 +340,7 @@ export class RelationshipController {
       '',
       '**天然幂等**：已是 `ACTIVE` 时返回当前状态，不报错、不重复触发算分。',
       '',
-      '匹配报告触发（`autoGenerateReport`）依赖 `compatibility.calc` 队列，尚未接入；',
-      '该参数目前被接受但**不产生副作用**，接入后在此处入队。',
+      '`autoGenerateReport = false` 时不触发匹配算分（契约 §3.6.6 的默认值是 `true`）。',
     ].join('\n'),
   })
   @ApiResponse({ status: 200, description: '确认成功，返回关系状态' })
@@ -352,9 +351,12 @@ export class RelationshipController {
   async confirmRelationship(
     @CurrentUser('userId') userId: string,
     @Param() params: RelationshipIdParamDto,
-    @Body() _dto: ConfirmRelationshipDto,
+    @Body() dto: ConfirmRelationshipDto,
   ): Promise<RelationshipStateView> {
-    return this.relationshipService.confirmRelationship(userId, params.relationshipId);
+    // 必须透传 `autoGenerateReport`：服务层**已经**实现了"false 就不触发算分"，
+    // 但控制器此前把它丢掉、永远走默认值 true —— 用户显式传 false 仍会被触发算分
+    // （契约 §3.6.8 注明重复触发会消耗会员额度），属"接收了却静默忽略"的缺陷。
+    return this.relationshipService.confirmRelationship(userId, params.relationshipId, dto.autoGenerateReport);
   }
 
   @Delete(':relationshipId')
@@ -380,6 +382,10 @@ export class RelationshipController {
     @Param() params: RelationshipIdParamDto,
     @Query() query: RemoveRelationshipQueryDto,
   ): Promise<RelationshipStateView> {
-    return this.relationshipService.unbindRelationship(userId, params.relationshipId, query.reason);
+    return this.relationshipService.unbindRelationship(userId, params.relationshipId, {
+      ...(query.reason !== undefined ? { reason: query.reason } : {}),
+      // 透传 `keepHistory`：此前这里只传 `reason`，于是那个隐私开关**被静默忽略**
+      ...(query.keepHistory !== undefined ? { keepHistory: query.keepHistory } : {}),
+    });
   }
 }

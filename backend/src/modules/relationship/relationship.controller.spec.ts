@@ -432,3 +432,75 @@ describe('createInvite 响应成形', () => {
     expect(new InviteCodeParamDto()).toHaveProperty('code');
   });
 });
+
+/**
+ * 确认关系的**参数透传**（契约 §3.6.6）
+ *
+ * 守的是一个真实发生过的缺陷：服务层**已经**实现了「`autoGenerateReport = false`
+ * 就不触发匹配算分」，但控制器把它丢掉、永远走默认值 `true` ——
+ * 用户显式要求不自动生成，服务端照样入队算分（契约 §3.6.8 注明重复触发会消耗会员额度）。
+ *
+ * 这类"参数在中间某一层被悄悄丢掉"的缺陷，编译器、路由元数据测试、
+ * 甚至服务层自己的单测（直接传参、绕过控制器）**都发现不了**，
+ * 只有断言控制器真实传给 Service 的入参才能守住 —— 与 `removeRelationship`
+ * 丢掉 `keepHistory` 是同一类问题。
+ */
+describe('RelationshipController 参数透传', () => {
+  const build = (): { controller: RelationshipController; calls: unknown[][] } => {
+    const calls: unknown[][] = [];
+    const service = {
+      confirmRelationship: (...args: unknown[]): Promise<unknown> => {
+        calls.push(args);
+        return Promise.resolve({ relationshipId: 'rel-1', status: 'ACTIVE' });
+      },
+      unbindRelationship: (...args: unknown[]): Promise<unknown> => {
+        calls.push(args);
+        return Promise.resolve({ relationshipId: 'rel-1', status: 'REMOVED' });
+      },
+    };
+
+    return {
+      controller: new RelationshipController(
+        service as unknown as RelationshipService,
+        {} as unknown as CompatibilityService,
+      ),
+      calls,
+    };
+  };
+
+  it('【关键】confirmRelationship 透传 autoGenerateReport（false 必须传下去）', async () => {
+    const { controller, calls } = build();
+
+    await controller.confirmRelationship('user-1', { relationshipId: 'rel-1' }, { autoGenerateReport: false });
+
+    expect(calls[0]).toEqual(['user-1', 'rel-1', false]);
+  });
+
+  it('未传 autoGenerateReport 时透传 undefined（由服务层套用契约默认值 true）', async () => {
+    const { controller, calls } = build();
+
+    await controller.confirmRelationship('user-1', { relationshipId: 'rel-1' }, {});
+
+    expect(calls[0]).toEqual(['user-1', 'rel-1', undefined]);
+  });
+
+  it('【关键】removeRelationship 透传 keepHistory（隐私开关不能被中间层吞掉）', async () => {
+    const { controller, calls } = build();
+
+    await controller.removeRelationship(
+      'user-1',
+      { relationshipId: 'rel-1' },
+      { reason: 'PRIVACY', keepHistory: false },
+    );
+
+    expect(calls[0]).toEqual(['user-1', 'rel-1', { reason: 'PRIVACY', keepHistory: false }]);
+  });
+
+  it('removeRelationship 未传可选参数时**不产生该键**（服务层按缺省处理）', async () => {
+    const { controller, calls } = build();
+
+    await controller.removeRelationship('user-1', { relationshipId: 'rel-1' }, {});
+
+    expect(calls[0]).toEqual(['user-1', 'rel-1', {}]);
+  });
+});

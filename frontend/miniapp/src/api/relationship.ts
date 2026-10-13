@@ -276,9 +276,9 @@ export const confirmRelationship = (id: string): Promise<RelationshipState> =>
  * 而请求层对非 GET 请求不会把 `data` 拼进 URL —— 直接传对象会变成 DELETE 的请求体，
  * 后端读不到，于是**返回 200 但 reason 被静默丢弃**。
  *
- * 另外 `keepHistory` 目前是「后端接受但未使用」：DTO 声明了该字段，但
- * `RelationshipController.removeRelationship` 只把 `query.reason` 传给 Service。
- * 这里仍然照传，等后端接上后无需改前端。
+ * 另外 `keepHistory` 已**于后端接通**（原先 DTO 声明了该字段、控制器却只透传 `reason`，
+ * 于是这个隐私开关被静默忽略）：现在传 `false` 会把这段关系的历史匹配报告一并软删除，
+ * 对双方隐藏。前端照传即可。
  */
 export const removeRelationship = (
   id: string,
