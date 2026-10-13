@@ -180,7 +180,7 @@ const BASE_URL_MAP = {
 | `Authorization`     | 需鉴权接口必填 | `Bearer eyJhbGciOiJIUzI1NiIs...`            | 用户 AccessToken（`realm: user`）或管理员 AdminAccessToken（`realm: admin`）。缺失返回 `20000`，过期/无效返回 `20001`/`20002`。     |
 | `Content-Type`      | 有请求体时必填 | `application/json; charset=utf-8`           | 上传类走 OSS 直传，不经后端。非 JSON 且非法 → `10007`。                                                                             |
 | `X-Request-Id`      | 否（推荐）     | `req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5`            | 全链路追踪 ID。缺失时服务端生成 UUIDv7 并回写响应头。格式非法（长度 > 64 或含非法字符）时服务端忽略客户端值并重新生成，**不报错**。 |
-| `X-Idempotency-Key` | 幂等接口必填   | `idem_7f3a91c2-4b8e-4d1f-9a02-6c5e8b7d1f30` | 幂等键，建议 UUIDv4 或 32 位随机串，长度 16–64。缺失 → `10011`。详见 2.9。                                                          |
+| `X-Idempotency-Key` | 幂等接口必填   | `idem_7f3a91c2-4b8e-4d1f-9a02-6c5e8b7d1f30` | 幂等键，建议 UUIDv4 或 32 位随机串。**长度 8–64，字符白名单 `[A-Za-z0-9_-]`**（格式非法 → `10001`）。缺失 → `10009`。详见 2.9。     |
 | `Accept-Language`   | 否             | `zh-CN` / `en-US`                           | 默认 `zh-CN`。影响 `message` 与部分业务文案（免责声明、关怀文案）的语言；不支持的语言回退 `zh-CN`。                                 |
 | `X-Client-Version`  | 否（推荐）     | `1.4.2`                                     | 小程序/Admin 版本号（语义化版本）。用于灰度开关与最低版本强升判断；低于最低支持版本返回 `90013`。                                   |
 | `X-Platform`        | 是（推荐）     | `miniapp` \| `admin`                        | 声明调用端。服务端据此校验 realm 是否匹配（admin 接口必须 `admin`），并写入日志与埋点。缺失时按路由前缀推断。                       |
@@ -839,23 +839,23 @@ Accept-Language: zh-CN
 
 | 接口                                        | 幂等键的业务语义                             | 缺失返回                   |
 | ------------------------------------------- | -------------------------------------------- | -------------------------- |
-| `POST /orders`                              | 同一商品的下单创建                           | `10011`                    |
-| `POST /orders/{id}/refund`                  | 一次退款发起                                 | `10011`                    |
-| `POST /reports`                             | 一次报告生成创建                             | `10011`                    |
-| `POST /reports/{id}/regenerate`             | 一次重新生成（防重复扣配额）                 | `10011`                    |
-| `POST /reports/{id}/export-pdf`             | 一次 PDF 导出任务创建                        | `10011`                    |
-| `POST /reports/{id}/share-card`             | 一次分享图生成                               | `10011`                    |
-| `POST /tests/{code}/sessions`               | 一次测试会话创建（防止快速双击建两个会话）   | `10011`                    |
-| `POST /tests/sessions/{id}/submit`          | 一次提交（**核心**：防重复提交导致重复算分） | `10011`                    |
-| `POST /relationships/invites`               | 一次邀请创建                                 | `10011`                    |
-| `POST /relationships/invites/{code}/accept` | 一次接受邀请（防双击建立多关系）             | `10011`                    |
-| `POST /relationships/{id}/compatibility`    | 一次匹配报告触发（防重复扣费）               | `10011`                    |
-| `POST /ai/conversations`                    | 一次会话创建                                 | `10011`                    |
-| `POST /ai/conversations/{id}/messages`      | 一条用户消息（非流式）                       | `10011`                    |
-| `POST /users/me/export`                     | 一次导出申请                                 | `10011`                    |
-| `POST /users/me/deletion`                   | 一次注销申请                                 | `10011`                    |
+| `POST /orders`                              | 同一商品的下单创建                           | `10009`                    |
+| `POST /orders/{id}/refund`                  | 一次退款发起                                 | `10009`                    |
+| `POST /reports`                             | 一次报告生成创建                             | `10009`                    |
+| `POST /reports/{id}/regenerate`             | 一次重新生成（防重复扣配额）                 | `10009`                    |
+| `POST /reports/{id}/export-pdf`             | 一次 PDF 导出任务创建                        | `10009`                    |
+| `POST /reports/{id}/share-card`             | 一次分享图生成                               | `10009`                    |
+| `POST /tests/{code}/sessions`               | 一次测试会话创建（防止快速双击建两个会话）   | `10009`                    |
+| `POST /tests/sessions/{id}/submit`          | 一次提交（**核心**：防重复提交导致重复算分） | `10009`                    |
+| `POST /relationships/invites`               | 一次邀请创建                                 | `10009`                    |
+| `POST /relationships/invites/{code}/accept` | 一次接受邀请（防双击建立多关系）             | `10009`                    |
+| `POST /relationships/{id}/compatibility`    | 一次匹配报告触发（防重复扣费）               | `10009`                    |
+| `POST /ai/conversations`                    | 一次会话创建                                 | `10009`                    |
+| `POST /ai/conversations/{id}/messages`      | 一条用户消息（非流式）                       | `10009`                    |
+| `POST /users/me/export`                     | 一次导出申请                                 | `10009`                    |
+| `POST /users/me/deletion`                   | 一次注销申请                                 | `10009`                    |
 | `POST /storage/upload-ticket`               | 一次上传票据申请                             | 否（可不带，重复申请无害） |
-| `POST /admin/orders/{id}/refund`            | 管理员退款                                   | `10011`                    |
+| `POST /admin/orders/{id}/refund`            | 管理员退款                                   | `10009`                    |
 
 > **不需要幂等键**的接口：所有 `GET`（天然幂等，前端可自动重试 1 次）、`POST /auth/refresh`（RT 旋转自带幂等检测）、`POST /payments/wechat/notify`（幂等键 = `transactionId`，由微信侧提供，服务端 DB UNIQUE 兜底）、`PUT /tests/sessions/{id}/answers`（upsert 天然幂等）。
 
@@ -1395,7 +1395,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     "phoneMasked": "138****6721",
     "status": "ACTIVE",
     "ageVerified": true,
-    "statusMessage": "在成为更好的自己",
+    "version": 3,
     "createdAt": "2026-02-01T03:12:44.000Z",
     "updatedAt": "2026-02-14T09:40:11.000Z",
     "profile": {
@@ -1475,13 +1475,12 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **请求体**（全部字段可选；`null` 语义见 2.6.1）
 
-| 字段              | 类型           | 必填 | 约束                                             | 说明                                                                |
-| ----------------- | -------------- | ---- | ------------------------------------------------ | ------------------------------------------------------------------- |
-| `nickname`        | string \| null | 否   | 1–20 字符；trim 后非空；过敏感词与 `msgSecCheck` | 昵称                                                                |
-| `gender`          | string \| null | 否   | 枚举 `MALE` \| `FEMALE` \| `UNKNOWN`             | 性别（`UNKNOWN` 等价于清空）                                        |
-| `birthday`        | string \| null | 否   | `YYYY-MM-DD`；范围 `1900-01-01` ~ 今天           | 生日（用于年龄区间计算）                                            |
-| `statusMessage`   | string \| null | 否   | 0–30 字符                                        | 个性签名                                                            |
-| `expectedVersion` | number         | 否   | 整数 ≥ 0                                         | 乐观锁版本（来自 `updatedAt` 派生的 `version`）；不匹配返回 `30016` |
+| 字段              | 类型           | 必填 | 约束                                             | 说明                                                                    |
+| ----------------- | -------------- | ---- | ------------------------------------------------ | ----------------------------------------------------------------------- |
+| `nickname`        | string \| null | 否   | 1–20 字符；trim 后非空；过敏感词与 `msgSecCheck` | 昵称                                                                    |
+| `gender`          | string \| null | 否   | 枚举 `MALE` \| `FEMALE` \| `UNKNOWN`             | 性别（`UNKNOWN` 等价于清空）                                            |
+| `birthday`        | string \| null | 否   | `YYYY-MM-DD`；范围 `1900-01-01` ~ 今天           | 生日（用于年龄区间计算）                                                |
+| `expectedVersion` | number         | 否   | 整数 ≥ 0                                         | 乐观锁版本（来自 `GET /users/me` 响应的 `version`）；不匹配返回 `10011` |
 
 **请求示例**
 
@@ -1490,7 +1489,6 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "nickname": "小满",
   "gender": "FEMALE",
   "birthday": "1996-08-21",
-  "statusMessage": "在成为更好的自己",
   "expectedVersion": 12
 }
 ```
@@ -1508,7 +1506,6 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     "gender": "FEMALE",
     "birthday": "1996-08-21",
     "ageRange": "25-29",
-    "statusMessage": "在成为更好的自己",
     "version": 13,
     "updatedAt": "2026-02-14T12:35:00.000Z"
   },
@@ -1519,17 +1516,22 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **错误码**
 
-| 错误码            | HTTP | 触发条件                                                                     |
-| ----------------- | ---- | ---------------------------------------------------------------------------- |
-| `10001`           | 400  | 字段类型错误 / 含未声明字段（`forbidNonWhitelisted`）                        |
-| `10002`           | 400  | 传入了 `null` 但字段不可为空（`nickname` 允许 null 表示清空，`gender` 允许） |
-| `10010`           | 429  | 命中限流                                                                     |
-| `20000` / `20001` | 401  | 未登录 / AT 过期                                                             |
-| `30002`           | 400  | 昵称命中敏感词或 `msgSecCheck` 未通过                                        |
-| `30003`           | 400  | 昵称长度不合法                                                               |
-| `30016`           | 409  | `expectedVersion` 与当前版本不一致（并发编辑冲突）                           |
-| `30018`           | 403  | 注销冷静期内禁止修改资料                                                     |
-| `90008`           | 503  | 内容安全服务异常（**fail-open**：放行并记录审计，不阻断用户操作）            |
+| 错误码            | HTTP | 触发条件                                                                        |
+| ----------------- | ---- | ------------------------------------------------------------------------------- |
+| `10001`           | 400  | 字段类型错误 / 含未声明字段（`forbidNonWhitelisted`）；`nickname` 长度不在 1–20 |
+| `10007`           | 429  | 命中限流                                                                        |
+| `10011`           | 409  | `expectedVersion` 与当前版本不一致（并发编辑冲突，`VERSION_OUTDATED`）          |
+| `20000` / `20001` | 401  | 未登录 / AT 过期                                                                |
+| `30010`           | 400  | 昵称去除空白后为空（`NICKNAME_INVALID`）                                        |
+| `30011`           | 400  | 昵称命中敏感词或 `msgSecCheck` 未通过（`CONTENT_BLOCKED`）                      |
+| `30012`           | 403  | 注销冷静期内禁止修改资料（`PROFILE_EDIT_LOCKED`）                               |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 校正：原文的 `10010`（限流）实为
+> `10007 RATE_LIMITED`；`30002`（敏感词）实为 `30011 CONTENT_BLOCKED`；`30016`（版本冲突）实为
+> `10011 VERSION_OUTDATED`；`30018`（冷静期）实为 `30012 PROFILE_EDIT_LOCKED`。
+> 另删除两行**实现不存在的错误**：`10002`（本项目是 `RESOURCE_NOT_FOUND`/404，且该 DTO 的
+> `@IsOptional()` 允许 `null`）与 `90008`（本项目是 `CONFIG_MISSING`/500；内容安全异常只
+> `logger.warn` 后放行，不抛错）。
 
 **业务规则与边界条件**
 
@@ -1806,20 +1808,25 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **请求体**
 
-| 字段          | 类型    | 必填     | 约束                                                                                                  | 说明                                                           |
-| ------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `type`        | string  | 是       | 枚举：`PRIVACY_POLICY` \| `USER_AGREEMENT` \| `AGE_DECLARATION` \| `AI_CONTENT_NOTICE` \| `MARKETING` | 同意项类型                                                     |
-| `version`     | string  | 是       | 语义化版本 `x.y.z`                                                                                    | 用户所同意的政策版本（**必须与当前生效版本一致**，防降级同意） |
-| `agreed`      | boolean | 是       | —                                                                                                     | `true` 同意，`false` 撤回                                      |
-| `ageDeclared` | number  | 条件必填 | 整数 1–120                                                                                            | 当 `type = AGE_DECLARATION` 时**必填**                         |
-| `channel`     | string  | 否       | 枚举 `MINIAPP`（默认）\| `WEB` \| `CUSTOMER_SERVICE`                                                  | 同意渠道，用于合规举证                                         |
+| 字段            | 类型    | 必填 | 约束                                                                                                    | 说明                                                                                              |
+| --------------- | ------- | ---- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `type`          | string  | 是   | 枚举：`PRIVACY_POLICY` \| `TERMS_OF_SERVICE` \| `AGE_DECLARATION` \| `AI_CONTENT_NOTICE` \| `MARKETING` | 同意项类型（**与 `ConsentType` 枚举逐字一致**；`USER_AGREEMENT` 不存在，应为 `TERMS_OF_SERVICE`） |
+| `policyVersion` | string  | 是   | 长度 1–32                                                                                               | 用户所同意的政策版本（**必须与当前生效版本一致**，不一致返回 `30017`）                            |
+| `agreed`        | boolean | 是   | —                                                                                                       | `true` 同意，`false` 撤回                                                                         |
+
+> ⚠ **2026-10-13 契约漂移审计**：实现在本端点的 DTO 只有上面 **3 个字段**
+> （`SubmitConsentDto = { type, policyVersion, agreed }`），契约原文的 `version`（实现叫
+> `policyVersion`）、`ageDeclared`、`channel` **传任一都会得到 `400 / 10001 property xxx should not exist`**：
+> · `version` → **改名**为 `policyVersion`（同一语义，字段名不同）；
+> · `ageDeclared` → 实现**不接受**年龄声明，也不写 `ageVerified`；
+> · `channel` → 由服务端**硬编码** `'miniapp'` 落库，客户端无从指定。
 
 **请求示例**
 
 ```json
 {
   "type": "PRIVACY_POLICY",
-  "version": "2.1.0",
+  "policyVersion": "2.1.0",
   "agreed": true,
   "channel": "MINIAPP"
 }
@@ -1871,16 +1878,19 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 用途 | 异步生成用户个人数据包（JSON + PDF）上传 OSS，返回 24h 有效签名 URL（架构 9.4） |
 | 鉴权 | 🔑 登录                                                                         |
 | 限流 | userId 1 次/24h（业务码优先，重复时返回 `30009` 并带出已有 `taskId`）           |
-| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10011`）                                |
+| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）                                |
 | 异步 | **是**（HTTP 202 + `taskId`，由 `export.data` 任务执行）                        |
 
 **请求体**
 
-| 字段           | 类型     | 必填 | 约束                                                                                              | 说明                                                         |
-| -------------- | -------- | ---- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `format`       | string[] | 否   | 子集：`JSON` \| `PDF`；默认 `["JSON","PDF"]`                                                      | 导出格式；`JSON` 为结构化全量数据，`PDF` 为可读报告汇总      |
-| `include`      | string[] | 否   | 子集：`PROFILE` \| `TEST` \| `REPORT` \| `AI_CONVERSATION` \| `ORDER` \| `RELATIONSHIP`；默认全部 | 导出范围（订单为法定留存数据，勾选与否都会包含）             |
-| `deliveryMode` | string   | 否   | 枚举 `SIGNED_URL`（默认）                                                                         | 交付方式，仅支持签名 URL（不发送邮件，避免额外个人信息处理） |
+| 字段    | 类型   | 必填 | 约束                                                           | 说明                       |
+| ------- | ------ | ---- | -------------------------------------------------------------- | -------------------------- |
+| `scope` | string | 否   | 枚举 `ALL`（默认）\| `PROFILE` \| `REPORTS` \| `CONVERSATIONS` | 导出范围；`ALL` 为全量聚合 |
+
+> ⚠ **2026-10-13 契约漂移审计**：实现在本端点的 DTO 只有 **`scope` 一个字段**，契约原文的
+> `format` / `include` / `deliveryMode` **传任一都会得到 `400 / 10001 property xxx should not exist`**。
+> 另：**导出实际只产出 JSON**（`format` 恒为 `JSON`，无 PDF 渲染分支），契约宣称的
+> 「JSON + PDF 双格式」属**未交付能力**（需引入 PDF 渲染管线与体积/字体策略）。
 
 **请求示例**
 
@@ -1936,7 +1946,7 @@ curl -X POST 'https://api.soulmap.cn/api/v1/users/me/export' \
 | ------- | ---- | ----------------------------------------------------------- |
 | `10001` | 400  | `format`/`include` 含白名单外值；`deliveryMode` 非法        |
 | `10010` | 429  | 超出 IP/用户通用限流                                        |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                    |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                    |
 | `30009` | 409  | 24h 内已有未完成的导出任务（响应 `data.taskId` 为已有任务） |
 | `30018` | 403  | 注销冷静期内禁止导出（数据将被删除，导出无意义）            |
 | `90005` | 503  | 队列不可用（不产生半成品记录，可安全重试）                  |
@@ -2135,7 +2145,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **业务规则**
 
-1. `status` 枚举：`PENDING`（冷静期中）、`CANCELLED`（已撤销）、`COMPLETED`（已匿名化）、`FAILED`（匿名化失败，需人工介入）。
+1. `status` 枚举（`DeletionRequestStatus`）：`PENDING`（冷静期中）、`PROCESSING`（正在匿名化；失败时保持该状态并由 `failureReason` 记录原因）、`COMPLETED`（已匿名化）、`CANCELLED`（已撤销）。⚠ **没有 `FAILED`**（2026-10-13 按 schema 校正：失败不表达为终态，避免"进行中但出错"无从追踪）。
 2. 冷静期固定 **7 天**（架构 9.4），`scheduledAt = requestedAt + 7d`。
 3. `remainingDays` 向上取整（不足一天按 1 天显示）。
 4. 无申请时所有字段为 `null`（保持字段存在，便于前端类型稳定）。
@@ -2147,7 +2157,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 用途 | 提交注销申请，进入 7 天冷静期；到期由 cron 执行匿名化（清空昵称/头像/生日，`openid` 置为 `deleted:{hash}`，删除 AI 对话原文，保留订单） |
 | 鉴权 | 🔑 登录                                                                                                                                 |
 | 限流 | userId 3 次/24h                                                                                                                         |
-| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10011`）                                                                                        |
+| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）                                                                                        |
 | 异步 | 否（申请同步落库；匿名化由 `maintenance.cleanup` cron 执行）                                                                            |
 
 **请求体**
@@ -2206,7 +2216,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `10001` | 400  | `reason` 非枚举值；`reason = OTHER` 但缺 `reasonDetail`                                 |
 | `10002` | 400  | 缺少 `confirmText`/`acknowledgeRetention`/`acknowledgeIrreversible`                     |
 | `10010` | 429  | 24h 内超过 3 次                                                                         |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                                |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                                                |
 | `30012` | 409  | 已存在 `PENDING` 状态的注销申请                                                         |
 | `30014` | 409  | 账号已匿名化，无法再次申请                                                              |
 | `70019` | 409  | ⚠️ 存在**进行中的订单**（`PENDING_PAY`）或未完成的退款 → 需先处理（提示用户完成或取消） |
@@ -2222,7 +2232,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
    ```
    users.nickname = '已注销用户'
    users.avatarUrl = system_config.defaultAvatarUrl
-   users.gender = null；users.birthday = null；users.statusMessage = null
+   users.gender = null；users.birthday = null
    users.phoneEnc = null；users.phoneHash = null
    wechat_accounts.openid = 'deleted:' + SHA256(openid + salt)
    wechat_accounts.sessionKeyEnc = null
@@ -2320,25 +2330,29 @@ CREATED ──取卷成功──► IN_PROGRESS ──提交全部答案──�
 
 #### 3.3.1 `GET /api/v1/tests` — 测试定义列表 🔑
 
-| 项   | 值                                                                                                                    |
-| ---- | --------------------------------------------------------------------------------------------------------------------- |
-| 用途 | 返回全部启用中的测试定义（首页卡片、测试中心列表）                                                                    |
-| 鉴权 | 🔑 登录（个性化字段 `userProgress` 需登录；未登录时返回 `userProgress: null`，若前端需游客态可放开为 🔓，见问题清单） |
-| 限流 | userId 120 次/60s                                                                                                     |
-| 幂等 | 是                                                                                                                    |
-| 异步 | 否                                                                                                                    |
+| 项   | 值                                                                                                                   |
+| ---- | -------------------------------------------------------------------------------------------------------------------- |
+| 用途 | 返回全部启用中的测试定义（首页卡片、测试中心列表）                                                                   |
+| 鉴权 | 🔑 登录（`completedCount`/`hasInProgress` 是**当前用户**的个性化字段，故实现未标 `@Public()`，匿名访问返回 `20000`） |
+| 限流 | userId 120 次/60s                                                                                                    |
+| 幂等 | 是                                                                                                                   |
+| 异步 | 否                                                                                                                   |
 
 **Query 参数**
 
-| 参数              | 类型    | 必填 | 约束                                                        | 说明                                                                          |
-| ----------------- | ------- | ---- | ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `category`        | string  | 否   | 枚举 `PERSONALITY` \| `RELATIONSHIP` \| `ALL`（默认 `ALL`） | 按类别筛选                                                                    |
-| `includeInactive` | boolean | 否   | 默认 `false`                                                | 是否包含已下线定义（**仅管理员 token 生效**，普通用户传 `true` 返回 `20009`） |
+| 参数       | 类型   | 必填 | 约束                                                                 | 说明       |
+| ---------- | ------ | ---- | -------------------------------------------------------------------- | ---------- |
+| `category` | string | 否   | 枚举 `MBTI` \| `BIG_FIVE` \| `RELATIONSHIP_STYLE` \| `COMPREHENSIVE` | 按类别筛选 |
+
+> 🚫 **`includeInactive` 已从 Query 参数移除**（2026-10-13 契约漂移审计）：实现从未接收该参数
+> （`ListTestsQueryDto` 只有 `category`），而下架定义在 SQL 层就被过滤（`isActive = true AND status = 'ACTIVE'`），
+> 不存在"带出下架定义"的能力。客户端若照旧文档传它会得到 `400 / 10001`（`property includeInactive should not exist`）。
+> 需按角色返回下架定义时属**新功能**（需引入管理员鉴权分支与 `status` 过滤开关），见本节末「未交付能力」。
 
 **请求示例**
 
 ```http
-GET /api/v1/tests?category=ALL HTTP/1.1
+GET /api/v1/tests?category=MBTI HTTP/1.1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
@@ -2348,122 +2362,56 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 {
   "code": 0,
   "message": "ok",
-  "data": {
-    "items": [
-      {
-        "code": "MBTI_LITE",
-        "name": "MBTI 精简版",
-        "subtitle": "48 题 · 约 8 分钟",
-        "description": "基于 MBTI 四维框架的快速人格测评，识别你的 E/I、S/N、T/F、J/P 倾向。",
-        "category": "PERSONALITY",
-        "version": "1.3.0",
-        "questionCount": 48,
-        "estimatedMinutes": 8,
-        "dimensions": ["EI", "SN", "TF", "JP"],
-        "coverUrl": "https://cdn.soulmap.cn/static/test/mbti-lite-cover.webp",
-        "tags": ["免费", "快速", "入门必测"],
-        "isFree": true,
-        "requiredEntitlement": null,
-        "isActive": true,
-        "sortOrder": 10,
-        "userProgress": {
-          "hasCompleted": true,
-          "lastSessionId": "0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12",
-          "lastCompletedAt": "2026-02-10T08:21:03.000Z",
-          "completionCount": 2,
-          "hasInProgressSession": false,
-          "inProgressSessionId": null
-        }
-      },
-      {
-        "code": "MBTI_FULL",
-        "name": "MBTI 完整版",
-        "subtitle": "93 题 · 约 18 分钟",
-        "description": "完整版 MBTI 测评，含四维倾向百分比与置信度评估，是深度报告的输入。",
-        "category": "PERSONALITY",
-        "version": "2.0.1",
-        "questionCount": 93,
-        "estimatedMinutes": 18,
-        "dimensions": ["EI", "SN", "TF", "JP"],
-        "coverUrl": "https://cdn.soulmap.cn/static/test/mbti-full-cover.webp",
-        "tags": ["深度", "高置信度"],
-        "isFree": false,
-        "requiredEntitlement": "MEMBERSHIP_ACTIVE",
-        "isActive": true,
-        "sortOrder": 20,
-        "userProgress": {
-          "hasCompleted": false,
-          "lastSessionId": null,
-          "lastCompletedAt": null,
-          "completionCount": 0,
-          "hasInProgressSession": false,
-          "inProgressSessionId": null
-        }
-      },
-      {
-        "code": "BIG_FIVE_50",
-        "name": "大五人格（Big Five）",
-        "subtitle": "50 题 · 约 10 分钟",
-        "description": "基于 Big Five 五因素模型，输出开放性、尽责性、外向性、宜人性、神经质五维分数。",
-        "category": "PERSONALITY",
-        "version": "1.1.0",
-        "questionCount": 50,
-        "estimatedMinutes": 10,
-        "dimensions": [
-          "OPENNESS",
-          "CONSCIENTIOUSNESS",
-          "EXTRAVERSION",
-          "AGREEABLENESS",
-          "NEUROTICISM"
-        ],
-        "coverUrl": "https://cdn.soulmap.cn/static/test/bigfive-cover.webp",
-        "tags": ["免费", "科学框架"],
-        "isFree": true,
-        "requiredEntitlement": null,
-        "isActive": true,
-        "sortOrder": 30,
-        "userProgress": {
-          "hasCompleted": true,
-          "lastSessionId": "0195f3a2-9c8e-7f42-8a11-5b6c7d8e9f21",
-          "lastCompletedAt": "2026-02-10T08:35:41.000Z",
-          "completionCount": 1,
-          "hasInProgressSession": false,
-          "inProgressSessionId": null
-        }
-      },
-      {
-        "code": "RELATIONSHIP_STYLE",
-        "name": "关系风格测评",
-        "subtitle": "24 题 · 约 5 分钟",
-        "description": "评估依恋类型、爱的语言与冲突处理风格，用于关系匹配分析。",
-        "category": "RELATIONSHIP",
-        "version": "1.0.2",
-        "questionCount": 24,
-        "estimatedMinutes": 5,
-        "dimensions": ["ATTACHMENT", "LOVE_LANGUAGE", "CONFLICT_STYLE"],
-        "coverUrl": "https://cdn.soulmap.cn/static/test/relationship-style-cover.webp",
-        "tags": ["关系", "免费"],
-        "isFree": true,
-        "requiredEntitlement": null,
-        "isActive": true,
-        "sortOrder": 40,
-        "userProgress": {
-          "hasCompleted": true,
-          "lastSessionId": "0195f3a2-9d9f-7a53-9b22-6c7d8e9f0a32",
-          "lastCompletedAt": "2026-02-10T08:40:12.000Z",
-          "completionCount": 1,
-          "hasInProgressSession": false,
-          "inProgressSessionId": null
-        }
-      }
-    ],
-    "total": 4,
-    "recommended": {
-      "code": "MBTI_FULL",
-      "reason": "你已完成精简版，完整版可获得更高置信度与深度报告"
+  "data": [
+    {
+      "code": "MBTI_LITE",
+      "name": "MBTI 精简版",
+      "category": "MBTI",
+      "description": "基于 MBTI 四维框架的快速人格测评，识别你的 E/I、S/N、T/F、J/P 倾向。",
+      "version": "1.3.0",
+      "questionCount": 48,
+      "estimatedMinutes": 8,
+      "coverUrl": "https://cdn.soulmap.cn/static/test/mbti-lite-cover.webp",
+      "completedCount": 2,
+      "hasInProgress": false
     },
-    "serverTime": "2026-02-14T13:20:00.000Z"
-  },
+    {
+      "code": "MBTI_FULL",
+      "name": "MBTI 完整版",
+      "category": "MBTI",
+      "description": "完整版 MBTI 测评，含四维倾向百分比与置信度评估，是深度报告的输入。",
+      "version": "2.0.1",
+      "questionCount": 93,
+      "estimatedMinutes": 18,
+      "coverUrl": "https://cdn.soulmap.cn/static/test/mbti-full-cover.webp",
+      "completedCount": 0,
+      "hasInProgress": false
+    },
+    {
+      "code": "BIG_FIVE_50",
+      "name": "大五人格（Big Five）",
+      "category": "BIG_FIVE",
+      "description": "基于 Big Five 五因素模型，输出开放性、尽责性、外向性、宜人性、神经质五维分数。",
+      "version": "1.1.0",
+      "questionCount": 50,
+      "estimatedMinutes": 10,
+      "coverUrl": "https://cdn.soulmap.cn/static/test/bigfive-cover.webp",
+      "completedCount": 1,
+      "hasInProgress": false
+    },
+    {
+      "code": "RELATIONSHIP_STYLE",
+      "name": "关系风格测评",
+      "category": "RELATIONSHIP_STYLE",
+      "description": "评估依恋类型、爱的语言与冲突处理风格，用于关系匹配分析。",
+      "version": "1.0.2",
+      "questionCount": 24,
+      "estimatedMinutes": 5,
+      "coverUrl": "https://cdn.soulmap.cn/static/test/relationship-style-cover.webp",
+      "completedCount": 1,
+      "hasInProgress": true
+    }
+  ],
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T13:20:00.000Z"
 }
@@ -2471,19 +2419,35 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                                |
-| ------- | ---- | --------------------------------------------------------------------------------------- |
-| `10001` | 400  | `category` 非枚举值；`includeInactive` 非布尔                                           |
-| `20009` | 403  | 普通用户传 `includeInactive=true`                                                       |
-| `90009` | 403  | `FEATURE_COUPLE_MATCH` 关闭时，`category=RELATIONSHIP` 的条目被过滤（不报错，仅不返回） |
+| 错误码  | HTTP | 触发条件                  |
+| ------- | ---- | ------------------------- |
+| `10001` | 400  | `category` 不在上述枚举内 |
+| `20000` | 401  | 未携带有效 AccessToken    |
 
 **业务规则**
 
-1. **不使用标准分页**：测试定义数量固定（< 20），直接返回 `items` 数组 + `total`，无 `page/pageSize/hasNext`（这是分页规范的**显式例外**，已在字段说明中标注）。
-2. `requiredEntitlement` 为 `null` 表示免费；非 `null` 时前端应在卡片上展示「会员专享」角标，并允许点击后拉起 `PayWall`（不阻断浏览详情）。
-3. `userProgress.hasInProgressSession = true` 时，前端必须展示「继续上次测试」入口（跳 `sessionId`），避免用户重头开始（架构 2. 要点 2）。
-4. 题库缓存在 Redis（`sm:test:definitions`，TTL 300s），后台改动题库后主动 `DEL`。
-5. `recommended` 为运营推荐位（来自 `system_config.testRecommendation`），无推荐时返回 `null`。
+1. **裸数组响应**：`data` **直接是 `TestDefinitionView[]`**，没有 `items`/`total`/`recommended`/`serverTime`
+   包裹层（2026-10-13 按实现校正；小程序 `api/test.ts:190` 即按 `http.get<TestDefinition[]>` 消费）。
+2. **返回字段恰好 10 个**：`code`、`name`、`category`、`description`、`version`、`questionCount`、
+   `estimatedMinutes`、`coverUrl`、`completedCount`、`hasInProgress`（`test.service.ts:240-251`）。
+   契约此前声明的 `subtitle`/`dimensions`/`tags`/`isFree`/`requiredEntitlement`/`isActive`/`sortOrder`/
+   `userProgress` **一律不返回**（前端读到的是 `undefined`）。
+3. **筛选在 SQL 层**：只返回 `isActive = true AND status = 'ACTIVE' AND deletedAt IS NULL` 的定义，
+   排序 `sortOrder ASC, createdAt ASC`（`test.service.ts:200-207`）。
+4. **个性化字段只有两项**：`completedCount`（`status ∈ {SCORED, REPORT_READY}` 的会话数）与
+   `hasInProgress`（是否存在 `IN_PROGRESS` 会话）。**没有**「继续上次测试」所需的 `inProgressSessionId` ——
+   要跳转到未完成会话，前端须另调 `GET /tests/sessions?status=IN_PROGRESS`（§3.3.7）。
+5. `requiredEntitlement` 不存在，因此**无法从本接口判断某个定义是否会员专享**；权益校验发生在
+   `POST /tests/{code}/sessions`（§3.3.3）。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明               | 未交付的内容与前置工作                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------- |
+| `includeInactive` 参数   | 按角色返回下架定义：需管理员鉴权分支 + `status` 过滤开关（当前 SQL 硬过滤 `ACTIVE`）     |
+| `recommended` 推荐位     | 运营推荐位需要 `system_config` 增加推荐配置项与排序策略                                  |
+| `userProgress` 组合对象  | 若要把「继续上次测试」做成一次请求，需服务端补 `inProgressSessionId`（现由前端二次查询） |
+| `subtitle`/`tags` 等展示 | 需要 `test_definitions` 增加对应列或按类别在服务端拼装文案（当前只有 `description`）     |
 
 #### 3.3.2 `GET /api/v1/tests/{code}` — 测试定义详情 🔑
 
@@ -2630,7 +2594,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 用途 | 创建测试会话，服务端抽题 + 乱序 + 固化 `paperSnapshot`，一次性返回完整试卷（架构 11.1） |
 | 鉴权 | 🔑 登录（`requiredEntitlement` 非空时额外 💎 权益）                                     |
 | 限流 | userId 10 次/60min                                                                      |
-| 幂等 | **必须**携带 `X-Idempotency-Key`（防双击创建双会话，缺失 `10011`）                      |
+| 幂等 | **必须**携带 `X-Idempotency-Key`（防双击创建双会话，缺失 `10009`）                      |
 | 异步 | 否（抽题 < 50ms）                                                                       |
 
 **Path 参数**
@@ -2839,7 +2803,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | ------- | ---- | ----------------------------------------------------- |
 | `10001` | 400  | `forceNew` 非布尔；`source` 非枚举值                  |
 | `10010` | 429  | 60min 内创建超过 10 次                                |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                              |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                              |
 | `10013` | 409  | 同一幂等键的创建请求正在处理中                        |
 | `40001` | 404  | `code` 不存在                                         |
 | `40002` | 400  | 定义已下线                                            |
@@ -3032,7 +2996,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                                   |
 | ------- | ---- | -------------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID；`batch` 越界                                             |
+| `10001` | 400  | `id` 非合法 UUID；`batch` 越界                                             |
 | `10016` | 400  | `batch` > `totalBatches`                                                   |
 | `40003` | 404  | 会话不存在（已清理或 ID 错误）                                             |
 | `40004` | 403  | **会话属于其他用户**（IDOR 防护；同时记录安全探测日志）                    |
@@ -3151,7 +3115,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `10001` | 400  | `answers` 非数组；元素缺字段；`value` 类型不符                      |
 | `10002` | 400  | `answers` 缺失或为空数组                                            |
 | `10003` | 400  | `id` 或 `questionId` 非合法 UUID                                    |
-| `10010` | 429  | 60s 内超过 60 次（前端应做 500ms 防抖 + 批量合并）                  |
+| `10007` | 429  | 60s 内超过 60 次（前端应做 500ms 防抖 + 批量合并）                  |
 | `40003` | 404  | 会话不存在                                                          |
 | `40004` | 403  | 会话归属他人（IDOR 防护）                                           |
 | `40005` | 409  | 会话状态非 `CREATED`/`IN_PROGRESS`（已提交/已过期后**禁止写答案**） |
@@ -3178,7 +3142,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 用途 | 校验题量完整性 → 置 `SUBMITTED` → 同步调用 `PersonalityEngine`（纯函数，< 10ms）算分 → 落 `TestResult` + `PersonalityProfile` + `PersonalitySnapshot` → 置 `SCORED` |
 | 鉴权 | 🔑 登录 + 归属校验                                                                                                                                                  |
 | 限流 | userId + sessionId 5 次/60s                                                                                                                                         |
-| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10011`）；重复提交返回 `40010` 并带出 `resultId`                                                                            |
+| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）；重复提交返回 `40010` 并带出 `resultId`                                                                            |
 | 异步 | 否（算分同步，架构 3.3「人格算分 < 10ms，无 I/O」）                                                                                                                 |
 
 **Path 参数**
@@ -3271,7 +3235,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `10001` | 400  | `confirm` 非布尔；`totalResponseMs` 越界                                 |
 | `10002` | 400  | `confirm` 缺失或非 `true`                                                |
 | `10010` | 429  | 60s 内提交超过 5 次                                                      |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                 |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                                 |
 | `40003` | 404  | 会话不存在                                                               |
 | `40004` | 403  | 会话归属他人                                                             |
 | `40005` | 409  | 会话状态为 `EXPIRED`/`SCORED` 之外的不允许状态（`SUBMITTED` 之外的异常） |
@@ -3330,21 +3294,30 @@ curl -X POST 'https://api.soulmap.cn/api/v1/tests/sessions/0195f3a2-91a7-7d53-b8
 
 **Query 参数**
 
-| 参数        | 类型   | 必填 | 约束                                                                                  | 说明                       |
-| ----------- | ------ | ---- | ------------------------------------------------------------------------------------- | -------------------------- |
-| `page`      | number | 否   | 默认 `1`                                                                              | 页码                       |
-| `pageSize`  | number | 否   | 默认 `20`，≤ 100                                                                      | 每页条数                   |
-| `testCode`  | string | 否   | 白名单 4 个 code                                                                      | 按测试筛选                 |
-| `status`    | string | 否   | 多值逗号分隔：`IN_PROGRESS` \| `SUBMITTED` \| `SCORED` \| `REPORT_READY` \| `EXPIRED` | 按状态筛选                 |
-| `startTime` | string | 否   | ISO 8601                                                                              | 创建时间起                 |
-| `endTime`   | string | 否   | ISO 8601                                                                              | 创建时间止                 |
-| `sortBy`    | string | 否   | 白名单：`createdAt` \| `submittedAt`                                                  | 排序字段，默认 `createdAt` |
-| `order`     | string | 否   | `asc` \| `desc`，默认 `desc`                                                          | 排序方向                   |
+| 参数             | 类型   | 必填 | 约束                                                                                                                                        | 说明                                           |
+| ---------------- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `page`           | number | 否   | 默认 `1`                                                                                                                                    | 页码                                           |
+| `pageSize`       | number | 否   | 默认 `20`，≤ 100                                                                                                                            | 每页条数                                       |
+| `definitionCode` | string | 否   | 长度 1–32，不校验白名单                                                                                                                     | 按测试定义编码筛选                             |
+| `status`         | string | 否   | **单值**枚举：`CREATED` \| `IN_PROGRESS` \| `SUBMITTED` \| `SCORED` \| `REPORT_READY` \| `EXPIRED` \| `ABANDONED`（**不支持逗号分隔多值**） | 按状态筛选                                     |
+| 🚫 `startTime`   | string | 否   | ISO 8601                                                                                                                                    | 创建时间起（**实现不接收，传即 `400/10001`**） |
+| 🚫 `endTime`     | string | 否   | ISO 8601                                                                                                                                    | 创建时间止（**实现不接收，传即 `400/10001`**） |
+| 🚫 `sortBy`      | string | 否   | 白名单：`createdAt` \| `submittedAt`                                                                                                        | 排序字段（**实现不接收**，固定 `createdAt`）   |
+| 🚫 `order`       | string | 否   | `asc` \| `desc`，默认 `desc`                                                                                                                | 排序方向（**实现不接收**，固定 `desc`）        |
+
+> ⚠ **2026-10-13 契约漂移审计**（本节是本轮「照契约传必失败」最集中的一处）：
+> · `testCode` → 实现字段名是 **`definitionCode`**，且**不校验白名单**（只做长度 1–32）；
+> · `status` 是**单值**枚举且含实现独有的 `CREATED`/`ABANDONED`；传 `SCORED,REPORT_READY`
+> 这种逗号多值**不等于任何枚举值**，会被 `@IsIn` 拒为 `400 / 10001`；
+> · 上表 4 个标 🚫 的参数（`startTime`/`endTime`/`sortBy`/`order`）**在 DTO 里根本不存在**，
+> 传任一个都会因 `forbidNonWhitelisted` 得到 `400 / 10001 property xxx should not exist`；
+> · 排序由服务端写死 `createdAt DESC`，**没有**「进行中会话排最前」的逻辑（见业务规则 4）。
+> 小程序 `api/test.ts:245-247` 的查询类型正是 `{ page, pageSize, status, definitionCode }`。
 
 **请求示例**
 
 ```http
-GET /api/v1/tests/sessions?page=1&pageSize=20&status=SCORED,REPORT_READY&sortBy=submittedAt&order=desc HTTP/1.1
+GET /api/v1/tests/sessions?page=1&pageSize=20&status=SCORED&definitionCode=MBTI_LITE HTTP/1.1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
@@ -3424,20 +3397,30 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **错误码**
 
-| 错误码  | HTTP | 触发条件                       |
-| ------- | ---- | ------------------------------ |
-| `10001` | 400  | `status`/`sortBy`/`order` 非法 |
-| `10004` | 400  | `sortBy` 不在白名单            |
-| `10005` | 400  | `pageSize > 100` 或 `page < 1` |
-| `10016` | 400  | `endTime < startTime`          |
+| 错误码  | HTTP | 触发条件                                                                               |
+| ------- | ---- | -------------------------------------------------------------------------------------- |
+| `10001` | 400  | `status`/`definitionCode` 非法；`page < 1`；`pageSize > 100`；传入上表标 🚫 的任意参数 |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 校正：原文的
+> `10004`（`sortBy` 白名单）、`10005`（`pageSize`）在本项目分别是 `METHOD_NOT_ALLOWED`/405
+> 与 `PAYLOAD_TOO_LARGE`/413，**均与本节无关**；`10016` 在本项目**不存在**。
+> 这些校验统一由全局管道抛 `10001 PARAM_INVALID`（400）。`sortBy`/`order`/`startTime`/`endTime`
+> 四个参数已不存在，故不再有对应错误行。
 
 **业务规则**
 
 1. **强归属过滤**：`WHERE userId = currentUser.id`（架构 14.1），无任何跨用户返回可能。
-2. `resultSummary` 仅含类型与置信度（同 3.3.2，避免绕过付费墙）。
-3. `summary` 为固定统计块（来自 Redis 计数缓存），不可分页。
-4. 进行中会话排在列表**最前**（服务端排序优先 `IN_PROGRESS`，其次按 `sortBy`），保证「继续测试」入口显眼。
+2. 列表项**只有 10 个字段**（实现实际返回，见下方「响应结构校正」），**没有** `resultSummary`/`testVersion`/`expiresAt`/`progress`/`hasReport`/`reportId`。
+3. **无 `summary` 统计块**：响应只有 `items`/`total`/`page`/`pageSize`/`hasNext`（标准分页包络），契约原文的固定统计块未实现。
+4. **排序固定 `createdAt DESC`**（`orderBy: { createdAt: 'desc' }`），**没有**「进行中会话排最前」的优先级逻辑。
 5. **不返回**答案明细（避免高频大响应）；需要明细走 `GET /tests/sessions/{id}`。
+
+> ⚠ **响应结构校正（2026-10-13）**：上文响应示例已过期。真实结构为
+> `{ items: SessionHistoryItem[], total, page, pageSize, hasNext }`，其中 `SessionHistoryItem` 的
+> 10 个字段是：`sessionId`、`testCode`、`testName`、`status`、`mbtiType`（可为 `null`）、
+> `answeredCount`、`totalQuestions`、`createdAt`、`submittedAt`（可为 `null`）、`scoredAt`（可为 `null`）。
+> 注意 `mbtiType` 在**顶层**（不在嵌套的 `resultSummary` 里），进度是**两个扁平数字**而非 `progress` 对象。
+> 小程序 `api/test.ts:153-164` 的 `SessionHistoryItem` 与实现逐字一致。
 
 #### 3.3.8 `GET /api/v1/tests/sessions/{id}/result` — 测试结果详情 🔑
 
@@ -3457,14 +3440,17 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **Query 参数**
 
-| 参数             | 类型    | 必填 | 约束         | 说明                                                       |
-| ---------------- | ------- | ---- | ------------ | ---------------------------------------------------------- |
-| `includeAnswers` | boolean | 否   | 默认 `false` | 是否返回答题明细（含每题答案与耗时），用于「回看我的回答」 |
+| 参数 | 类型 | 必填 | 约束 | 说明 |
+| ---- | ---- | ---- | ---- | ---- |
+
+> 🚫 **`includeAnswers` 已从 Query 参数移除**（2026-10-13 契约漂移审计）：实现**没有绑定 `@Query()`**，
+> 该参数既不会被校验、也不会报错 —— 而是被**静默忽略**，且实现**永不返回 `answers[]`**。
+> 小程序 `api/test.ts:250-251` 也不传任何 query。
 
 **请求示例**
 
 ```http
-GET /api/v1/tests/sessions/0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12/result?includeAnswers=false HTTP/1.1
+GET /api/v1/tests/sessions/0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12/result HTTP/1.1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
@@ -3636,21 +3622,43 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                                   |
 | ------- | ---- | -------------------------------------------------------------------------- |
-| `10001` | 400  | `includeAnswers` 非布尔                                                    |
-| `10003` | 400  | `id` 非合法 UUID                                                           |
-| `40003` | 404  | 会话不存在                                                                 |
-| `40004` | 403  | 会话归属他人（IDOR 防护）                                                  |
+| `10001` | 400  | `id` 非合法 UUID                                                           |
+| `40002` | 404  | 会话不存在，**或**会话已算分但结果记录缺失（异常数据，需运维排查）         |
+| `40003` | 403  | 会话归属他人（IDOR 防护）                                                  |
+| `40004` | 409  | 会话已过期或已放弃（`EXPIRED`/`ABANDONED`）                                |
 | `40005` | 409  | 会话状态为 `IN_PROGRESS`/`CREATED`（**尚未提交，无结果**）→ 前端应跳回答页 |
-| `40014` | 404  | 会话已提交但结果记录缺失（异常数据，需运维排查）                           |
+
+> ⚠ **本节是本次审计中「响应结构错位」最严重的一处**（2026-10-13）。
+> 上文的响应示例（`mbti.{typeName,confidenceLabel}`、`bigFive.radar[]`、`relationshipStyle.attachmentName`、
+> `quality.totalResponseMs`、`report{}`、`shareCard{}`、`disclaimer`、`aiGeneratedNotice`）**全部不存在**。
+> 本接口的响应对 **§3.3.6 提交接口的 `SubmitResultView` 完全同构**（它就是"读取既有算分结果"的幂等视图）：
+>
+> ```
+> { sessionId, status, submittedAt, scoredAt, scoringDurationMs, resultId, profileId, profileVersion,
+>   engineVersion, isDuplicate,
+>   result: { mbtiType, dimensions: { EI|SN|TF|JP: { percent, pole, leftLabel, rightLabel } },
+>             confidence, bigFive: { openness, conscientiousness, extraversion, agreeableness, neuroticism },
+>             relationshipStyle: { attachment, loveLanguage[], conflictStyle },
+>             quality: { consistencyScore, completionRate, avgResponseMs, rushRate, notice } } }
+> ```
+>
+> 关键差异：`mbtiType` 在 `result` 顶层（不是 `mbti.type`）；`dimensions` 是**对象**（键为 `EI/SN/TF/JP`，
+> 值含 `percent`，**没有 `strength`/`name`/`poleLabel`**）；`bigFive` 是**扁平数值映射**（没有 `radar`/`tScore`/`level`）；
+> 置信度字段叫 `confidence`（不是 `confidenceLabel`）；`quality` 有 `rushRate`（不是 `confidenceLevel`/`totalResponseMs`）。
+> 小程序 `pkgTest/pages/result.vue` 正是按这套结构读取的（`result.mbtiType`、`result.dimensions[key].percent`、
+> `result.bigFive[key]`、`result.confidence`、`result.quality.notice`）。
+>
+> 错误码同样按实现校正：原文的 `10001/40003/40004/40014` 分别实为 `10001/40002/40003/40002`，
+> 并补上 `40004`（过期/放弃）；`includeAnswers` 行已删除（该参数不存在）。
 
 **业务规则与边界条件**
 
 1. **结果与报告解耦**：本接口返回的画像数据（MBTI/Big Five/关系风格）是**确定性算分结果**，与 AI 报告无关；即使不生成报告，用户也能看到完整的量化结果（符合「免费层 = 基础测试 + 基础画像 + MBTI 四字母」，架构 1.3）。
-2. `confidenceLabel` 由 `confidence` 映射：`≥ 80` → 很高，`60–79` → 较高，`40–59` → 一般，`< 40` → 偏低。
-3. `dimensions[].strength` 由 `|percent - 50|` 映射：`< 10` → `SLIGHT`（轻微倾向），`10–25` → `MODERATE`，`> 25` → `STRONG`。
-4. `disclaimer` 必须由**服务端返回**（来自 `system_config`），前端**不得硬编码**（架构 1.2 合规约束）。
-5. `aiGeneratedNotice` 为 `null` 表示本页无 AI 生成内容；若前端拼接了 AI 文案，必须展示该字段返回的标识文案（《生成式人工智能服务管理暂行办法》要求，架构 14.4）。
-6. `includeAnswers: true` 时附加 `answers[]`（含 `questionId / order / value / responseMs / answeredAt`），用于「回看我的回答」；**不返回题目原文**（题目可从会话快照接口按 `order` 关联）。
+2. ~~`confidenceLabel` 由 `confidence` 映射~~ → **实现不存在该字段**；`result.confidence` 本身就是 0–100 的百分比数值，前端自行决定文案。
+3. `dimensions[].strength` 由 `|percent - 50|` 映射：`< 13` → `SLIGHT`（轻微倾向），`13–29.99` → `MODERATE`，`30–41.99` → `CLEAR`，`≥ 42` → `VERY_CLEAR`。⚠ 契约原文的 `STRONG` **不存在**（枚举为 `SLIGHT|MODERATE|CLEAR|VERY_CLEAR`）；且本接口的 `dimensions` **不含** `strength` 字段，该字段属 §3.4.1 画像接口。
+4. ~~`disclaimer` 必须由服务端返回~~ → **本接口不返回 `disclaimer`**（免责声明由 §3.12.1 `/system/config` 的 `disclaimers` 与 §3.4.1 画像接口下发）；本页如引用合规文案，应取自这两处，前端仍不得硬编码。
+5. ~~`aiGeneratedNotice` 为 `null` 表示本页无 AI 生成内容~~ → **本接口不返回该字段**（同上，AI 生成内容标识由 §3.4.1 / §3.6.10 下发）。
+6. ~~`includeAnswers: true` 时附加 `answers[]`~~ → **该参数与 `answers[]` 均未实现**（题目明细需从会话快照接口按 `order` 关联，或走 §3.3.5 的已答 ID 列表）。
 7. **结果不可篡改**：`test_results` 与 `personality_profiles` 无更新接口，算法升级后旧结果保留原 `engineVersion`（架构 11.4）。
 
 ---
@@ -3903,8 +3911,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                       |
 | ------- | ---- | ------------------------------ |
 | `10001` | 400  | `engineVersion` 格式非法       |
-| `10004` | 400  | `sortBy` 不在白名单            |
-| `10005` | 400  | `pageSize > 100`               |
+| `10001` | 400  | `sortBy` 不在白名单            |
+| `10001` | 400  | `pageSize > 100`               |
 | `40012` | 404  | 无任何画像历史（从未完成测试） |
 
 **业务规则**
@@ -4257,7 +4265,7 @@ PENDING ──worker 取任务──► GENERATING ──成功──► SUCCEED
 | 用途 | 创建报告任务并入队 `ai.report`（并发 5，重试 3 次，幂等键 `reportId`）；立即返回 202 + `taskId`    |
 | 鉴权 | 🔑 登录；💎 权益按 `type` 校验（`MBTI_REPORT` 免费用户可生成**一次**）                             |
 | 限流 | userId 5 次/60min                                                                                  |
-| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10011`）；另有 `cacheKey` 语义幂等（命中直接返回已有报告） |
+| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）；另有 `cacheKey` 语义幂等（命中直接返回已有报告） |
 | 异步 | **是**（`ai.report` 队列）                                                                         |
 
 **请求体**
@@ -4576,8 +4584,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
 | `10001` | 400  | `type`/`status` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单          |
-| `10005` | 400  | `pageSize > 100`             |
+| `10001` | 400  | `sortBy` 不在白名单          |
+| `10001` | 400  | `pageSize > 100`             |
 
 **业务规则**
 
@@ -4886,7 +4894,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                         |
 | ------- | ---- | ---------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                 |
+| `10001` | 400  | `id` 非合法 UUID                                                 |
 | `10001` | 400  | `includeSections` 非布尔                                         |
 | `50012` | 404  | 报告不存在或**不属于当前用户**                                   |
 | `50013` | 409  | 报告仍在生成中（`status ∈ {PENDING, GENERATING}`）→ 应改订阅进度 |
@@ -5063,7 +5071,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
-| `10003` | 400  | `id` 非合法 UUID             |
+| `10001` | 400  | `id` 非合法 UUID             |
 | `10001` | 400  | `sectionKey` 非枚举值        |
 | `50012` | 404  | 报告不存在或不属于当前用户   |
 | `50013` | 409  | 报告仍在生成中（无分段数据） |
@@ -5301,7 +5309,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                   |
 | ------- | ---- | -------------------------- |
-| `10003` | 400  | `id` 非合法 UUID           |
+| `10001` | 400  | `id` 非合法 UUID           |
 | `10010` | 429  | 轮询过快（> 4 次/秒）      |
 | `50012` | 404  | 报告不存在或不属于当前用户 |
 
@@ -5396,7 +5404,7 @@ data: {"requestId":"req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5","seq":9,"ts":"2026-02-14T14:
 
 | 错误码  | HTTP | 触发条件                                        |
 | ------- | ---- | ----------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                |
+| `10001` | 400  | `id` 非合法 UUID                                |
 | `50012` | 404  | 报告不存在或不属于当前用户                      |
 | `50017` | 429  | 并发 SSE 连接数超过 3                           |
 | `50013` | 409  | 报告已完成（`SUCCEEDED`）→ 直接读详情，无需订阅 |
@@ -5496,12 +5504,12 @@ data: {"requestId":"req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5","seq":9,"ts":"2026-02-14T14:
 | 错误码  | HTTP | 触发条件                                       |
 | ------- | ---- | ---------------------------------------------- |
 | `10001` | 400  | `tone`/`reason` 非枚举；`focus` 超出数量或非法 |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                       |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                       |
 | `50012` | 404  | 报告不存在或不属于当前用户                     |
 | `50013` | 409  | 原报告仍在生成中（不可重生成）                 |
 | `50015` | 402  | 非会员，或 24h 内重生成次数 > 3 次             |
 | `70014` | 402  | 无 `MEMBERSHIP_ACTIVE` 权益                    |
-| `50022` | 503  | 当日 AI 预算耗尽                               |
+| `50007` | 503  | 当日 AI 预算耗尽                               |
 | `50011` | 503  | provider 熔断中                                |
 
 **业务规则与边界条件**
@@ -5606,7 +5614,7 @@ data: {"requestId":"req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5","seq":9,"ts":"2026-02-14T14:
 | 错误码  | HTTP | 触发条件                                                       |
 | ------- | ---- | -------------------------------------------------------------- |
 | `10001` | 400  | `template` 非枚举；`includeCharts` 等非布尔                    |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                       |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                       |
 | `10010` | 429  | 24h 内超过 5 次                                                |
 | `50012` | 404  | 报告不存在或不属于当前用户                                     |
 | `50013` | 409  | 报告未生成完成（`status ≠ SUCCEEDED`）                         |
@@ -5696,7 +5704,7 @@ data: {"requestId":"req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5","seq":9,"ts":"2026-02-14T14:
 | ------- | ---- | --------------------------------------------------------------------------------------------------- |
 | `10001` | 400  | `template`/`scene` 非枚举；`showQrCode` 非布尔                                                      |
 | `10002` | 400  | `template = QUOTE_CARD` 但缺 `quoteSectionKey`                                                      |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                                            |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                                                            |
 | `10010` | 429  | 60min 内超过 10 次                                                                                  |
 | `50012` | 404  | 报告不存在或不属于当前用户                                                                          |
 | `50013` | 409  | 报告未生成完成                                                                                      |
@@ -5755,23 +5763,25 @@ PENDING_A_CONFIRM ──────────► PENDING_A_CONFIRM ───�
 
 **请求体**
 
-| 字段           | 类型    | 必填 | 约束                                  | 说明                                                    |
-| -------------- | ------- | ---- | ------------------------------------- | ------------------------------------------------------- |
-| `relationType` | string  | 是   | 枚举 `COUPLE` \| `FRIEND` \| `FAMILY` | 关系类型（决定可用能力：仅 `COUPLE` 支持恋爱匹配报告）  |
-| `inviteeName`  | string  | 否   | 0–20 字符                             | 邀请对象昵称（仅用于文案「邀请 {名字}」，不校验真实性） |
-| `message`      | string  | 否   | 0–60 字符                             | 自定义邀请留言（过长返回 `10001`）                      |
-| `needQrCode`   | boolean | 否   | 默认 `true`                           | 是否生成小程序码（`false` 时仅返回短码与文案分享）      |
-| `testCode`     | string  | 否   | 白名单 4 个 code                      | 建议对方先做的测试（默认 `MBTI_LITE`）                  |
+| 字段           | 类型   | 必填 | 约束                                                                                                | 说明                                                   |
+| -------------- | ------ | ---- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `relationType` | string | 是   | 枚举 `COUPLE` \| `FRIEND` \| `FAMILY`                                                               | 关系类型（决定可用能力：仅 `COUPLE` 支持恋爱匹配报告） |
+| `message`      | string | 否   | 0–60 字符                                                                                           | 自定义邀请留言（过长返回 `10001`）                     |
+| `channel`      | string | 否   | 枚举 `WECHAT_SESSION` \| `WECHAT_TIMELINE` \| `MINIAPP_CODE` \| `POSTER` \| `QRCODE` \| `COPY_LINK` | 分享渠道（写入 `share_channel`，用于裂变归因）         |
+
+> ⚠ **2026-10-13 契约漂移审计**：本节原声明的 `inviteeName` / `needQrCode` / `testCode` 在实现里
+> **没有任何读取方**（`CreateInviteDto` 只有上面 3 个字段），照旧文档传会得到
+> `400 / 10001 property xxx should not exist`（小程序 `api/relationship.ts:244-249` 只发这三个字段）。
+> 反向漂移：契约此前**漏了** `channel`，而实现与小程序都有它 —— 已补入上表。
+> 三个被移除字段的前置工作见本节末「未交付能力」。
 
 **请求示例**
 
 ```json
 {
   "relationType": "COUPLE",
-  "inviteeName": "阿泽",
   "message": "一起做个人格测试吧，很好奇我们合不合拍",
-  "needQrCode": true,
-  "testCode": "MBTI_LITE"
+  "channel": "MINIAPP_CODE"
 }
 ```
 
@@ -5783,61 +5793,64 @@ PENDING_A_CONFIRM ──────────► PENDING_A_CONFIRM ───�
   "message": "ok",
   "data": {
     "inviteId": "0195f3a2-cb20-7d86-9e97-5a6b7c8d9e0a",
+    "code": "K7M2XQ9V",
     "inviteCode": "K7M2XQ9V",
     "relationType": "COUPLE",
     "status": "PENDING",
-    "inviter": {
-      "userId": "0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70",
-      "nickname": "小满",
-      "avatarUrl": "https://cdn.soulmap.cn/avatar/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/20260214_a7c3f9.webp",
-      "mbtiType": "INFJ"
-    },
-    "inviteeName": "阿泽",
-    "message": "一起做个人格测试吧，很好奇我们合不合拍",
-    "suggestedTestCode": "MBTI_LITE",
-    "qrCodeUrl": "https://cdn.soulmap.cn/invite-qr/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/K7M2XQ9V.png",
+    "qrCodeUrl": "https://cdn.soulmap.cn/invite/qr/K7M2XQ9V.png",
     "qrCodeScene": "K7M2XQ9V",
-    "wideQrCodeUrl": "https://cdn.soulmap.cn/invite-qr/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/K7M2XQ9V-wide.png",
     "sharePath": "pages/match/scan?scene=K7M2XQ9V",
-    "shareText": "小满邀请你一起做人格测试，看看我们有多合拍～",
-    "shareTitle": "来做个人格测试吧",
     "expiresAt": "2026-02-21T14:35:00.000Z",
-    "remainingSeconds": 604800,
-    "createdAt": "2026-02-14T14:35:00.000Z",
-    "dailyQuota": {
-      "used": 1,
-      "limit": 10,
-      "resetAt": "2026-02-15T00:00:00.000Z"
-    }
+    "remainingSeconds": 604800
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T14:35:00.000Z"
 }
 ```
 
+> ⚠ 响应示例已按实现重写（`relationship.service.ts:487-494` + `relationship.controller.ts:116-122`）。
+> 契约原示例里的 `inviter` / `inviteeName` / `message` / `suggestedTestCode` / `wideQrCodeUrl` /
+> `shareText` / `shareTitle` / `createdAt` / `dailyQuota` **实现一律不返回**（前端读到 `undefined`）；
+> 其中 `message` 只**入库**不回传，`inviter` 需额外的用户联查与配额计数表（`controller.ts:35` 注明未实现）。
+> `sharePath` 目前指向**不存在的小程序页面** `pages/match/scan`（真实页面是 `pkgMatch/pages/invite`）——
+> 属实现缺陷，见交付报告「需改实现」。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                              |
-| ------- | ---- | ------------------------------------------------------------------------------------- |
-| `10001` | 400  | `relationType` 非枚举；`message` 超 60 字；`testCode` 非法                            |
-| `10010` | 429  | 24h 内创建超过 10 次                                                                  |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                              |
-| `30015` | 403  | `relationType = COUPLE` 但用户年龄 < 18（`ageVerified = false`，架构 14.3）           |
-| `30017` | 400  | 未完成年龄声明                                                                        |
-| `40012` | 404  | 邀请方尚未完成任何测试 → **允许创建**，但建议先引导测试（本接口不报错，前端渐进引导） |
-| `60016` | 409  | 已达关系数量上限（`ACTIVE` 关系 > 20）                                                |
-| `70016` | 402  | 免费用户邀请次数用尽（`system_config.freeInviteDailyLimit`，默认 10）                 |
-| `90009` | 403  | `FEATURE_COUPLE_MATCH` 关闭且 `relationType = COUPLE`                                 |
+| 错误码  | HTTP | 触发条件                                              |
+| ------- | ---- | ----------------------------------------------------- |
+| `10001` | 400  | `relationType` / `channel` 非枚举；`message` 超 60 字 |
+| `10007` | 429  | 24h 内创建超过 10 次（`@Throttle`）                   |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`（见下方 ⚠）                  |
+| `60007` | 429  | 未使用（`PENDING`/`ACCEPTED`）的邀请数已达上限 5      |
+| `90000` | 500  | 邀请短码连续碰撞 5 次（随机源异常）                   |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 校正：原文的 `10010`（限流）实为
+> `10007 RATE_LIMITED`；`60016`（关系数上限）**该码不存在**，实现用 `60007 RELATIONSHIP_INVITE_LIMIT`；
+> `30015` / `30017` / `40012` / `70016` / `90009` 五行**实现里没有对应逻辑**（年龄闸门与 §3.6 的状态机、
+> `FEATURE_COUPLE_MATCH` 开关、免费邀请配额均未接入本接口），已删除。
+> 另：**该端点未声明 `@IdempotencyKey()`**，因此 `10009` 实际不会返回（契约保留要求，实现待补）。
 
 **业务规则与边界条件**
 
-1. **短码生成**：8 位 Base32（字符集 `23456789ABCDEFGHJKMNPQRSTUVWXYZ`，去除 `0/O/1/I/L` 等易混字符）；生成后**Redis + DB 双写**（架构 12.1），Redis `sm:invite:{code}` TTL 7 天；冲突时重试（最多 5 次）。
-2. **小程序码**：调用 `wxacode.getUnlimited`（`scene = inviteCode`，`page = pages/match/scan`），二进制上传 OSS（`invite-qr/{userId}/{code}.png`），返回 CDN URL。**失败降级**：仍返回 `inviteCode` 与分享文案，`qrCodeUrl = null`，并写 `outbox_event` 异步重试（架构 15.5）。
+1. **短码生成**：8 位 Crockford Base32（字符集 `0123456789ABCDEFGHJKMNPQRSTVWXYZ`）；生成后 **Redis + DB 双写**（架构 12.1），Redis 键 `sm:invite:code:{code}` TTL 7 天；冲突时重试（最多 5 次）。
+2. **小程序码**：调用 `wxacode.getUnlimited`（`scene = inviteCode`，`page = pkgMatch/pages/invite`），二进制上传 OSS（`invite/qr/{code}.png`），返回 CDN URL。**失败降级**：仍返回 `code` 与分享路径，`qrCodeUrl = null`。
 3. **邀请一次性**：`status` 从 `PENDING` → `ACCEPTED`（被接受）→ 过期后 `EXPIRED`；同一邀请码**只能被使用一次**。
-4. **不限制邀请数量但有上限**：24h 10 次（免费用户），会员 30 次；同时 `ACTIVE` 关系上限 20（`60016`）。
-5. **归因**：邀请创建写入 `share_records`（`channel = INVITE`），被接受后计为一次有效邀请（用于 K 值计算，架构 1.4）。
-6. **邀请方画像要求**：邀请方**必须**已有 `PersonalityProfile` 才能发起 `COUPLE` 邀请（无画像返回 `40012`）——否则接受方接受后无法算分。`FRIEND`/`FAMILY` 无此要求。
-7. **未成年人保护**：`COUPLE` 类型对 `ageVerified = false` 用户一律拒绝（`30015`），且前端入口隐藏（架构 1.2 边界 / 14.3）。
+4. **不限制邀请数量但有上限**：24h 10 次，且同一用户未使用邀请数 ≤ 5（超出 `60007`）。
+5. **归因**：邀请创建写入 `share_records`，被接受后计为一次有效邀请（用于 K 值计算，架构 1.4）。
+6. **邀请方画像要求：不校验**（2026-10-13 按实现校正）。邀请方无画像时**仍允许创建**，由接受方在 §3.6.2 的 `blockedReason = NO_PROFILE` 获得引导 —— 契约原文的「必须已有画像否则 `40012`」在实现中不存在。
+7. **未成年人保护：未交付**。`COUPLE` 类型当前**不校验** `ageVerified`，前端入口也未隐藏（契约原文的 `30015` 无实现）。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                  | 未交付的内容与前置工作                                                      |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `inviteeName`               | 邀请对象昵称：需 `relationship_invites` 加列 + 接受方展示联动（现无列可存） |
+| `needQrCode`                | 关闭小程序码开关：需在生成链路加分支与降级指标（当前一律生成，失败才降级）  |
+| `testCode`                  | 「建议对方先做的测试」：需在邀请表存建议测试编码并在接受页展示              |
+| 年龄闸门（`30015`/`30017`） | 规范级前置工作：需先落地全局 `ageVerified` 语义与入口隐藏（架构 14.3）      |
+| `FEATURE_COUPLE_MATCH` 开关 | 功能开关接入本接口（现仅在 `/system/config` 下发，关系链路不判断）          |
+| 免费/会员邀请配额差异       | 需 `system_config.freeInviteDailyLimit` 读取 + 会员权益判定                 |
 
 #### 3.6.2 `GET /api/v1/relationships/invites/{code}` — 邀请详情（公开信息，需登录） 🔑
 
@@ -5920,11 +5933,11 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | ------- | ---- | ------------------------------------------------------------------------------------------------------------ |
 | `10003` | 400  | `code` 长度非 8 或含非法字符                                                                                 |
 | `10010` | 429  | 命中限流（防邀请码暴力枚举）                                                                                 |
-| `60001` | 404  | 邀请码不存在（Redis 与 DB 均未命中）                                                                         |
-| `60002` | 410  | 邀请已过期（> 7 天）                                                                                         |
-| `60003` | 409  | 邀请已被使用（`status = ACCEPTED`）                                                                          |
-| `60019` | 409  | 邀请已被拒绝（`status = REJECTED`）                                                                          |
-| `60004` | 400  | `canAccept = false` 且 `blockedReason = SELF_INVITE`（自己扫自己的码）——**本接口仍返回 200**，只在接受时拒绝 |
+| `60003` | 404  | 邀请码不存在（Redis 与 DB 均未命中）                                                                         |
+| `60004` | 410  | 邀请已过期（> 7 天）                                                                                         |
+| `60005` | 409  | 邀请已被使用（`status = ACCEPTED`）                                                                          |
+| `60004` | 410  | 邀请已被撤销（`status = REVOKED`；原 `60019`/`REJECTED` 不存在，已删除）                                     |
+| `60006` | 400  | `canAccept = false` 且 `blockedReason = SELF_INVITE`（自己扫自己的码）——**本接口仍返回 200**，只在接受时拒绝 |
 
 **业务规则与边界条件**
 
@@ -5937,12 +5950,25 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
    | `NO_PROFILE`         | 自己尚未完成测试                            | 展示「先完成测试」按钮（`60005`）      |
    | `ALREADY_RELATED`    | 双方已有关系                                | 直接跳转已有关系详情（`60008`）        |
    | `TYPE_MISMATCH`      | 关系类型与我的现状冲突（如我已有 `COUPLE`） | 提示先解除                             |
-   | `AGE_RESTRICTED`     | 年龄校验未通过                              | 展示合规说明                           |
+   | `AGE_RESTRICTED`     | 年龄校验未通过（**实现永不返回**，见下注）  | 展示合规说明                           |
    | `RELATIONSHIP_LIMIT` | 关系数已达上限                              | 提示先解除部分关系                     |
 3. **枚举防护**：邀请码空间 32^8 ≈ 1.1×10^12，配合 IP 限流 + Redis 查询（不落 DB 查询）抵御枚举；连续 20 次未命中触发 IP 封禁 1 小时（风控，返回 `10010`）。
 4. **`myStatus`** 用于前端个性化引导（例如已完成的步骤打勾）。
 5. **`status = ACCEPTED`** 时，若接受者就是当前用户，仍返回 200 并附 `acceptedRelationshipId`，前端直接跳转关系详情（不报错，体验更好）；若接受者是他人，返回 `60003`。
 6. `disclaimer` 由服务端返回（合规要求，前端不得硬编码）。
+
+> ⚠ **本节两处按实现校正（2026-10-13 契约漂移审计）**：
+>
+> ① **`AGE_RESTRICTED` 永不产生**：`resolveInviteAcceptability` 只会返回
+> `SELF_INVITE` / `NO_PROFILE` / `ALREADY_RELATED` / `TYPE_MISMATCH` / `RELATIONSHIP_LIMIT`
+> 五种（本项目未实现年龄闸门，源码注释与单测均如此声明）。字段保留在类型里，但服务端不会返回该值。
+>
+> ② **邀请状态是 `REVOKED` 而不是 `REJECTED`**：`schema.prisma` 的
+> `RelationshipInviteStatus = PENDING | ACCEPTED | EXPIRED | REVOKED`，**没有 `REJECTED`**
+> （`REJECTED` 是**关系**状态 `RelationshipStatus` 的取值，两者不要混用）。
+> 契约原文的 `60019 邀请已被拒绝（status = REJECTED）` 一行已删除 —— 该码**不存在**，
+> 且实现把「已撤销/已过期」都归到 `60004`（HTTP 410）。
+> 另：`blockedReason = NO_PROFILE` 行里引用的 `60005` 应改为 `40010`（见 §3.6.3 错误码说明）。
 
 #### 3.6.3 `POST /api/v1/relationships/invites/{code}/accept` — 接受邀请 🔑 ♻️
 
@@ -5962,19 +5988,16 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **请求体**
 
-| 字段              | 类型   | 必填 | 约束             | 说明                                                           |
-| ----------------- | ------ | ---- | ---------------- | -------------------------------------------------------------- |
-| `confirmTestCode` | string | 否   | 白名单 4 个 code | 若接受方无画像，服务端引导先测试，此字段无实际作用（保留扩展） |
-| `displayName`     | string | 否   | 0–20 字符        | 我在该关系中的显示名（默认取用户昵称）                         |
-| `acceptMessage`   | string | 否   | 0–60 字符        | 接受时的回复留言（对方可见）                                   |
+> 🚫 **请求体必须为空**（2026-10-13 契约漂移审计）：实现在本端点是**空 DTO**（`AcceptInviteDto {}`，
+> 刻意留空 —— 数据模型里没有任何列能承载「显示名 / 接受留言」），契约原声明的
+> `confirmTestCode` / `displayName` / `acceptMessage` **传任一都会得到
+> `400 / 10001 property xxx should not exist`**。小程序 `api/relationship.ts:252-253`
+> 正是按空 body 调用的（`http.post(..., {})`）。
 
 **请求示例**
 
 ```json
-{
-  "displayName": "阿泽",
-  "acceptMessage": "好啊，我也很好奇"
-}
+{}
 ```
 
 **成功响应 201**
@@ -5985,63 +6008,45 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "message": "ok",
   "data": {
     "relationshipId": "0195f3a2-d46a-7ca8-8d13-9fca6d7e8b67",
-    "pairKey": "0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70:0195f3a2-8d5f-7c42-ab7e-3f6a9c2d8e81",
-    "relationType": "COUPLE",
     "status": "PENDING_A_CONFIRM",
-    "inviteCode": "K7M2XQ9V",
-    "inviteId": "0195f3a2-cb20-7d86-9e97-5a6b7c8d9e0a",
-    "userA": {
-      "userId": "0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70",
-      "nickname": "小满",
-      "avatarUrl": "https://cdn.soulmap.cn/avatar/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/20260214_a7c3f9.webp",
-      "mbtiType": "INFJ",
-      "isMe": false,
-      "role": "INVITER",
-      "confirmedAt": null
-    },
-    "userB": {
-      "userId": "0195f3a2-8d5f-7c42-ab7e-3f6a9c2d8e81",
-      "nickname": "阿泽",
-      "avatarUrl": "https://cdn.soulmap.cn/avatar/0195f3a2-8d5f-7c42-ab7e-3f6a9c2d8e81/20260211_b8d4e1.webp",
-      "mbtiType": "INTJ",
-      "isMe": true,
-      "role": "INVITEE",
-      "confirmedAt": "2026-02-14T14:40:00.000Z"
-    },
-    "pendingConfirmationBy": "0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70",
-    "expiresAt": "2026-02-21T14:40:00.000Z",
-    "isNewRelationship": true,
-    "notifiedInviter": true,
-    "compatibility": {
-      "canCalculate": true,
-      "requiresConfirm": true,
-      "estimatedSeconds": 25
-    },
-    "createdAt": "2026-02-14T14:40:00.000Z"
+    "relationType": "COUPLE",
+    "peerUserId": "0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70",
+    "awaitingPeerConfirm": true
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T14:40:00.000Z"
 }
 ```
 
+> ⚠ 响应示例已按实现重写（`relationship.service.ts:613-619`，幂等命中 `:554-560`）。
+> 契约原示例里的 `pairKey` / `userA` / `userB` / `pendingConfirmationBy` / `inviteCode` /
+> `inviteId` / `expiresAt` / `isNewRelationship` / `notifiedInviter` / `compatibility` / `createdAt`
+> **一律不返回**；小程序 `api/relationship.ts:210-217` 的 `AcceptedRelationship` 与上面的 5 字段逐字一致。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                  |
-| ------- | ---- | ------------------------------------------------------------------------- |
-| `10001` | 400  | `acceptMessage`/`displayName` 超长                                        |
-| `10003` | 400  | `code` 格式非法                                                           |
-| `10010` | 429  | 60min 内超过 10 次                                                        |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                  |
-| `30018` | 403  | 注销冷静期内禁止建立关系                                                  |
-| `60001` | 404  | 邀请码不存在                                                              |
-| `60002` | 410  | 邀请已过期                                                                |
-| `60003` | 409  | 邀请已被使用（含被自己先前接受过）                                        |
-| `60004` | 400  | 自己不能接受自己的邀请                                                    |
-| `60005` | 409  | 接受方尚未完成人格测试（`hasProfile = false`）                            |
-| `60008` | 409  | `pairKey` 已存在（双方已有关系）→ 响应 `data.relationshipId` 指向已有关系 |
-| `60014` | 403  | `COUPLE` 类型但年龄校验未通过                                             |
-| `60016` | 409  | 任一方关系数已达上限（20）                                                |
-| `60020` | 400  | 我已有 `ACTIVE` 的 `COUPLE` 关系（关系类型冲突）                          |
+| 错误码  | HTTP | 触发条件                                                           |
+| ------- | ---- | ------------------------------------------------------------------ |
+| `10001` | 400  | `code` 长度非 8                                                    |
+| `10007` | 429  | 60min 内超过 10 次（`@Throttle`）                                  |
+| `60003` | 404  | 邀请不存在；**或**邀请码含非法字符（实现刻意合并，避免暴露码空间） |
+| `60004` | 409  | 邀请已过期或被撤销（同一条件在不同路径分别给 409/410）             |
+| `60005` | 409  | 邀请已被使用                                                       |
+| `60006` | 400  | 不能接受自己的邀请                                                 |
+| `60002` | 409  | `pairKey` 已存在（双方已有关系）                                   |
+| `60009` | 409  | **邀请方**尚未完成人格测评（`COMPATIBILITY_PEER_NOT_READY`）       |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 重写：原文的
+> `60001`/`60002`/`60003`/`60004`/`60005` 分别对应实现的
+> `60003`/`60004`/`60005`/`60006`/`60009`；`10010`→`10007`；`10003`→`10001`。
+> **注意方向**：契约原文写「**接受方**尚未完成测试 → `60005`」，实现校验的是
+> **邀请方**（`relationship.service.ts:572-578`）—— 接受方自己无画像只会在 §3.6.2 得到
+> 引导性 `blockedReason = NO_PROFILE`，**不会被拦**。该语义差异见交付报告存疑清单。
+> 另：该端点**未声明 `@IdempotencyKey()`**，`10009` 实际不会返回（契约保留要求，实现待补）。
+> | `60008` | 409 | `pairKey` 已存在（双方已有关系）→ 响应 `data.relationshipId` 指向已有关系 |
+> | `60014` | 403 | `COUPLE` 类型但年龄校验未通过 |
+> | `60016` | 409 | 任一方关系数已达上限（20） |
+> | `60020` | 400 | 我已有 `ACTIVE` 的 `COUPLE` 关系（关系类型冲突） |
 
 **业务规则与边界条件**
 
@@ -6190,8 +6195,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                             |
 | ------- | ---- | ------------------------------------ |
 | `10001` | 400  | `status`/`relationType` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单                  |
-| `10005` | 400  | `pageSize > 100`                     |
+| `10001` | 400  | `sortBy` 不在白名单                  |
+| `10001` | 400  | `pageSize > 100`                     |
 
 **业务规则**
 
@@ -6330,7 +6335,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                                                |
 | ------- | ---- | --------------------------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                                        |
+| `10001` | 400  | `id` 非合法 UUID                                                                        |
 | `60006` | 404  | 关系不存在（含已物理清理）                                                              |
 | `60007` | 403  | **当前用户不是关系双方之一**（IDOR 防护；记录安全探测日志）                             |
 | `60010` | 409  | 关系已解除（`status = REMOVED`）——**本接口仍返回 200**，仅 `permissions` 全部为 `false` |
@@ -6409,7 +6414,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                                                                                 |
 | ------- | ---- | -------------------------------------------------------------------------------------------------------- |
 | `10001` | 400  | `autoGenerateReport` 非布尔；`displayName` 超长                                                          |
-| `10003` | 400  | `id` 非合法 UUID                                                                                         |
+| `10001` | 400  | `id` 非合法 UUID                                                                                         |
 | `10010` | 429  | 60min 内超过 20 次                                                                                       |
 | `60006` | 404  | 关系不存在                                                                                               |
 | `60007` | 403  | 当前用户不是关系双方之一                                                                                 |
@@ -6486,7 +6491,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                                                              |
 | ------- | ---- | ----------------------------------------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                                                      |
+| `10001` | 400  | `id` 非合法 UUID                                                                                      |
 | `10001` | 400  | `reason` 非枚举；`keepHistory` 非布尔                                                                 |
 | `10010` | 429  | 60min 内超过 10 次                                                                                    |
 | `60006` | 404  | 关系不存在                                                                                            |
@@ -6520,84 +6525,59 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **请求体**
 
-| 字段               | 类型     | 必填 | 约束                                                            | 说明                                         |
-| ------------------ | -------- | ---- | --------------------------------------------------------------- | -------------------------------------------- |
-| `forceRecalculate` | boolean  | 否   | 默认 `false`                                                    | 忽略算法幂等键强制重算（**会消耗会员额度**） |
-| `focus`            | string[] | 否   | 最多 2 个：`COMMUNICATION`\|`CONFLICT`\|`INTIMACY`\|`LONG_TERM` | 解读侧重                                     |
-| `tone`             | string   | 否   | 枚举 `WARM`（默认）\| `NEUTRAL` \| `DIRECT`                     | 解读语气                                     |
-| `includeAdviceFor` | string   | 否   | 枚举 `BOTH`（默认）\| `A` \| `B`                                | 建议面向对象（默认双方）                     |
+> 🚫 **请求体必须为空**（2026-10-13 契约漂移审计）：实现在本端点是**空 DTO**（`GenerateCompatibilityBodyDto {}`），
+> 契约原声明的 `forceRecalculate` / `focus` / `tone` / `includeAdviceFor` **四个字段都没有读取方**，
+> 传任一都会得到 `400 / 10001 property xxx should not exist`。小程序 `api/relationship.ts:346-347`
+> 正是按空 body 调用的（`http.post(..., {})`），且其注释写明「`isReused = true` 表示复用了既有报告」。
 
 **请求示例**
 
 ```json
-{
-  "forceRecalculate": false,
-  "focus": ["COMMUNICATION", "CONFLICT"],
-  "tone": "WARM",
-  "includeAdviceFor": "BOTH"
-}
+{}
 ```
 
-**成功响应 202**
+**成功响应 202 / 200**
 
 ```json
 {
   "code": 0,
   "message": "ok",
   "data": {
-    "compatibilityReportId": "0195f3a2-e57b-7db9-9e24-a0db7e8f9c78",
-    "taskId": "0195f3a2-e57b-7db9-9e24-a0db7e8f9c78",
-    "relationshipId": "0195f3a2-d46a-7ca8-8d13-9fca6d7e8b67",
-    "status": "PENDING",
+    "reportId": "0195f3a2-e57b-7db9-9e24-a0db7e8f9c78",
+    "status": "QUEUED",
     "queue": "compatibility.calc",
-    "cacheHit": false,
-    "idempotencyKey": "ce7b1a4f92d83c05e6a1b7d4f2093c8a5e1d7b40c9a2f83e5d61b0a4c7e29f83",
-    "computation": {
-      "algorithmVersion": "ce-v1.0.0",
-      "weightsVersion": "cw-v1.0.0",
-      "deterministic": true,
-      "profileAVersion": 3,
-      "profileBVersion": 2
-    },
-    "ai": {
-      "promptKey": "RELATIONSHIP_REPORT",
-      "promptVersionId": "0195f3a2-18be-7aec-8b57-d3ae0b1c2f0b",
-      "promptVersion": 7,
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "estimatedSeconds": 25
-    },
-    "quota": {
-      "consumed": 0,
-      "consumedOnSuccess": true,
-      "requiresEntitlement": "MEMBERSHIP_ACTIVE",
-      "remainingCount": 4,
-      "dailyLimit": 5,
-      "resetAt": "2026-02-15T00:00:00.000Z"
-    },
-    "createdAt": "2026-02-14T14:45:00.000Z",
-    "progressUrl": "/api/v1/compatibility-reports/0195f3a2-e57b-7db9-9e24-a0db7e8f9c78/progress"
+    "isReused": false,
+    "estimatedSeconds": 5
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T14:45:00.000Z"
 }
 ```
 
+> ⚠ 响应示例已按实现重写（`compatibility.service.ts:349-355` 新建 / `:315-321` 复用）。
+> 契约原示例里的 `compatibilityReportId`（实现叫 `reportId`）/ `taskId` / `cacheHit`（实现叫 `isReused`）/
+> `idempotencyKey` / `computation` / `ai` / `quota` / `createdAt` / `progressUrl` **一律不返回**；
+> 小程序 `api/relationship.ts:298-307` 的 `CompatibilityRequestResult` 与上面的 5 字段逐字一致。
+> `estimatedSeconds`：新建为 5，命中复用为 0。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                         |
-| ------- | ---- | ---------------------------------------------------------------- |
-| `10001` | 400  | `focus` 超数量或非法；`tone`/`includeAdviceFor` 非枚举           |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                         |
-| `10010` | 429  | 24h 内超过 3 次                                                  |
-| `60006` | 404  | 关系不存在                                                       |
-| `60007` | 403  | 当前用户不是关系双方之一                                         |
-| `60020` | 400  | 关系非 `ACTIVE`（`PENDING_A_CONFIRM`/`REMOVED`/`EXPIRED`）       |
-| `60011` | 409  | 任一方无 `PersonalityProfile`                                    |
-| `60014` | 403  | `relationType ≠ COUPLE`（仅伴侣关系支持恋爱匹配报告）            |
-| `70014` | 402  | 无 `MEMBERSHIP_ACTIVE` 且无匹配报告单次购买权益                  |
-| `50011` | 503  | AI provider 熔断中（**算分本身仍会完成**，仅 AI 解读失败可重试） |
-| `90005` | 503  | 队列不可用                                                       |
+| 错误码  | HTTP | 触发条件                                                           |
+| ------- | ---- | ------------------------------------------------------------------ |
+| `10001` | 400  | `id` 非合法 UUID；请求体含任何字段                                 |
+| `10007` | 429  | 24h 内超过 3 次（`@Throttle`）                                     |
+| `60000` | 404  | 关系不存在**或**不属于当前用户（实现刻意合并为 404，防 IDOR 探测） |
+| `60008` | 409  | 关系非 `ACTIVE`                                                    |
+| `40010` | 404  | **我**无 `PersonalityProfile`                                      |
+| `60009` | 409  | **对方**无 `PersonalityProfile`（`COMPATIBILITY_PEER_NOT_READY`）  |
+| `60011` | 409  | 该关系已有报告正在生成中                                           |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 重写：原文的 `60011`（任一方无画像）
+> 实为「报告正在生成中」（`60011 COMPATIBILITY_GENERATING`），"无画像"拆为 `40010`/`60009`；
+> `60020`→`60008`、`60006`/`60007`→`60000`、`10010`→`10007`。
+> 另删除四行**实现不存在的机制**：`60014`（仅 `COUPLE` 可算分 —— 实现不做类型判断）、
+> `70014`（权益闸门 —— 本端点不校验权益）、`50011`（AI 熔断 —— 无熔断实现）、
+> `90005`（队列不可用 —— 入队异常直接冒泡，不返回该码）。这些属**未交付能力**，不是契约错。
 
 **业务规则与边界条件（**核心**）**
 
@@ -6612,25 +6592,35 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
    ⑤ 权重矩阵来自 compatibility_weights（后台可调，改动走版本号 weightsVersion）
    ```
 2. **AI 解读的长度约束**：优势 3 条、潜在冲突 3 条、可执行建议 5 条、沟通话术示例 2 组（架构 12.2），通过 `prompt_versions.outputSchema` 的 JSON Schema 强约束（`jsonMode`），输出不符则重试。
-3. **算分幂等键**（架构 12.2）：
-   ```
-   idempotencyKey = SHA-256(profileA.version | profileB.version | weightsVersion | promptVersion)
-   ```
-   命中且已有 `SUCCEEDED` 报告 → 返回 **200** + `cacheHit: true` + 已有 `compatibilityReportId`（不重复扣费）。
-4. **算分与 AI 解耦**：即使 AI 解读失败（`50011`/`50009`），**算分结果仍落库**（`overallScore` 与 `scoreBreakdown` 可先展示），报告状态置 `PARTIAL`，可单独重试 AI 部分。这是重要的可用性设计。
-5. **权益**：匹配深度报告为单次付费商品或会员权益（架构 1.3）；**免费用户可看到总分与子项明细（规则算分结果），AI 解读部分需解锁**——与「报告预览」策略一致。
+3. **幂等实现**（2026-10-13 按实现校正）：本端点**不要求 `X-Idempotency-Key`**（未声明该装饰器），
+   幂等由**算法缓存键**保证 —— 键由双方画像版本、权重版本与 Prompt 版本派生，命中且已有 `SUCCEEDED`
+   报告时返回 200 + `isReused: true` + 既有 `reportId`，**不重复消耗额度**。
+4. **算分与 AI 解耦**：即使 AI 解读失败，**算分结果仍落库**（`overallScore` 与 `scoreBreakdown` 可先展示），
+   报告状态置 `PARTIAL`，可单独重试 AI 部分。这是重要的可用性设计。
+5. **权益：当前未接入**（2026-10-13 按实现校正）。本端点不校验会员/单次购买权益，**免费用户也能触发算分**；
+   AI 解读的付费裁剪发生在读取侧（§3.6.10 的 `isUnlocked`）。
 6. **双方同意**：关系 `ACTIVE` 即代表双方同意参与匹配（接受+确认即授权）；解除关系后该关系下不再新增报告。
-7. **队列幂等**：`jobId = compatibilityReportId`（架构 6.4 幂等键 `relationshipId` 对应关系级去重）。
+7. **队列幂等**：`jobId = reportId`（架构 6.4 幂等键 `relationshipId` 对应关系级去重）。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明               | 未交付的内容与前置工作                                                           |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `forceRecalculate`       | 「强制重算」需先定义语义（是忽略缓存键重算、还是忽略额度限制），并接入缓存键分支 |
+| `focus` / `tone`         | 需 Prompt 模板占位符与上下文变量体系配套（现有模板无这些占位符）                 |
+| `includeAdviceFor`       | 需按建议对象拆分的模板结构（A/B/双方三套渲染）                                   |
+| `60014` 仅 `COUPLE` 可算 | 需在 service 读取 `relationship.type` 并加类型闸门（现无任何类型判断）           |
+| `70014` 权益闸门         | 需接入 `entitlements` 校验与额度扣减（含失败回补）                               |
 
 #### 3.6.9 `GET /api/v1/relationships/{id}/compatibility` — 查询关系的匹配报告 🔑 💎
 
-| 项   | 值                                                                     |
-| ---- | ---------------------------------------------------------------------- |
-| 用途 | 获取该关系**最新**匹配报告的摘要（避免前端先不确定 `reportId` 的场景） |
-| 鉴权 | 🔑 登录 + 归属校验；全文需 💎                                          |
-| 限流 | userId 120 次/60s                                                      |
-| 幂等 | 是                                                                     |
-| 异步 | 否                                                                     |
+| 项   | 值                                                                               |
+| ---- | -------------------------------------------------------------------------------- |
+| 用途 | 获取该关系**最新**匹配报告的摘要（避免前端先不确定 `reportId` 的场景）           |
+| 鉴权 | 🔑 登录 + 归属校验（**无 💎 裁剪**：本接口全量下发分数，付费裁剪发生在 §3.6.10） |
+| 限流 | userId 120 次/60s                                                                |
+| 幂等 | 是                                                                               |
+| 异步 | 否                                                                               |
 
 **Path 参数**
 
@@ -6640,16 +6630,49 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **Query 参数**
 
-| 参数             | 类型    | 必填 | 约束         | 说明                             |
-| ---------------- | ------- | ---- | ------------ | -------------------------------- |
-| `includeHistory` | boolean | 否   | 默认 `false` | 是否返回历史报告列表（版本演进） |
+> 🚫 **无 Query 参数**（2026-10-13 契约漂移审计）：实现没有绑定 `@Query()`，因此
+> `?includeHistory=true` **既不会报错也不会生效 —— 被静默忽略**（这点比 400 更隐蔽：
+> 客户端以为「按需取历史」生效了，实际拿到的永远只有最新报告）。
+> 契约原声明的 `includeHistory` 已删除；历史报告演进属**未交付能力**。
+>
+> ⚠ **响应结构已按实现校正（重点）**：本端点的 `data` 与下文示例**完全不同**，真实结构见下一节说明。
 
 **请求示例**
 
 ```http
-GET /api/v1/relationships/0195f3a2-d46a-7ca8-8d13-9fca6d7e8b67/compatibility?includeHistory=false HTTP/1.1
+GET /api/v1/relationships/0195f3a2-d46a-7ca8-8d13-9fca6d7e8b67/compatibility HTTP/1.1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
+
+**成功响应 200**
+
+无报告时**返回 `data: null`**（**不是** `hasReport: false`，也不是 404）：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": null,
+  "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
+  "timestamp": "2026-02-14T14:50:00.000Z"
+}
+```
+
+> ⚠ **这是本节的重大契约错位**（2026-10-13 审计）：契约要求「无报告时 `200 + hasReport: false`」，
+> 而实现是 `if (report === null) return null`（`compatibility.service.ts:486`）→ **`data: null`**。
+> 按旧契约写 `if (!res.data.hasReport)` 的客户端会直接 `TypeError`。
+> **小程序已按 `null` 处理**：`api/relationship.ts:355-356` 的签名就是
+> `Promise<CompatibilityReport | null>`，并在注释里写明「返回 `null` 表示尚未生成，这是正常状态而非错误」。
+>
+> 有报告时 `data` 的真实字段（`compatibility.service.ts:490-513`）：
+> `reportId`、`relationshipId`、`status`、`totalScore`、`mbtiScore`、`bigFiveScore`、`attachmentScore`、
+> `communicationScore`、`scoreLevel`、`scoreLabel`、`scoreBreakdown`（引擎 JSONB 原样透传）、
+> `engineVersion`、`weightsVersion`、`computedAt`、`createdAt`、`failureReason`（仅 `FAILED` 时）、
+> `aiInterpretation: { available, aiReportId }`。
+> 契约原示例里的 `hasReport` / `latestReportId` / `overallScore`（实现叫 `totalScore`）/ `summary` /
+> `scoreBreakdown[].detail` / `profileA` / `profileB` / `isUnlocked` / `requiresEntitlement` /
+> `entitlementRequired` / `freePreview` / `reportCount` / `disclaimer` / `history`
+> **一律不返回**（付费裁剪不在本接口）。
 
 **成功响应 200**
 
@@ -6742,18 +6765,18 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                                          |
-| ------- | ---- | ------------------------------------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                                                  |
-| `60006` | 404  | 关系不存在                                                                                        |
-| `60007` | 403  | 当前用户不是关系双方之一                                                                          |
-| `60014` | 403  | `relationType ≠ COUPLE`                                                                           |
-| `60012` | 404  | 该关系尚无匹配报告（`hasReport = false` 时**仍返回 200**，`data.hasReport: false`，前端展示引导） |
+| 错误码  | HTTP | 触发条件                                                      |
+| ------- | ---- | ------------------------------------------------------------- |
+| `10001` | 400  | `id` 非合法 UUID                                              |
+| `60006` | 404  | 关系不存在                                                    |
+| `60007` | 403  | 当前用户不是关系双方之一                                      |
+| `60014` | 403  | `relationType ≠ COUPLE`                                       |
+| `60012` | 404  | （**实现不返回该码**）无报告时返回 `200 + data: null`，见上文 |
 
 **业务规则**
 
 1. **免费可见范围**：总分、等级、四维拆解明细（确定性规则算分结果）**免费**；AI 解读部分需解锁（`isUnlocked: false` 时 `aiInsights` 不返回或返回 `null`）。
-2. **无报告不报错**：`hasReport: false` 返回 200 + 引导字段，避免前端把 404 当作错误处理。
+2. **无报告不报错**：返回 `200 + data: null`（**不是** `hasReport: false`），避免前端把 404 当作错误处理 —— 但客户端**必须判空**。
 3. `scoreBreakdown` 来自 `compatibility_reports.scoreBreakdown`（JSONB，架构 12.2），前端可据此画堆叠柱状图。
 4. `weightsVersion` 变化后旧报告**不重算**（与人格画像版本化策略一致，架构 11.4 / 12.2）；用户可主动 `forceRecalculate`。
 5. **响应**：双方看到**完全一致**的内容（同一份报告，无视角差异）——避免「两边说法不一致」引发信任问题。
@@ -7011,7 +7034,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                            |
 | ------- | ---- | ------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                    |
+| `10001` | 400  | `id` 非合法 UUID                                                    |
 | `60012` | 404  | 报告不存在，或**当前用户不是该报告所属关系的双方之一**（IDOR 防护） |
 | `60013` | 409  | 报告仍在生成中（`status ∈ {PENDING, GENERATING}`）→ 改订阅进度      |
 | `60010` | 409  | 关系已解除且 `keepHistory = false`（报告对双方隐藏）                |
@@ -7150,7 +7173,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                         |
 | ------- | ---- | -------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                 |
+| `10001` | 400  | `id` 非合法 UUID                 |
 | `10010` | 429  | 轮询过快                         |
 | `60012` | 404  | 报告不存在或不属于当前用户的关系 |
 
@@ -7260,7 +7283,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                                                                                                         |
 | ------- | ---- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `10001` | 400  | `mode`/`tone` 非枚举；`title` 超长                                                                                               |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                                                                         |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                                                                                         |
 | `10010` | 429  | 24h 内创建超过 10 次                                                                                                             |
 | `50023` | 403  | `relationshipId` 不属于当前用户                                                                                                  |
 | `60020` | 400  | 指定关系非 `ACTIVE`（未确认/已解除）                                                                                             |
@@ -7399,8 +7422,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                               |
 | ------- | ---- | -------------------------------------- |
 | `10001` | 400  | `status`/`mode` 非枚举；`keyword` 超长 |
-| `10004` | 400  | `sortBy` 不在白名单                    |
-| `10005` | 400  | `pageSize > 100`                       |
+| `10001` | 400  | `sortBy` 不在白名单                    |
+| `10001` | 400  | `pageSize > 100`                       |
 | `50023` | 403  | `relationshipId` 不属于当前用户        |
 
 **业务规则**
@@ -7505,7 +7528,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                                                |
 | ------- | ---- | --------------------------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                                        |
+| `10001` | 400  | `id` 非合法 UUID                                                                        |
 | `50003` | 404  | 会话不存在（已物理清理）                                                                |
 | `50004` | 403  | **会话属于其他用户**（IDOR 防护）                                                       |
 | `50005` | 409  | 会话已归档（`status = ARCHIVED`）——**仍返回 200**，`permissions.canSendMessage = false` |
@@ -7626,9 +7649,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                   |
 | ------- | ---- | ------------------------------------------ |
-| `10003` | 400  | `id` 非合法 UUID；`before` 非合法 ISO 时间 |
+| `10001` | 400  | `id` 非合法 UUID；`before` 非合法 ISO 时间 |
 | `10001` | 400  | `role`/`order` 非枚举                      |
-| `10005` | 400  | `pageSize > 100`                           |
+| `10001` | 400  | `pageSize > 100`                           |
 | `50003` | 404  | 会话不存在                                 |
 | `50004` | 403  | 会话属于其他用户（IDOR 防护）              |
 
@@ -7833,7 +7856,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | ------- | ---- | ------------------------------------------------------------ |
 | `10001` | 400  | `content` 非字符串；`contextHints` 超出 3 个或含非法值       |
 | `10002` | 400  | `content` 缺失                                               |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                     |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                     |
 | `50001` | 402  | AI 配额不足（免费额度用尽且无会员/次数包）                   |
 | `50002` | 429  | 单用户 60s 内 > 10 次 AI 请求（架构 10.5）                   |
 | `50003` | 404  | 会话不存在                                                   |
@@ -7848,8 +7871,26 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | `50019` | 422  | 输出内容安全审核未通过（回复被丢弃，**不入库**）             |
 | `50020` | 500  | Prompt 模板不可用                                            |
 | `50021` | 500  | Prompt 变量缺失                                              |
-| `50022` | 503  | 当日 AI 预算已耗尽                                           |
+| `50007` | 503  | 当日 AI 预算已耗尽                                           |
 | `90008` | 503  | 内容安全服务异常（**fail-open** 放行并记录审计，不阻断对话） |
+
+> ⚠ **本节错误码与响应状态于 2026-10-13 契约漂移审计按实现校正**（`chat.controller.ts` /
+> `chat-message.service.ts`）：
+>
+> ① **表内多数码值过期**：实现实际抛出的是 `10001`（参数/消息长度）、`10009`（缺幂等键）、
+> `10007`（限流）、`50006`（配额不足，覆写 HTTP 402）、`50022`（对话不存在）、`50009`（非本人）、
+> `50010`（已归档）、`50005`（输入违规，HTTP 400）、`10003`（消息数上限 200）、`50011`/`50012`（模板问题）。
+> 契约原文的 `50001`/`50002`/`50003`/`50004`/`50005`/`50006`/`50007`/`50009`/`50010`
+> 在本节语义下**全部错位**（`50008` 例外，见下）。以 `error-code.ts` 为准。
+>
+> ② **危险内容拦截实际到不了客户端（需改实现）**：契约与上文都写「HTTP 200 + `code = 50008`」，
+> 但 `sendMessage` **没有 `@RawResponse()`**（全文件只有 `stream` 有），而全局 `TransformInterceptor`
+> 会把返回值再包一层 → 客户端真实收到的是 **HTTP 201** + 外层 `code: 0` + 内层 `{code: 50008, ...}`。
+> 只按 `code` 分支的前端会把它当成**成功消息**处理（`data` 结构完全不同），危险内容关怀文案不会渲染。
+> 这一条**不改文档**（契约的特殊约定应保留），属实现接线缺陷，见交付报告「需改实现」。
+>
+> ③ **`50022` 一码两义已消解**：`50022` 现专指「对话不存在」（§2.4.5 已同步），
+> 本节的「当日预算耗尽」改为 **`50007 AI_COST_BUDGET_EXCEEDED`**（实现中无抛出点，属未交付）。
 
 **业务规则与边界条件（**核心**）**
 
@@ -7857,15 +7898,16 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
    ```
    ① 入口关键词预筛（自伤 / 他伤 / 医疗诊断 / 用药）——服务端规则 + 敏感词库
    ② 命中 → 🚫 不调用模型 → 返回固定关怀文案 + 转介资源
-      · HTTP 200 + code = 50008（⚠️ 特殊约定，见 2.4.5）
+      · HTTP 200 + code = 50008（⚠️ 特殊约定，见 2.4.5；实现当前为 201 + 双层包络，见上注 ②）
       · assistantMessage.isSafetyResponse = true、usage 全 0
       · 🚫 不扣任何配额（consumed = 0）
       · 写入 ai_messages 落库（合规留痕）+ 写 ai_call_audits（命中类别，不存全文）
    ```
-2. **输入内容安全**：`security.msgSecCheck`（架构 10.5「发布前必接」）——命中违规返回 `50007`（HTTP 451），**消息不入库**（避免违规内容留存）。
-3. **输出内容安全**：AI 回复生成后经 `msgSecCheck`；未通过 → 丢弃回复，返回 `50019`（HTTP 422），**不落库**（避免违规内容留存与传播）；已流式输出的部分由前端按 `error` 事件处理（见 3.7.6）。
-4. **配额扣减时机**：**成功生成后扣减**（`consumedOnSuccess`）；失败（`50009`/`50010`/`50011`）**自动回补**（架构 15.5）。缓存命中不扣（对话场景通常无缓存）。
-5. **限流叠加**：接口级 10 次/60s（`50002`）+ 全局限流 100 req/min/IP（`10010`）+ 新用户 7 天内 30 次/天（防刷，架构 R10）。
+2. **输入内容安全**：命中违规实际返回 **`50005`（HTTP 400）**，**消息不入库**（避免违规内容留存）。
+   契约原文要求 `50007`（HTTP 451）—— 码值按实现改正；HTTP 451 属实现未落地（实现支持 `httpStatus` 覆写，可一行补上），见交付报告。
+3. **输出内容安全**：AI 回复生成后经 `msgSecCheck`；未通过 → 丢弃回复，返回 **`50005` + HTTP 422**，**不落库**（避免违规内容留存与传播）；已流式输出的部分由前端按 `error` 事件处理（见 3.7.6）。
+4. **配额扣减时机**：**成功生成后扣减**（`consumedOnSuccess`）；失败（`50000`/`50001`/provider 异常）**自动回补**（架构 15.5）。缓存命中不扣（对话场景通常无缓存）。
+5. **限流叠加**：接口级 10 次/60s + 全局限流（`10007`）+ 新用户 7 天内 30 次/天（防刷，架构 R10）。
 6. **Prompt 注入防护**（架构 14.3 / 10.3）：用户消息写入 Prompt 时必须：
    ```
    · 包裹在明确定界符内，如 <user_input>...</user_input>
@@ -7998,7 +8040,7 @@ data: {"requestId":"req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5","seq":8,"ts":"2026-02-14T16:
 | `50010` | 首 token > 20s 或总时长 > 180s                                                                            | `true`           | 否             |
 | `50011` | provider 熔断中                                                                                           | `true`（60s 后） | 否             |
 | `50019` | 输出安全审核未通过                                                                                        | `false`          | 否             |
-| `50022` | 当日预算耗尽                                                                                              | `false`          | 否             |
+| `50007` | 当日预算耗尽                                                                                              | `false`          | 否             |
 
 **业务规则与边界条件**
 
@@ -8072,7 +8114,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                      |
 | ------- | ---- | ----------------------------- |
-| `10003` | 400  | `id` 非合法 UUID              |
+| `10001` | 400  | `id` 非合法 UUID              |
 | `10001` | 400  | `mode` 非枚举                 |
 | `10010` | 429  | 60min 内超过 20 次            |
 | `50003` | 404  | 会话不存在（或已被硬删除）    |
@@ -8124,7 +8166,6 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       "planCode": "MEMBER_MONTHLY",
       "planName": "月度会员",
       "isActive": true,
-      "startedAt": "2026-02-14T10:00:00.000Z",
       "expiresAt": "2026-03-14T10:00:00.000Z",
       "remainingDays": 28,
       "benefits": {
@@ -8144,13 +8185,11 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       "resetAt": "2026-02-15T00:00:00.000Z",
       "resetInSeconds": 28500,
       "creditBalance": 30,
-      "creditExpiresAt": "2026-08-14T10:00:00.000Z",
       "freeQuota": {
         "totalLimit": 10,
         "used": 10,
         "remaining": 0,
-        "exhausted": true,
-        "note": "免费用户总额度已用尽，会员期内不受此限制"
+        "exhausted": true
       }
     },
     "exhausted": false,
@@ -8181,7 +8220,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       "averageTokensPerMessage": 2767
     },
     "limits": {
-      "rateLimit": { "windowSeconds": 60, "maxRequests": 10, "errorCode": 50002 },
+      "rateLimit": { "windowSeconds": 60, "maxRequests": 10, "errorCode": 10007 },
       "maxConcurrentStreams": 3,
       "maxMessageLength": 2000,
       "maxMessagesPerConversation": 200,
@@ -8587,7 +8626,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 **业务规则与边界条件**
 
 1. **非会员也返回 200**：`isMember: false`、`membership: null`、`benefits` 返回免费版权益（`aiDailyLimit` 为 `null`，免费总额度见 `GET /ai/quota`）。🚫 不返回 404（会员状态是常态查询接口）。
-2. **`status` 枚举**：`ACTIVE` | `EXPIRED` | `CANCELLED`（管理员撤销）| `REFUNDED`（退款后撤销）。
+2. **`status` 枚举**（`MembershipStatus`）：`ACTIVE` | `EXPIRED` | `CANCELLED`（管理员撤销 / **退款后撤销**）| `FROZEN`。⚠ **没有 `REFUNDED`**（2026-10-13 按 schema 校正：退款撤销会员时写入的是 `CANCELLED`）。
 3. **叠加规则**：会员期内再次购买会员 → **时长叠加**（`isStacked: true`，新 `membership` 记录的 `startedAt = 原 expiresAt`，`previousMembershipId` 指向旧记录）；🚫 不支持退款式「升级差价」。
 4. **过期提醒**：`isExpiringSoon = true`（≤ 7 天）时前端展示续费横幅；服务端同时通过订阅消息提醒（如已授权）。
 5. **权益明细**：`entitlements` 与 `GET /membership/entitlements` 同源；`status = ACTIVE` 的权益即当前可用权益。
@@ -8714,8 +8753,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
 | `10001` | 400  | `type`/`status` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单          |
-| `10005` | 400  | `pageSize > 100`             |
+| `10001` | 400  | `sortBy` 不在白名单          |
+| `10001` | 400  | `pageSize > 100`             |
 
 **业务规则**
 
@@ -8878,36 +8917,41 @@ X-Platform: miniapp
 
 #### 3.9.2 `POST /api/v1/payment/orders` — 创建订单并返回 JSAPI 支付参数 🔑 ♻️
 
-| 项   | 值                                                                                                                                                   |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 用途 | 建 `Order(CREATED)` → 调微信 v3 `/pay/transactions/jsapi` 拿 `prepay_id` → 落 `Payment(INIT)` → 置 `PENDING_PAY` → 返回 `wx.requestPayment` 所需参数 |
-| 鉴权 | 🔑 登录                                                                                                                                              |
-| 限流 | userId 10 次/60min                                                                                                                                   |
-| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10011`）                                                                                                     |
-| 异步 | 否（微信下单调用同步，超时 5s + 重试 2 次）                                                                                                          |
+| 项   | 值                                                                                                                                |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 用途 | 建 `Order(CREATED)` → 调微信 v3 `/pay/transactions/jsapi` 拿 `prepay_id` → 落 `Payment(INIT)` → 返回 `wx.requestPayment` 所需参数 |
+| 鉴权 | 🔑 登录                                                                                                                           |
+| 限流 | userId 10 次/60min                                                                                                                |
+| 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）                                                                                  |
+| 异步 | 否（微信下单调用同步，超时 5s + 重试 2 次）                                                                                       |
+
+> ⚠ **幂等键尚未落地（2026-10-13 审计）**：契约与小程序（`api/order.ts:87,97` 每次下单都带该头）
+> 都要求 `X-Idempotency-Key`，但实现的 `createOrder` **既没有 `@IdempotencyKey()` 也没有任何按幂等键去重**，
+> 请求头被静默忽略（每次调用都新建订单，`orders.idempotencyKey` 写的是服务端随机值）。
+> 本条**保留契约要求**，实现缺陷另见交付报告的「需改实现」清单。
 
 **请求体**
 
-| 字段               | 类型           | 必填     | 约束                                    | 说明                                                                                                            |
-| ------------------ | -------------- | -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `productCode`      | string         | 条件必填 | `products.isActive = true`              | 单次商品编码（与 `planCode` 二选一）                                                                            |
-| `planCode`         | string         | 条件必填 | `membership_plans.isActive = true`      | 会员套餐编码（与 `productCode` 二选一）                                                                         |
-| `quantity`         | number         | 否       | 整数 1–10，默认 `1`                     | 数量（仅 `isStackable` 商品支持 > 1）                                                                           |
-| `targetResourceId` | string(UUIDv7) | 条件必填 | 必须属于当前用户                        | 目标资源 ID（`REPORT_PERSONAL`/`REPORT_COMPATIBILITY` 类型商品**必填**，用于发放 `REPORT_UNLOCK:{resourceId}`） |
-| `payMethod`        | string         | 否       | 枚举 `WECHAT_JSAPI`（默认，唯一支持值） | 支付方式                                                                                                        |
-| `clientIp`         | string         | 否       | IPv4/IPv6                               | 客户端 IP（服务端也可从请求头获取，此字段仅兜底）                                                               |
-| `couponCode`       | string         | 否       | 长度 ≤ 32                               | 优惠券码（当前版本预留，传了不报错但不生效）                                                                    |
+| 字段             | 类型         | 必填 | 约束                         | 说明                                                              |
+| ---------------- | ------------ | ---- | ---------------------------- | ----------------------------------------------------------------- |
+| `productId`      | string(UUID) | 是   | `products` 表主键，`@IsUUID` | 要购买的商品 ID。**商品与价格一律由服务端按 ID 查表**，见下方说明 |
+| `reportId`       | string(UUID) | 否   | `@IsUUID`                    | 购买「单份报告解锁」时提供，落 `orders.relatedReportId`           |
+| `relationshipId` | string(UUID) | 否   | `@IsUUID`                    | 购买「匹配报告」时提供，落 `orders.relatedRelationshipId`         |
 
-> ⚠️ **金额绝不接受客户端传入**（架构 13.2 硬性要求 1）：服务端按 `productCode`/`planCode` 查表取价，请求体中**没有** `amount` 字段（`forbidNonWhitelisted` 会拒绝任何尝试传入的金额字段 → `10001`）。
+> ⚠️ **金额绝不接受客户端传入**（架构 13.2 硬性要求 1）：服务端按 `productId` 查表取价，请求体中**没有** `amount` 字段（`forbidNonWhitelisted` 会拒绝任何尝试传入的金额字段 → `10001`）。
+
+> ⚠ **2026-10-13 契约漂移审计**：本节原声明的 7 个请求字段 `productCode` / `planCode` /
+> `quantity` / `targetResourceId` / `payMethod` / `clientIp` / `couponCode` 在实现里
+> **没有任何读取方**（`CreateOrderDto` 只有上面 3 个字段），照旧文档传会得到
+> `400 / 10001 property xxx should not exist`。小程序 `api/order.ts:49-61` 用的正是
+> `productId`/`reportId`/`relationshipId`。各字段需要的前置工作见本节末「未交付能力」。
 
 **请求示例**
 
 ```json
 {
-  "productCode": "REPORT_PERSONAL_DEEP",
-  "quantity": 1,
-  "targetResourceId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45",
-  "payMethod": "WECHAT_JSAPI"
+  "productId": "0195f3a2-3ad0-7c0e-8d79-f5ca2d3e4b2d",
+  "reportId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45"
 }
 ```
 
@@ -8920,42 +8964,16 @@ X-Platform: miniapp
   "data": {
     "orderId": "0195f3a2-f68c-7eca-8f35-b1ec8f9a0d89",
     "orderNo": "SM20260214A7K3M9Q1",
-    "status": "PENDING_PAY",
-    "productCode": "REPORT_PERSONAL_DEEP",
-    "productName": "人格深度报告",
-    "quantity": 1,
     "amount": 9900,
-    "payAmount": 9900,
-    "originalAmount": 19900,
-    "discountAmount": 10000,
     "currency": "CNY",
-    "targetResourceId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45",
-    "grantedEntitlement": {
-      "type": "REPORT_UNLOCK",
-      "resourceId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45",
-      "description": "解锁该报告全文（永久有效）",
-      "granted": false,
-      "grantedAt": null
-    },
+    "expiresAt": "2026-02-14T17:42:36.000Z",
     "payment": {
-      "paymentId": "0195f3a2-f9fe-7c08-9d13-d2ed9a0b1e9d",
-      "outTradeNo": "SM20260214A7K3M9Q1",
-      "prepayId": "wx14171234567890abcdef1234567890",
-      "status": "INIT",
-      "wechatPayEnv": "production"
-    },
-    "payParams": {
       "timeStamp": "1771089156",
       "nonceStr": "9f3a7c1e5b2d8046a1c7e3f5b9d20468",
       "package": "prepay_id=wx14171234567890abcdef1234567890",
       "signType": "RSA",
       "paySign": "kQ2f9mZ1xTfLbWc4rYhJa9eUgN6oBvQ3sXpM1kR8nW5tY2dH4jL6pC0aZ7vB9nM3sQ1rE5uK8xT2fW4yZ6bD0hJ9mP3sV1nC7"
-    },
-    "expiredAt": "2026-02-14T17:42:36.000Z",
-    "remainingSeconds": 1800,
-    "autoCloseNotice": "请在 30 分钟内完成支付，超时订单将自动关闭。",
-    "pollUrl": "/api/v1/orders/0195f3a2-f68c-7eca-8f35-b1ec8f9a0d89",
-    "createdAt": "2026-02-14T17:12:36.000Z"
+    }
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T17:12:36.000Z"
@@ -8965,70 +8983,65 @@ X-Platform: miniapp
 **curl 示例**
 
 ```bash
-curl -X POST 'https://api.soulmap.cn/api/v1/orders' \
+curl -X POST 'https://api.soulmap.cn/api/v1/payment/orders' \
   -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' \
   -H 'Content-Type: application/json; charset=utf-8' \
-  -H 'X-Idempotency-Key: idem_3e7b1c94-8a2f-4d51-b6c3-0f9e2d7a4b18' \
   -H 'X-Platform: miniapp' \
   -d '{
-    "productCode": "REPORT_PERSONAL_DEEP",
-    "quantity": 1,
-    "targetResourceId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45",
-    "payMethod": "WECHAT_JSAPI"
+    "productId": "0195f3a2-3ad0-7c0e-8d79-f5ca2d3e4b2d",
+    "reportId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45"
   }'
 ```
 
+> ⚠ **`payment` 可能为 `null`**：预支付调用失败时**订单仍然创建成功**（HTTP 201），
+> `payment: null` 并附 `paymentUnavailableReason`（如「预支付暂时不可用，请稍后重试」）。
+> 客户端必须判空后再交给 `wx.requestPayment` —— 直接取 `payment.package` 会抛 `TypeError`。
+> 也因此**不存在**「微信下单失败 → `70006` / 502」这种响应：失败不阻断下单。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                    |
-| ------- | ---- | --------------------------------------------------------------------------- |
-| `10001` | 400  | 传入未声明字段（**含任何金额字段**）；`quantity` 越界；`payMethod` 非枚举   |
-| `10002` | 400  | `productCode` 与 `planCode` 均缺失，或同时提供                              |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                                    |
-| `10013` | 409  | 同一幂等键的请求正在处理中                                                  |
-| `10010` | 429  | 60min 内下单超过 10 次                                                      |
-| `30018` | 403  | 注销冷静期内禁止支付                                                        |
-| `70001` | 404  | 商品不存在或已下架（`isActive = false`）                                    |
-| `70013` | 404  | 会员套餐不存在或已下架                                                      |
-| `70006` | 502  | 微信统一下单失败（超时 5s + 重试 2 次仍失败）                               |
-| `70018` | 503  | 支付通道未配置或维护中（`FEATURE_PAYMENT` 关闭 / 商户配置缺失）             |
-| `70020` | 400  | `payMethod` 非 `WECHAT_JSAPI`                                               |
-| `70021` | 500  | `orderNo` 生成失败（唯一冲突重试仍失败）                                    |
-| `50013` | 409  | `targetResourceId` 对应报告仍在生成中（尚不可解锁）                         |
-| `50012` | 404  | `targetResourceId` 不存在或不属于当前用户                                   |
-| `30012` | 409  | 已存在该资源的解锁权益（**不报错**，返回 200 + 已有权益提示，见业务规则 6） |
+| 错误码  | HTTP | 触发条件                                                                                  |
+| ------- | ---- | ----------------------------------------------------------------------------------------- |
+| `10001` | 400  | 传入未声明字段（**含任何金额字段**）；`productId`/`reportId`/`relationshipId` 非合法 UUID |
+| `20000` | 401  | 未登录                                                                                    |
+| `70000` | 404  | `productId` 在 `products` 中不存在或已软删（`deletedAt != null`）                         |
+| `70001` | 409  | 商品已下架（`status != 'ON_SALE'`）                                                       |
+| `90000` | 500  | 商品价格配置非法；`orderNo` 连续碰撞 5 次仍失败                                           |
+| `10007` | 429  | 命中限流（`@Throttle`，**按 IP** 20 次/60s）                                              |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 逐值校正，原文 15 行里 13 行过期：
+> `10013`（本项目**不存在**）、`10011`→`10009`、`10010`→`10007`、`30018`（本项目是
+> `PHONE_ALREADY_BOUND`；下单链路**没有**冷静期校验）、`70013`（本项目是 `REFUND_FAILED`）、
+> `70006`（本项目是 `ORDER_ALREADY_PAID`，且预支付失败**不抛错**）、`70018` 的 HTTP 是 **403**
+> 而非 503、`70020`/`70021`（**不存在**）、`50012`/`50013`（本项目是
+> `AI_PROMPT_VARIABLE_MISSING` / `AI_PROMPT_RENDER_FAILED`）、`30012`（本项目是
+> `PROFILE_EDIT_LOCKED`，与"已持有权益"无关）。
 
 **业务规则与边界条件（**关键**）**
 
-1. **金额权威性**：`amount` 由服务端查 `products.priceAmount` / `membership_plans.priceAmount` 得出，**客户端无法影响**（架构 13.2 硬性要求 1）。
-2. **订单创建事务**：`orders(CREATED)` + `payments(INIT, outTradeNo = orderNo)` 同事务写入（架构 6.3）；微信下单成功后置 `PENDING_PAY`。
+1. **金额权威性**：`amount` 由服务端查 `products.priceAmount` 得出，**客户端无法影响**（架构 13.2 硬性要求 1）。
+2. **订单创建事务**：`orders(CREATED)` + `payments(INIT, outTradeNo = orderNo)` 同事务写入（架构 6.3）。
+   ⚠ **实现不会置 `PENDING_PAY`**：下单后订单停在 `CREATED`，只有支付回调才会推进到 `PAID`/`FULFILLED`
+   —— 因此 `GET /orders` 的 `canQuery`、`remainingSeconds`、`statusLabel`「待支付」在实现中**恒为 false/0/不出现**（见 "需改实现" 清单）。
 3. **`orderNo` 生成**：`SM` + `yyyyMMdd` + 8 位 Base32 随机码，`UNIQUE(orderNo)` 兜底（架构 8.4）。
 4. **`outTradeNo = orderNo`**：微信侧商户订单号与业务订单号一致，便于对账（架构 13.2 步骤 ②）。
-5. **`expiredAt = createdAt + 30min`**：cron 每分钟扫描并要求微信关单（架构 13.3）。
-6. **已持有权益的处理**：若 `targetResourceId` 已有有效 `REPORT_UNLOCK` 权益 → **不创建订单**，返回 **200**（非 201）+ `alreadyUnlocked: true` + 现有权益信息（避免重复付费，属幂等语义）：
-   ```json
-   {
-     "code": 0,
-     "message": "ok",
-     "data": {
-       "orderId": null,
-       "alreadyUnlocked": true,
-       "existingEntitlement": {
-         "entitlementId": "0195f3a2-eeb8-7e31-9a46-e2fd9a0b1e9c",
-         "type": "REPORT_UNLOCK",
-         "resourceId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45",
-         "grantedAt": "2026-02-10T09:00:12.000Z"
-       },
-       "note": "该报告已解锁，无需重复购买。"
-     },
-     "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
-     "timestamp": "2026-02-14T17:12:36.000Z"
-   }
-   ```
-7. **会员叠加**：购买会员时若已有生效会员 → 新 `membership.startedAt = 旧 expiresAt`（叠加，架构 13.1）；订单在 `FULFILLED` 时写入。
-8. **微信下单参数**：`prepay_id` 有效期 2 小时；`payParams` 中的 `paySign` 使用商户私钥 RSA 签名（`WECHAT_PAY_PRIVATE_KEY`），**服务端生成，绝不回传私钥**。
-9. **沙箱/生产分离**：`wechatPayEnv` 回显当前环境（`WECHAT_PAY_ENV`），便于排查「沙箱单无法真实支付」问题（架构 13.2 硬性要求 6）。
-10. **10 分钟内未支付可重复下单**：同一商品在 10 分钟内重复下单会**复用**未支付订单（返回同一 `orderId` 与新 `payParams`），避免产生大量废弃订单。
+5. **`expiresAt = createdAt + 30min`**（`ORDER_TTL_MINUTES = 30`）：cron 每分钟扫描并要求微信关单（架构 13.3）。
+6. **会员叠加**：购买会员时若已有生效会员 → 新 `membership.startedAt = 旧 expiresAt`（叠加，架构 13.1）；订单在 `FULFILLED` 时写入。
+7. **微信下单参数**：`prepay_id` 有效期 2 小时；返回体里的 `payment.paySign` 使用商户私钥 RSA 签名（`WECHAT_PAY_PRIVATE_KEY`），**服务端生成，绝不回传私钥**。
+8. **沙箱/生产分离**：微信支付环境由服务端 `WECHAT_PAY_ENV` 决定，**响应里不回显该字段**（契约原文的 `wechatPayEnv` 已按实现移除）。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                         | 未交付的内容与前置工作                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `productCode` / `planCode`         | 以「编码」而非「ID」下单：需在 `products` 加编码唯一索引查询路径（现只有主键 UUID），并统一会员档位与单次商品  |
+| `quantity` / `isStackable`         | 数量购买：`orders` 无数量折扣模型、`products` 无 `isStackable` 列，权益发放也未按数量计算                      |
+| `targetResourceId`                 | 通用「目标资源」入参：现为 `reportId` / `relationshipId` 两个具体字段；合并需权益资源键重构                    |
+| `payMethod`                        | 支付方式选择：`payments.channel` 当前只写死 `WECHAT_JSAPI`，多通道需 `PayChannel` 路由与前端选择 UI            |
+| `clientIp`                         | 客户端上报 IP：服务端已从 `request.ip` 取，无需客户端字段；如要支持代理场景需改 `X-Forwarded-For` 信任链       |
+| `couponCode`                       | 优惠券体系：无 `coupons` 表、无折扣计算与核销链路（架构未定义）                                                |
+| `alreadyUnlocked`（规则 6）        | 下单前预检已有权益：需在 `createOrder` 内加权益查询与 200 分支；**这是"避免重复付费"的资损保护，建议优先立项** |
+| 规则 10「10 分钟内复用未支付订单」 | 未支付订单复用：需按 `(userId, productId, status, createdAt)` 查询并复用，与幂等键语义一并设计                 |
 
 #### 3.9.3 `GET /api/v1/orders` — 订单列表 🔑
 
@@ -9186,8 +9199,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
 | `10001` | 400  | `status`/`type` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单          |
-| `10005` | 400  | `pageSize > 100`             |
+| `10001` | 400  | `sortBy` 不在白名单          |
+| `10001` | 400  | `pageSize > 100`             |
 
 **业务规则**
 
@@ -9318,7 +9331,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                 |
 | ------- | ---- | -------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID（或 `byNo=true` 时 `orderNo` 格式非法） |
+| `10001` | 400  | `id` 非合法 UUID（或 `byNo=true` 时 `orderNo` 格式非法） |
 | `70002` | 404  | 订单不存在                                               |
 | `70003` | 403  | **订单属于其他用户**（IDOR 防护；记录安全探测日志）      |
 
@@ -9444,13 +9457,18 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 | 错误码  | HTTP | 触发条件                                                                                     |
 | ------- | ---- | -------------------------------------------------------------------------------------------- |
-| `10003` | 400  | `id` 非合法 UUID                                                                             |
+| `10001` | 400  | `id` 非合法 UUID                                                                             |
 | `10010` | 429  | 10min 内查单超过 10 次                                                                       |
 | `70002` | 404  | 订单不存在                                                                                   |
 | `70003` | 403  | 订单属于其他用户                                                                             |
 | `70004` | 409  | 订单状态不允许查单（已 `FULFILLED`/`REFUNDED` 且无需补偿）→ 返回 200 + `note` 说明（不报错） |
-| `70017` | 502  | 微信查单接口调用失败（超时 5s + 重试 2 次）                                                  |
-| `70009` | 409  | 微信返回金额与订单金额不一致（**风控事件**：记录告警、不发放权益）                           |
+| `70007` | 502  | 微信查单接口调用失败（超时 5s + 重试 2 次）                                                  |
+| `70011` | 409  | 微信返回金额与订单金额不一致（**风控事件**：记录告警、不发放权益）                           |
+
+> ⚠ 本节错误码于 **2026-10-13 契约漂移审计**按 `error-code.ts` 校正：原文 `70017`（微信查单失败）
+> 实为 `70007 PAYMENT_FAILED`/502；`70009`（金额不一致）实为 `70011 PAYMENT_AMOUNT_MISMATCH`；
+> `10010`（限流）实为 `10007 RATE_LIMITED`。另 `70004` 一行**自相矛盾**（既写 409 又写"返回 200 不报错"）
+> —— 实现取后者：状态不允许查单时**始终返回 200 + `note`**，不抛 `70004`。
 
 **业务规则与边界条件**
 
@@ -9524,7 +9542,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                                |
 | ------- | ---- | ------------------------------------------------------- |
 | `10001` | 400  | `reason` 非枚举值                                       |
-| `10003` | 400  | `id` 非合法 UUID                                        |
+| `10001` | 400  | `id` 非合法 UUID                                        |
 | `70002` | 404  | 订单不存在                                              |
 | `70003` | 403  | 订单属于其他用户                                        |
 | `70004` | 409  | **`PAID` 之后不可取消，只能退款**（架构 13.3 明确约束） |
@@ -9596,7 +9614,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                             |
 | ------- | ---- | ---------------------------------------------------- |
 | `10001` | 400  | `closeReason` 非枚举值                               |
-| `10003` | 400  | `id` 非合法 UUID                                     |
+| `10001` | 400  | `id` 非合法 UUID                                     |
 | `70002` | 404  | 订单不存在                                           |
 | `70003` | 403  | 订单属于其他用户                                     |
 | `70004` | 409  | 订单状态为 `PAID`/`FULFILLED`/`REFUNDED`（不可关单） |
@@ -9853,7 +9871,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                   |
 | ------- | ---- | ------------------------------------------ |
 | `10001` | 400  | `status` 含非法枚举值                      |
-| `10005` | 400  | `pageSize > 100`                           |
+| `10001` | 400  | `pageSize > 100`                           |
 | `70002` | 404  | `orderId` 对应用户无此订单（越权或不存在） |
 
 **业务规则**
@@ -9972,19 +9990,18 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                      |
-| ------- | ---- | ------------------------------------------------------------- |
-| `10001` | 400  | `reason` 非枚举；`description` 超长                           |
-| `10002` | 400  | `reason` 缺失                                                 |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                      |
-| `10010` | 429  | 24h 内申请超过 5 次                                           |
-| `70002` | 404  | 订单不存在                                                    |
-| `70003` | 403  | 订单属于其他用户                                              |
-| `70004` | 409  | 订单状态非 `PAID`/`FULFILLED`（如未支付、已关闭）             |
-| `70010` | 400  | `refundAmount` 超出可退金额（`> payAmount - refundedAmount`） |
-| `70012` | 409  | 该订单已全额退款                                              |
-| `70019` | 409  | 该商品不支持退款（虚拟内容已消费且超 7 天）                   |
-| `70018` | 503  | 支付通道未配置（无法调微信退款 API）                          |
+| 错误码  | HTTP | 触发条件                                                         |
+| ------- | ---- | ---------------------------------------------------------------- |
+| `10001` | 400  | `reason` 非枚举；`description` 超长                              |
+| `10002` | 400  | `reason` 缺失                                                    |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                         |
+| `10010` | 429  | 24h 内申请超过 5 次                                              |
+| `70002` | 404  | 订单不存在                                                       |
+| `70003` | 403  | 订单属于其他用户                                                 |
+| `70004` | 409  | 订单状态非 `PAID`/`FULFILLED`（如未支付、已关闭）                |
+| `70011` | 400  | `refundAmount` 超出可退金额（`> payAmount - refundedAmount`）    |
+| `70012` | 409  | 该订单已全额退款；**或**该商品不支持退款（权益已消费 / 超 7 天） |
+| `70018` | 403  | 支付通道未配置（无法调微信退款 API）                             |
 
 **业务规则与边界条件（**关键**）**
 
@@ -10444,8 +10461,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
 | `10001` | 400  | `status`/`type` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单          |
-| `10005` | 400  | `pageSize > 100`             |
+| `10001` | 400  | `sortBy` 不在白名单          |
+| `10001` | 400  | `pageSize > 100`             |
 
 **业务规则**
 
@@ -10509,10 +10526,10 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                |
 | ------- | ---- | --------------------------------------- |
 | `10001` | 400  | `notificationIds` 非数组；`type` 非枚举 |
-| `10002` | 400  | `notificationIds` 与 `all` 均未提供     |
-| `10003` | 400  | 数组内含非法 UUID                       |
-| `10016` | 400  | 数组长度 > 100                          |
-| `10010` | 429  | 60s 内超过 60 次                        |
+| `10001` | 400  | `notificationIds` 与 `all` 均未提供     |
+| `10001` | 400  | 数组内含非法 UUID                       |
+| `10001` | 400  | 数组长度 > 100                          |
+| `10007` | 429  | 60s 内超过 60 次                        |
 
 **业务规则**
 
@@ -10655,9 +10672,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 错误码  | HTTP | 触发条件                                                                                                         |
 | ------- | ---- | ---------------------------------------------------------------------------------------------------------------- |
 | `10001` | 400  | `scene`/`result` 非枚举；`templateId` 长度非法                                                                   |
-| `10002` | 400  | `subscriptions` 缺失或为空                                                                                       |
-| `10016` | 400  | 数组长度 > 10                                                                                                    |
-| `10010` | 429  | 60s 内超过 60 次                                                                                                 |
+| `10001` | 400  | `subscriptions` 缺失或为空                                                                                       |
+| `10001` | 400  | 数组长度 > 10                                                                                                    |
+| `10007` | 429  | 60s 内超过 60 次                                                                                                 |
 | `90007` | 502  | ⚠️ **不会返回**：本接口只记录授权，**不调用微信接口**（微信侧 `requestSubscribeMessage` 由小程序客户端直接完成） |
 
 **业务规则与边界条件**
@@ -10895,11 +10912,12 @@ Accept-Language: zh-CN
 
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                                                                  |
-| ------- | ---- | ------------------------------------------------------------------------------------------------------------------------- |
-| `10001` | 400  | `platform` 非枚举；`clientVersion` 格式非法                                                                               |
-| `10017` | 400  | `clientVersion` 不符合 `x.y.z` 语义化格式                                                                                 |
-| `90011` | 503  | `maintenanceMode = true` → **不返回 503**，而是在 `features.maintenanceMode` 中标识（前端展示维护页），保证维护期配置可读 |
+| 错误码  | HTTP | 触发条件                                                                                                                                                                        |
+| ------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `10001` | 400  | `platform` 非枚举；`clientVersion` 格式非法                                                                                                                                     |
+| `10001` | 400  | `clientVersion` 不符合 `x.y.z` 语义化格式（**本项目无 `10017`**，统一 `10001`）                                                                                                 |
+| `20000` | 401  | （本接口为 🔓 公开，实际不返回）                                                                                                                                                |
+| `90011` | 503  | **实现不存在该码**：`maintenanceMode = true` 时一律返回 **200** 并在 `features.maintenanceMode` 中标识（前端展示维护页），保证维护期配置可读。`error-code.ts` 里 `90011` 未分配 |
 
 **业务规则与边界条件**
 
@@ -10909,8 +10927,8 @@ Accept-Language: zh-CN
 4. **价格透明**：`pricing` 内联价格，使套餐页无需额外请求（首屏接口数 ≤ 3 的预算，架构 7.4）；但**下单仍以服务端价格为准**（架构 13.2 硬性要求 1）。
 5. **`amountUnit: "CENT"`** 显式声明金额单位，防止前端误把「分」当「元」展示。
 6. **`requiresReconsent`** 仅在**未登录时不返回**（游客数组为空）；登录用户走 `GET /users/me/consents` 获取个性化状态。
-7. **`maintenanceMode`** 通过配置字段表达（HTTP 200），让前端能渲染维护公告；仅真正的写接口返回 `90011`。
-8. **强更**：`minClientVersion` 与请求头 `X-Client-Version` 比较，低于最小值时其他业务接口返回 `90013`（HTTP 426）。
+7. **`maintenanceMode`** 通过配置字段表达（HTTP 200），让前端能渲染维护公告；**实现中没有"写接口返回维护错误"的拦截逻辑**（`90011` 未分配，见上表）。
+8. **强更：信号下发已实现，全局拦截未实现**（2026-10-13 按实现校正）。服务端按 `clientVersion < minClientVersion` 置 `app.forceUpdate = true` 并下发 `updateUrl`/`updateNote`；但**没有**任何"其他业务接口返回 `90013`（HTTP 426）"的全局拦截（`90013` 在本项目**未分配**）。客户端必须自行读取 `app.forceUpdate` 弹窗。
 
 #### 3.12.2 `GET /api/v1/system/disclaimers` — 免责声明与合规文案 🔓
 
@@ -11647,8 +11665,8 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                                       |
 | ------- | ---- | ---------------------------------------------- |
 | `10001` | 400  | `status` 含非法枚举；`mbtiType` 非 16 型合法值 |
-| `10004` | 400  | `sortBy` 不在白名单                            |
-| `10005` | 400  | `pageSize > 100`                               |
+| `10001` | 400  | `sortBy` 不在白名单                            |
+| `10001` | 400  | `pageSize > 100`                               |
 | `20009` | 403  | 缺少 `user:user:read` 权限点                   |
 
 **业务规则与边界条件**
@@ -11882,7 +11900,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
 | `10001` | 400  | `include` 含白名单外值       |
-| `10003` | 400  | `id` 非合法 UUID             |
+| `10001` | 400  | `id` 非合法 UUID             |
 | `20009` | 403  | 缺少 `user:user:read`        |
 | `30001` | 404  | 用户不存在（或已完全匿名化） |
 
@@ -11977,7 +11995,7 @@ X-Platform: admin
 | ------- | ---- | ------------------------------------------------------------------------------------- |
 | `10001` | 400  | `reason` 非枚举；`reasonDetail` 超长；`durationDays` 越界                             |
 | `10002` | 400  | 缺 `reason`；`reason = OTHER` 但缺 `reasonDetail`                                     |
-| `10003` | 400  | `id` 非合法 UUID                                                                      |
+| `10001` | 400  | `id` 非合法 UUID                                                                      |
 | `10010` | 429  | 60min 内超过 20 次                                                                    |
 | `20009` | 403  | 缺少 `user:user:write`                                                                |
 | `20017` | 401  | 缺少 `X-Confirm-Password`                                                             |
@@ -12203,8 +12221,8 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                        |
 | ------- | ---- | ------------------------------- |
 | `10001` | 400  | `type`/`dimension` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单             |
-| `10005` | 400  | `pageSize > 100`                |
+| `10001` | 400  | `sortBy` 不在白名单             |
+| `10001` | 400  | `pageSize > 100`                |
 | `20009` | 403  | 缺少 `test:question:read`       |
 
 **业务规则**
@@ -12496,7 +12514,7 @@ X-Platform: admin
 
 | 错误码  | HTTP | 触发条件                  |
 | ------- | ---- | ------------------------- |
-| `10003` | 400  | `id` 非合法 UUID          |
+| `10001` | 400  | `id` 非合法 UUID          |
 | `20009` | 403  | 缺少 `test:question:read` |
 | `10008` | 404  | 题目不存在                |
 
@@ -12624,7 +12642,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                                                                             |
 | ------- | ---- | ------------------------------------------------------------------------------------ |
 | `10001` | 400  | 字段类型错误；试图修改 `code`/`type`（不可变字段，`forbidNonWhitelisted` → `10001`） |
-| `10003` | 400  | `id` 非合法 UUID                                                                     |
+| `10001` | 400  | `id` 非合法 UUID                                                                     |
 | `10016` | 400  | `weight`/`order` 越界；`tags` 超 5 个                                                |
 | `20009` | 403  | 缺少 `test:question:write`                                                           |
 | `10008` | 404  | 题目不存在                                                                           |
@@ -12879,7 +12897,7 @@ X-Platform: admin
 | `10016` | 400  | 单批题目数 > 500（**同步模式上限**；超出需分批或改异步） |
 | `10012` | 409  | `mode = UPSERT` 且 `code` 冲突但字段不兼容               |
 | `20009` | 403  | 缺少 `test:question:write`                               |
-| `10011` | 400  | 缺 `X-Idempotency-Key`（当 `dryRun = false`）            |
+| `10009` | 400  | 缺 `X-Idempotency-Key`（当 `dryRun = false`）            |
 | `90005` | 503  | 队列不可用（异步导入场景）                               |
 
 **业务规则与边界条件**
@@ -13096,7 +13114,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                             |
 | ------- | ---- | ------------------------------------ |
 | `10001` | 400  | `category` 非枚举；`isActive` 非布尔 |
-| `10005` | 400  | `pageSize > 100`                     |
+| `10001` | 400  | `pageSize > 100`                     |
 | `20009` | 403  | 缺少 `test:definition:read`          |
 
 **业务规则**
@@ -13375,7 +13393,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件              |
 | ------- | ---- | --------------------- |
 | `10001` | 400  | `type` 含非法枚举值   |
-| `10005` | 400  | `pageSize > 100`      |
+| `10001` | 400  | `pageSize > 100`      |
 | `20009` | 403  | 缺少 `ai:prompt:read` |
 
 **业务规则**
@@ -14424,8 +14442,8 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                            |
 | ------- | ---- | ----------------------------------- |
 | `10001` | 400  | `status`/`productType` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单                 |
-| `10005` | 400  | `pageSize > 100`                    |
+| `10001` | 400  | `sortBy` 不在白名单                 |
+| `10001` | 400  | `pageSize > 100`                    |
 | `10016` | 400  | `minAmount > maxAmount`             |
 | `20009` | 403  | 缺少 `payment:order:read`           |
 
@@ -14588,7 +14606,7 @@ X-Platform: admin
 
 | 错误码  | HTTP | 触发条件                  |
 | ------- | ---- | ------------------------- |
-| `10003` | 400  | `id` 非合法 UUID          |
+| `10001` | 400  | `id` 非合法 UUID          |
 | `20009` | 403  | 缺少 `payment:order:read` |
 | `70002` | 404  | 订单不存在                |
 
@@ -14699,7 +14717,7 @@ X-Platform: admin
 | 错误码            | HTTP | 触发条件                                                                            |
 | ----------------- | ---- | ----------------------------------------------------------------------------------- |
 | `10001` / `10002` | 400  | `reason` 缺失或超长；`refundAmount` 缺失                                            |
-| `10011`           | 400  | 缺少 `X-Idempotency-Key`                                                            |
+| `10009`           | 400  | 缺少 `X-Idempotency-Key`                                                            |
 | `10010`           | 429  | 60min 内超过 20 次                                                                  |
 | `20009`           | 403  | 缺少 `payment:order:refund`                                                         |
 | `20017` / `20018` | 401  | 缺少 / 错误的二次确认密码                                                           |
@@ -14845,7 +14863,7 @@ X-Platform: admin
 | `10001` / `10002` | 400  | `format` 非枚举；缺 `createdStartTime`/`createdEndTime` |
 | `10016`           | 400  | 时间范围 > 366 天；`fields` 含非白名单字段              |
 | `10010`           | 429  | 60min 内超过 5 次                                       |
-| `10011`           | 400  | 缺 `X-Idempotency-Key`                                  |
+| `10009`           | 400  | 缺 `X-Idempotency-Key`                                  |
 | `20009`           | 403  | 缺少 `payment:order:export`                             |
 | `90005`           | 503  | 队列不可用                                              |
 
@@ -16062,7 +16080,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                                                                          |
 | ------- | ---- | --------------------------------------------------------------------------------- |
 | `10001` | 400  | `type`/`status` 含非法枚举值                                                      |
-| `10004` | 400  | `sortBy` 不在白名单                                                               |
+| `10001` | 400  | `sortBy` 不在白名单                                                               |
 | `10016` | 400  | `minWordCount > maxWordCount`                                                     |
 | `20009` | 403  | 缺少 `report:report:read`                                                         |
 | `20017` | 401  | `includeContent = true` 但缺少 `X-Confirm-Password`（**查看报告正文需二次确认**） |
@@ -16202,7 +16220,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                              |
 | ------- | ---- | ------------------------------------- |
 | `10001` | 400  | `status`/`relationType` 含非法枚举值  |
-| `10004` | 400  | `sortBy` 不在白名单                   |
+| `10001` | 400  | `sortBy` 不在白名单                   |
 | `10016` | 400  | `minScore > maxScore`                 |
 | `20009` | 403  | 缺少 `relationship:relationship:read` |
 
@@ -16337,7 +16355,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                                    |
 | ------- | ---- | ------------------------------------------- |
 | `10001` | 400  | `type`/`status`/`reviewStatus` 含非法枚举值 |
-| `10004` | 400  | `sortBy` 不在白名单                         |
+| `10001` | 400  | `sortBy` 不在白名单                         |
 | `10016` | 400  | `minWordCount > maxWordCount`               |
 | `20009` | 403  | 缺少 `report:report:read`                   |
 
@@ -17005,7 +17023,7 @@ X-Platform: admin
 | 错误码  | HTTP | 触发条件                     |
 | ------- | ---- | ---------------------------- |
 | `10001` | 400  | `status`/`roleCode` 含非法值 |
-| `10005` | 400  | `pageSize > 100`             |
+| `10001` | 400  | `pageSize > 100`             |
 | `20009` | 403  | 缺少 `system:admin:read`     |
 
 **业务规则**
@@ -17091,7 +17109,7 @@ X-Platform: admin
 | 错误码            | HTTP | 触发条件                                                                      |
 | ----------------- | ---- | ----------------------------------------------------------------------------- |
 | `10001` / `10002` | 400  | `username` 格式非法；缺 `displayName`/`roleCodes`                             |
-| `10011`           | 400  | 缺少 `X-Idempotency-Key`                                                      |
+| `10009`           | 400  | 缺少 `X-Idempotency-Key`                                                      |
 | `10012`           | 409  | `username` 已存在                                                             |
 | `10016`           | 400  | `roleCodes` 超过 3 个；`initialPassword` 不满足强度；`ipWhitelist` 超过 10 个 |
 | `20009`           | 403  | 缺少 `system:admin:write`                                                     |
