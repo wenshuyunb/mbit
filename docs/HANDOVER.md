@@ -129,12 +129,14 @@ Invoke-WebRequest 'http://127.0.0.1:3000/health/ready' -UseBasicParsing
 
 ## 3. 当前进度（准确数字）
 
-| 维度                       | 数值                                                          |
-| -------------------------- | ------------------------------------------------------------- |
-| 契约接口总数               | **123**（`docs/API_DESIGN.md` 附录 A.13 索引；其中管理端 43） |
-| 已实现路由（源码静态统计） | **134**                                                       |
-| `tsc`                      | ✅ 干净                                                       |
-| 后端单测                   | 最近一次全量：**78 套件 / 1934 用例全过**（新增域尚未计入）   |
+| 维度                          | 数值                                                                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 契约接口总数                  | **123**（`docs/API_DESIGN.md` 附录 A.13 索引；其中管理端 43）                                                                        |
+| 运行时注册路由                | **123**（与契约一致；清点方法见 §3.3）                                                                                               |
+| `tsc` / `eslint` / `prettier` | ✅ 全干净（eslint 口径为 `src test scripts prisma --max-warnings 0`）                                                                |
+| 后端单测                      | **113 套件 / 2581 用例全过**（本轮实测）                                                                                             |
+| 第 5 道门禁（真实启动）       | ✅ `/health/ready` 返回 200，`database: up` + `redis: up`                                                                            |
+| 种子规模                      | 3 测试定义 / 82 题 / 410 选项 / **3 Prompt 模板** / **10 系统配置** / 6 关系规则 / 1 权重矩阵 / 3 套餐 / 6 商品 / 25 权限点 / 5 角色 |
 
 > 「路由数 > 契约接口数」是正常的：实现里有一些契约索引未单列的必需接口
 > （如 `POST /admin/auth/logout`、`POST /admin/auth/password`），
@@ -211,30 +213,126 @@ worker 没跑时这些任务会**停在排队态**，表现为"接口 202 了但
 
 ### 3.4 已知的未完成项（**刻意留的，不是遗漏**）
 
-| 项                          | 具体表现                                                                                                                                    | 为什么这样留                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **报告渲染缺口**            | `report-render.util.ts` 的 `renderReportPdf` / `renderShareCardImage` 抛 `90008`；`generateMiniAppCode` 返回 `null`。**没有留任何占位文件** | 项目禁止新增 npm 依赖，而仓里没有 PDF/图片库。宁可明确报错也不产出假文件 |
-| **AI 助手 seed 缺失**       | 对话接口报 `50011`（`AI_PROMPT_TEMPLATE_NOT_FOUND`）                                                                                        | 修复中，见 §9 末尾                                                       |
-| **`payments` 表没有写入方** | 没有任何代码往 `payments` 写行，而 `refunds.payment_id` 是非空外键，退款依赖兜底逻辑                                                        | 正确做法是下单时建 `INIT` 行、回调时置 `SUCCESS`。待验证退款链路后再定   |
-| **会员权益矩阵拿不到**      | `ProductView` 没有 `benefits` 字段，契约里的权益对照表无法下发                                                                              | 已在 ADR-033 里登记为缺口                                                |
-| **对话 SSE 不是真流式**     | `LlmProvider` 只暴露 `complete()`，所以增量是**生成完再切片**的 —— 首字延迟 = 完整生成耗时                                                  | 需要 provider 层支持流式，属接口变更，要先写 ADR                         |
-| **管理后台 8 个占位视图**   | 前端页面还在，未接真实接口                                                                                                                  | 属第 4 步                                                                |
+| 项                          | 具体表现                                                                                                                                                                          | 为什么这样留                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **报告渲染缺口**            | `report-render.util.ts` 的 `renderReportPdf` / `renderShareCardImage` 抛 `90008`；`generateMiniAppCode` 返回 `null`。**没有留任何占位文件**                                       | 项目禁止新增 npm 依赖，而仓里没有 PDF/图片库。宁可明确报错也不产出假文件 |
+| ~~**AI 助手 seed 缺失**~~   | ~~对话接口报 `50011`（`AI_PROMPT_TEMPLATE_NOT_FOUND`）~~ **已于 2026-10-12 修复**：`ai.companion` 模板 + 10 条 `system_configs` 入种子，`verify-ai-companion.cjs` 全绿（见 §3.5） | 已完成                                                                   |
+| **`payments` 表没有写入方** | 没有任何代码往 `payments` 写行，而 `refunds.payment_id` 是非空外键，退款依赖兜底逻辑                                                                                              | 正确做法是下单时建 `INIT` 行、回调时置 `SUCCESS`。待验证退款链路后再定   |
+| **会员权益矩阵拿不到**      | `ProductView` 没有 `benefits` 字段，契约里的权益对照表无法下发                                                                                                                    | 已在 ADR-033 里登记为缺口                                                |
+| **对话 SSE 不是真流式**     | `LlmProvider` 只暴露 `complete()`，所以增量是**生成完再切片**的 —— 首字延迟 = 完整生成耗时                                                                                        | 需要 provider 层支持流式，属接口变更，要先写 ADR                         |
+| **管理后台 8 个占位视图**   | 前端页面还在，未接真实接口                                                                                                                                                        | 属第 4 步                                                                |
+
+### 3.5 本轮（2026-10-12 接手轮）的交付与实测证据
+
+**五道门禁（本轮实测，均为真实输出，不是"退出码 0"）**
+
+| 门禁       | 命令                                                        | 结果                                                        |
+| ---------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| 1 类型     | `pnpm exec tsc --noEmit -p tsconfig.json`                   | 退出码 0                                                    |
+| 2 静态     | `pnpm exec eslint src test scripts prisma --max-warnings 0` | 退出码 0                                                    |
+| 3 单测     | `pnpm exec jest --runInBand`                                | **113 套件 / 2581 用例全过**                                |
+| 4 格式     | `pnpm exec prettier --check .`                              | 全仓通过                                                    |
+| 5 真实启动 | `node dist/main.js` + 轮询 `/health/ready`                  | 200，database/redis 均 up（另起 `dist/worker.js` 消费队列） |
+
+**修掉的 4 个缺陷（每个都有实测证据）**
+
+1. **`GET /reports/{id}` 传非法 UUID 返回 500/`90002`**（契约要求 400/`10001`）。
+   根因：`ReportIdParamDto` 只有 `@IsString` + `@Length`，非法值一路进到 Prisma，
+   由 PostgreSQL 抛 `invalid input syntax for type uuid`，再被全局过滤器翻译成
+   "数据服务异常" —— 用户看到"后端挂了"，排障的人看到一条 SQL 报错。
+   修法：新增 `backend/src/common/utils/uuid.util.ts` 作为唯一来源
+   （收敛本模块两份副本），并补 `report.dto.spec.ts`：用与 `main.ts` **同配置**的
+   真实 ValidationPipe 跑，含"两个 DTO 判定必须一致"的防漂移用例。
+   ⚠ **不能改用 `@IsUUID()`**：主键是 UUIDv7，而 `class-validator` 的 `isUUID`
+   只认 v1–v5，换上去会让**所有请求**都 400。
+2. **管理端退款在出款失败时完全不写审计**（实测：全库 `action=REFUND` **0 条**）。
+   根因：`writeAdminAudit` 写在 `executeWechatRefund` 之后且无异常保护，
+   而渠道未配置就会抛 `70018` —— 恰恰是最需要留痕的场景（出款"结果未知"时
+   微信侧可能已经出款成功）。
+   修法：把「出款 + 结算后回读 + 写审计」**整段**纳入 try/catch，失败时写一条
+   `success=false` + `errorCode` 的审计再原样抛出；回读失败时退回入参对象，
+   保证"读不到"不会导致整条不写；出款已返回时只追加 `note`，
+   不把一次成功的退款记成失败。
+   **实测证据**：修后调 `POST /admin/orders/{id}/refund`（渠道未配置，必然 `70018`）
+   → 审计表新增 1 条 `action=REFUND success=false errorCode=70018`，
+   且管理端 `GET /admin/audit-logs?targetType=ORDER` 查得到
+   （`action=payment:order:refund`、`result=FAILED`）。
+   复现脚本：`.runlogs/repro-refund-audit.cjs`、`.runlogs/probe-audit-api.cjs`。
+3. **`ai.systemNotice` 运营改不了**：该键此前不在 `system-config.catalog.ts`，
+   而目录之外的键由 `SystemConfigService` 按"未知键"**只读**下发 ——
+   对话首屏那段合规文案运营无从修改。
+   修法：补进目录（AI 分组，`requiresConfirmPassword: true`），并把
+   `system-configs.spec.ts` 里"允许该键作为目录外公开键"的**例外断言收紧为
+   「一个都不许有」**（例外消失即收紧，今后再塞目录外的公开键会直接失败）。
+4. **订阅消息的权威模板 ID 永远读不到**：`notify.template.{scene}` 六个键都不在目录里，
+   于是 `resolveAuthoritativeTemplateId` 每次都回落到**客户端上报值**并打 warn ——
+   契约 §3.11.3"服务端用 `scene` 映射权威模板、防客户端传错"**从未生效过**。
+   修法：六个键补进目录（APP 分组，默认空串、`isPublic: false`）。
+   **默认值刻意留空**：模板 ID 是"每套小程序账号一套"的环境值，预置假值会在
+   库中出现该行后**覆盖客户端真值**，线上通知全部发不出去。**仍需运维在后台填真值**。
+   漂移由新增的 `notification-template-config.spec.ts` 守住（遍历全部场景断言目录有键；
+   依赖方向仍是 notification → system 单向，避免双向依赖）。
+
+**种子实测**：`系统配置 : 10`、`Prompt : 3`，幂等重跑数值不变；
+库中核对 `promptTemplates=3 / systemConfigs=10`，E2E 残留为 0。
+
+**本轮新发现、需要决策的项（**未擅自改契约**）**
+
+1. **契约 §3.5.1 与实现/数据库/前端**三处都不一致**：契约写
+   `MBTI_REPORT | BIG_FIVE_REPORT | GROWTH_REPORT`，而 `DATABASE_DESIGN.md`、
+   `schema.prisma`、后端 DTO、小程序 `api/report.ts` **一致使用 `GROWTH_SUMMARY`**
+   —— 小程序那份文件里甚至留了注释警告"不要照抄契约的示例枚举"。
+   按 ADR-033 立下的判据（实现 + 前端 SDK 是既成事实、契约只有文档在用），
+   结论应是**改文档**；但 §3.5.1 的漂移不止枚举：契约要求的
+   `profileId` / `profileIds` / `forceRegenerate` / `language` / `tone` / `focus`
+   六个请求字段**实现里一个都没有**（实现只接受 `type` + `sessionId`）。
+   "补实现"还是"改契约"是产品级取舍，**留给下一轮明确后再动**。
+2. **`POST /reports` 声称支持的 `RELATIONSHIP_REPORT` 实际不可达**：Swagger 枚举
+   里有它，`report.service.ts` 的 `createRelationshipReport` 也已实现
+   （校验关系归属 / `ACTIVE` / 算分报告齐备），缺的只是 `CreateReportDto` 没有
+   `relationshipId` 字段 —— 于是这条分支**永远走不到**，调用必返 `400/10001`。
+   两种修法（加可选字段让分支可达，或从枚举去掉并明确关系报告只走关系域）都属契约变更。
+3. **`ai.maxMessagesPerConversation` / `ai.maxConversationsPerDay` 仍是代码常量**
+   （`chat.types.ts` / `chat-quota.util.ts`）。契约只在 `GET /ai/quota` 响应里要求
+   这两个数字，**没有要求它们可配置**，而 `chat/README.md` 标着"需补录"。
+   **刻意不建这两个配置键**：建了却没人读，等于给运维一个"改了不生效"的开关，
+   比不建更糟。要么接上读取点，要么把 README 的说法改成"契约常量"。
+4. **退款的两条残留路径**（子代理报告 + 我复核，其中①为读代码结论、未实测）：
+   ① 渠道未配置时退款单保持 `PENDING`、订单 `refundedAmount` 已被预留，
+   而对账任务 `reconcilePendingRefunds` 在拿不到商户号时（`requireMchId()` 抛非
+   `NOT_FOUND` 类异常）只会累加 `stillPending`。即**自愈但滞后**：渠道配好之后
+   的下一轮对账才会走 `NOT_FOUND` → 超 30 分钟判定"从未提交" → 释放额度。
+   需要确认该窗口内用户侧看到的是"退款处理中"而不是"已退款"。
+   ② 成功路径的审计写失败只返回 `auditLogId: null`，且**没有任何告警/指标** ——
+   审计链路故障会静默。
+
+> ⚠ 排查用的运维提醒：`Start-Process ... -RedirectStandardOutput .runlogs\boot.log`
+> 写出的日志**可能不是覆盖而是追加**（本轮实测：文件里同时存在上一轮的请求日志与
+> 本轮的启动行，靠 `pid=` 才能区分）。判断"服务是否本次启动"请看
+> `Get-NetTCPConnection -LocalPort 3000` 的 `OwningProcess` 与 `Get-Process` 的
+> `StartTime`，**不要看日志时间戳**（应用下发的 HTTP `timestamp` 是准确的，
+> 本轮实测 `2026-10-12T09:54:52.743Z` = 本地 17:54:52）。
 
 ## 4. 下一步做什么（按这个顺序，别跳）
 
-### 第 1 步：收干净新交付的四个域（最高优先，**进行中**）
+### 第 1 步：收干净新交付的四个域（**2026-10-12 已完成，见 §3.5**）
 
-已完成的部分**不要重做**（路由接线、四道门禁、真实启动、管理端 27/27、支付 11/11）。
-真正还剩的是这两件：
+第 1 步的两件事都已做完并有实测证据：
 
-1. **补齐 AI 助手的 seed 数据** —— 这是唯一一个"开箱即用会失败"的功能缺口。
-   `system_configs` 表完全没有 seed 数据，`prompt_templates` 里没有对话模板，
-   导致对话接口报 `50011`。做法与硬约束见 §9 末尾的专项说明。
-2. **把四个新域的业务行为逐项验完** —— 路由存在 ≠ 业务正确。
-   用 `verify-new-domains.cjs` 做逐项断言（HTTP 状态码 + 业务 code + 关键字段值），
-   重点覆盖：退款链路能否真正创建成功、对话配额是否原子、报告导出失败后**配额是否真的退还**。
+1. **AI 助手 seed 已补齐**：`ai.companion` 模板 + 10 条 `system_configs` 入种子，
+   `verify-ai-companion.cjs` 全部断言通过（渲染、候选键命中、定界符只包一次、
+   后台静态检查器的注入防护与边界声明均通过）。**开箱报 `50011` 的缺口已消失。**
+2. **四个新域已逐项验完**：`verify-new-domains.cjs`（**注意：这个脚本在本轮被更新过，
+   现为 78 项断言 / 6 分桶**）本轮结果 **68 通过 / 2 缺陷 / 8 环境限制**。
+   残留的 8 条全部是环境限制（未配 `DEEPSEEK_API_KEY`、未配微信商户证书），
+   其中"退款审计"一条经复现证实**是脚本的假阴性**（详见 §3.5 第 2 条）。
 
-**方法**：不要相信任何子代理的"门禁全绿"报告，**自己重跑**（见 §2 的假绿陷阱）。
+**第 1 步的剩余尾巴**（属第 2 步范畴，见 §3.5 的四个未决项）：
+`POST /reports` 的契约漂移与 `RELATIONSHIP_REPORT` 不可达需要先定方向再动手。
+
+**方法（继续遵守）**：不要相信任何子代理的"门禁全绿"报告，**自己重跑**（见 §2 的假绿陷阱）。
+本轮实测就抓到一次：子代理交付的 `refund.service.spec.ts` 自测通过、prettier 也过，
+但 **eslint 有 3 个错误**（只跑了 prettier 没跑 eslint）。
 遇到 5xx 先**重试 3 次**再判定（见 §6.3 第 16 条）。
 
 ### 第 2 步：补齐真正缺失的接口
@@ -489,20 +587,26 @@ node .runlogs\endpoint-inventory.cjs     # 契约 vs 实际注册路由的差集
 
 ## 9. 交接时的进行中状态
 
-**工作区状态**：撰写本文档初版时工作区是干净的；随后有子代理开始修改
-`backend/prisma/seed/` 下的文件（补 AI 助手模板与 `system_configs`，即第 1 步那件事），
-因此**接手前请先 `git status`**，避免与在写文件冲突。
+**工作区状态**：本轮交付**已全部提交**（见下方"最近提交"），接手时 `git status` 应当干净。
+`.runlogs/` 下的复现脚本与日志不入库（已 gitignore），但**值得留着用**。
 
-- **已推送**：`dc13e2e`（订单退款 / AI 助手 / 报告导出 / 通知 四块共 28 个接口 + 本文档）。
-- **门禁状态**：`tsc` 干净、`eslint --max-warnings 0` 干净、`nest build` 通过、
-  `jest --runInBand` = **108 个 suite / 2550 个测试全部通过**、`prettier --check` 通过。
+- **门禁状态（本轮实测）**：`tsc` 干净、`eslint src test scripts prisma --max-warnings 0` 干净、
+  `nest build` 通过、`jest --runInBand` = **113 个 suite / 2581 个测试全部通过**、
+  `prettier --check` 全仓通过。
 - **第 5 道门禁（真实启动）已通过**：`/health/ready` 返回 200，
-  `database: up` + `redis: up`。
+  `database: up` + `redis: up`；`dist/worker.js` 也已实际运行（导出/订单/退款对账等异步任务
+  只有它消费，**不启动 worker 时相关 job 会一直停在排队态**）。
+- **种子**：`Prompt : 3`（新增 `ai.companion`）、**`系统配置 : 10`**（新增），
+  幂等重跑数值稳定。
 - **运行时路由数**：注册 **123 条**，与契约 `docs/API_DESIGN.md` A.13 索引的 **123 条一致**；
   其中管理端 **45 条**。
   （注：早期文档里写的"134 条"是静态计数的重复统计口径，**以运行时的 123 为准**。）
-- **活体验证**：管理端 27/27 通过；支付链路 11/11 通过。
+- **活体验证**：管理端 27/27 通过；支付链路 11/11 通过；
+  四个新域 68/78 通过（2 缺陷 / 8 环境限制，明细见 §3.5）。
 - **最近提交**：
+  - `e1f62ea` fix(backend): 退款审计留痕 + 报告 ID 入参校验 + 配置目录补录（含 AI 助手 seed）
+    —— **本轮的交付**（16 个文件，+1735/−74），五道门禁在最终代码上复跑全过
+  - `03f7c79` docs(handover): 补齐五道门禁、四域实测结论、已接线证据与刻意未完成项
   - `dc13e2e` feat(backend): 四域 28 接口 + 交接文档
   - `f1d2152` docs: ADR-033 五处路径分歧以实现为准 + 契约同步修订
   - `0e69e1d` feat(admin): 管理端 38 个业务接口 + 用户端 system 模块
@@ -512,17 +616,22 @@ node .runlogs\endpoint-inventory.cjs     # 契约 vs 实际注册路由的差集
 > `relationship/compatibility.service.ts` 的语法错误、`maskNickname` 星号上限 ——
 > 这些**都已提交**，不需要再处理。
 
-### ⏳ 接手后第一件事：补齐 AI 助手的 seed 数据
+### ✅ 已解决：AI 助手的 seed 数据（2026-10-12）
 
-`system_configs` 表**完全没有 seed 数据**，且 `prompt_templates` 里**没有对话模板**，
-导致 AI 情感助手开箱报 `50011 AI_PROMPT_TEMPLATE_NOT_FOUND`。
-修复要点（细节见 `backend/src/modules/ai/chat/chat-prompt.ts` 文件头）：
+`ai.companion` 对话模板与 10 条 `system_configs` 已入种子并实测通过。
+当时的约束（**继续适用，改模板前先读**）：
 
-- 模板键名**必须**是 `ai.companion`（不是 `AI_COMPANION` —— 种子键要匹配
-  `/^[a-z]+\.[a-z0-9]+$/`；候选链里已包含 `ai.companion`，所以这个键名能生效）。
+- 模板键名必须是 `ai.companion`（不是 `AI_COMPANION` —— 种子键要匹配
+  `/^[a-z]+\.[a-z0-9]+$/`；`chat-prompt.ts` 的候选链已含它）。
 - 占位符只能取 `buildPromptVariables()` 真实产出的变量名。
-- 新增数据要同时满足 `prisma/seed/data/prompt-templates.spec.ts` 的约 30 条断言
-  （其中 `availableVariables()` 对未知键会回落到"报告变量"集合，需要一并修正）。
+- 改动需同时满足 `prisma/seed/data/prompt-templates.spec.ts` 与
+  `system-configs.spec.ts` 的断言（后者会把种子与配置目录逐键比对）。
+- **`ai.systemNotice` 的文案有三处副本必须逐字一致**：`chat.types.ts` 的常量、
+  配置目录的 `AI_SYSTEM_NOTICE`、种子文件里的同名字符串。
+
+> **尚需运维配置（不是代码缺陷）**：`notify.template.{scene}` 六个键虽已进目录，
+> 但库里仍无值 —— 权威模板 ID 必须由运维在管理后台填成**微信后台的真实模板 ID**，
+> 在那之前服务端只能采用客户端上报值。详见 §3.5 第 4 条。
 
 ---
 

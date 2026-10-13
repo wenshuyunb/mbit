@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 报告扩展接口 DTO（契约 §3.5.4 / §3.5.6 / §3.5.7 / §3.5.8 / §3.5.9）
  *
  * 与 `report.dto.ts` 分开的原因：那个文件服务于已实现的 4 个接口，
@@ -21,6 +21,7 @@ import {
   Min,
 } from 'class-validator';
 
+import { UUID_SHAPE_PATTERN } from '../../../common/utils/uuid.util';
 import { PDF_EXPORT_TEMPLATES, type PdfExportTemplate } from './report-export.util';
 import {
   MAX_REGENERATE_FEEDBACK_LENGTH,
@@ -67,12 +68,12 @@ const toBooleanParam = ({ value }: { value: unknown }): unknown => {
 /**
  * 报告 ID（UUID 形状校验）
  *
- * 不用 `@IsUUID()`：`validator` 库的 `isUUID` 对版本 7 的支持取决于版本，
- * 而本项目主键是 UUIDv7 —— 用可能不认 v7 的校验器会让**所有请求**都 400。
- * 这里只校验形状（8-4-4-4-12 十六进制），既能拦住明显非法值，又不绑定版本。
+ * 不用 `@IsUUID()`：`class-validator` 的 `isUUID` 只认 v1–v5，而本项目主键是
+ * UUIDv7 —— 用会让**所有请求**都 400。
+ * 模式已收敛到 `common/utils/uuid.util.ts`：本模块有两个报告 ID DTO
+ *（这里是 `ReportIdPathDto`，`report.dto.ts` 里是 `ReportIdParamDto`），
+ * 各留一份副本的后果是**同一个 ID 在两个接口上一个能过一个报错**。
  */
-const UUID_SHAPE_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
 export class ReportIdPathDto {
   @ApiProperty({ description: '报告 ID（UUID）', example: '0195f3a2-b24e-7a86-abf1-7dae4b5c6f45' })
   @IsString({ message: '报告 ID 必须是字符串' })

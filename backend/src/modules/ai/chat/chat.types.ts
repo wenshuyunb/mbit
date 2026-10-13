@@ -102,9 +102,13 @@ export const MESSAGE_PREVIEW_LENGTH = 60;
  * 服务端下发的会话首屏合规提示（契约 §3.7.1 响应字段 `systemNotice`）
  *
  * 契约把这段文案当作**服务端返回值**（前端不得硬编码），并给了逐字示例。
- * 优先读 `system_configs` 的 `ai.systemNotice`（运营可改）；该键当前不在
- * `system-config.catalog.ts` 的键目录里（属共享文件，未修改），因此实际操作
- * 路径是"读不到就用本兜底文案"。
+ * 优先读 `system_configs` 的 `ai.systemNotice`（运营可改）；该键**已在**
+ * `system-config.catalog.ts` 的 AI 分组中登记，并随种子灌入，因此实际情况是
+ * "读到库里的值"，本常量只在库中无该行时兜底。
+ *
+ * ⚠ 三处文本必须逐字一致（本常量 / 配置目录的 `AI_SYSTEM_NOTICE` / 种子的同名字符串）：
+ * 库里一旦有该行就会**取代**兜底值，不一致会出现"代码读的"与"用户看到的"两套文案，
+ * 而这段是合规文本。种子侧有一致性单测守着目录与库值，改一处须同步另两处。
  */
 export const DEFAULT_SYSTEM_NOTICE =
   '我是 SoulMap 的 AI 情感助手。我可以陪你梳理情绪、理解关系，但我不能提供心理诊断或医疗建议。如果你正经历严重的心理困扰，请寻求专业帮助。';

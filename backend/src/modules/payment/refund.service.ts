@@ -514,21 +514,66 @@ export class RefundService {
       });
     }
 
-    const settled = await this.executeWechatRefund(refund, order, { revokeEntitlement });
-    const finalRefund = await this.reloadRefund(settled.id);
-    const finalOrder = await this.reloadOrder(order.id);
-    const revokedEntitlements = await this.loadRevokedEntitlements(finalRefund);
+    // 出款与审计的顺序（**不要改成裸调用**）
+    //
+    // 原实现是 `const settled = await this.executeWechatRefund(...)` 后面直接写审计，
+    // 中间没有异常保护：于是**任何一次出款异常都不会留下审计记录**。实测中
+    // 渠道未配置（`70018`）就会走到这条路，订单的 `refundedAmount` 已被预留，
+    // 而 `admin_audit_logs` 里查询该订单命中 0 条。
+    //
+    // 这恰恰是最需要审计的场景：出款调用「结果未知」（超时 / 5xx / 本地结算事务失败）
+    // 时，微信侧可能**已经出款成功**，事后追查却无法回答"是谁在什么时候发起的这笔退款"。
+    // 因此失败也必须落一条审计，再原样抛出 —— 抛出的错误语义不变，
+    // 只是不再以"丢失审计"为代价。
+    //
+    // 保护范围是**整段**（出款 + 结算后回读 + 审计），不只是出款那一行：
+    // 出款成功之后的 `reloadRefund` / `reloadOrder` / `loadRevokedEntitlements`
+    // 任何一步抛错（瞬时断库是有记录的既有故障形态，见交接文档 §6.3 第 16 条），
+    // 若把它们留在保护之外，就会出现"钱已经出去了、审计仍然是 0 条"——
+    // 与本次要消灭的事故一模一样，只是往后挪了几行。
+    let settled: Refund | null = null;
+    let finalRefund: Refund;
+    let finalOrder: Order;
+    let revokedEntitlements: Awaited<ReturnType<RefundService['loadRevokedEntitlements']>>;
+    let auditLogId: string | null;
 
-    const auditLogId = await this.writeAdminAudit({
-      adminUserId: params.adminUserId,
-      adminUsername: params.adminUsername,
-      order: finalOrder,
-      refund: finalRefund,
-      beforeRefundedAmount: previousRefundedAmount,
-      ctx: params.ctx,
-      isForced: params.force,
-      ticketId: params.dto.ticketId ?? null,
-    });
+    try {
+      settled = await this.executeWechatRefund(refund, order, { revokeEntitlement });
+
+      finalRefund = await this.reloadRefund(settled.id);
+      finalOrder = await this.reloadOrder(order.id);
+      revokedEntitlements = await this.loadRevokedEntitlements(finalRefund);
+
+      auditLogId = await this.writeAdminAudit({
+        adminUserId: params.adminUserId,
+        adminUsername: params.adminUsername,
+        order: finalOrder,
+        refund: finalRefund,
+        beforeRefundedAmount: previousRefundedAmount,
+        ctx: params.ctx,
+        isForced: params.force,
+        ticketId: params.dto.ticketId ?? null,
+      });
+    } catch (error) {
+      await this.auditAdminRefundFailure({
+        adminUserId: params.adminUserId,
+        adminUsername: params.adminUsername,
+        // 传入入参对象作为**回读失败时的兜底**：审计宁可少几个字段，
+        // 也不能因为"读不到"就整条不写（见该方法的注释）
+        fallbackOrder: order,
+        fallbackRefund: settled ?? refund,
+        // 出款是否已经返回：决定这条审计是"出款失败"还是"结算后处理失败"，
+        // 前者必须标 success=false，后者不能把一次成功的退款记成失败
+        payoutReturned: settled !== null,
+        beforeRefundedAmount: previousRefundedAmount,
+        ctx: params.ctx,
+        isForced: params.force,
+        ticketId: params.dto.ticketId ?? null,
+        error,
+      });
+
+      throw error;
+    }
 
     return this.toAdminView({
       order: finalOrder,
@@ -1350,11 +1395,81 @@ export class RefundService {
   }
 
   /**
+   * 出款异常时的退款审计（**失败也要留痕**）
+   *
+   * 与 `writeAdminAudit` 分开的原因：那条路径读的是结算**之后**的退款单与订单，
+   * 而出款抛错时结算根本没发生 —— 此时要记录的是"谁在什么时候试图对哪笔订单退款、
+   * 失败原因是什么"。
+   *
+   * 四处刻意的取舍：
+   *   ① 重新读库而不是用入参对象：出款过程可能已经写过状态（例如微信明确拒绝后
+   *      `failRefund` 会把退款单置 `FAILED`、释放预留额度），读库才能记下真实状态；
+   *   ② **读不到就退回入参对象**（`fallback*`），不允许"因为读库失败而整条不写"：
+   *      出款异常 + 数据库抖动是最需要证据的组合，此时若还强依赖读库，
+   *      结果就是只剩一行 error 日志、`admin_audit_logs` 依旧 0 条；
+   *   ③ 全程 try/catch 且**不向外抛**：审计写失败不能顶替掉原始异常，
+   *      否则排障看到的是"审计表写不进去"，而真正的问题在出款；
+   *   ④ `payoutReturned` 决定成败口径 —— 出款没返回时退款单往往是 `PENDING`
+   *      （"结果未知"按资金安全要求不置 `FAILED`），沿用按状态推断会被记成成功，
+   *      而这条审计的意义正是标注"这次尝试失败了"，故强标 `success=false`；
+   *      出款**已经返回**、失败发生在结算后回读时，退款单可能已是 `SUCCESS`，
+   *      那就不能把一次成功的退款记成失败，只把错误追加进摘要。
+   */
+  private async auditAdminRefundFailure(params: {
+    adminUserId: string;
+    adminUsername: string;
+    fallbackOrder: Order;
+    fallbackRefund: Refund;
+    payoutReturned: boolean;
+    beforeRefundedAmount: number;
+    ctx: RefundRequestContext;
+    isForced: boolean;
+    ticketId: string | null;
+    error: unknown;
+  }): Promise<void> {
+    const message = params.error instanceof Error ? params.error.message : String(params.error);
+
+    try {
+      const [order, refund] = await Promise.all([
+        this.reloadOrder(params.fallbackOrder.id).catch(() => params.fallbackOrder),
+        this.reloadRefund(params.fallbackRefund.id).catch(() => params.fallbackRefund),
+      ]);
+
+      await this.writeAdminAudit({
+        adminUserId: params.adminUserId,
+        adminUsername: params.adminUsername,
+        order,
+        refund,
+        beforeRefundedAmount: params.beforeRefundedAmount,
+        ctx: params.ctx,
+        isForced: params.isForced,
+        ticketId: params.ticketId,
+        ...(params.payoutReturned
+          ? { note: `结算后处理失败：${message}` }
+          : { failure: { errorCode: readErrorCode(params.error), message } }),
+      });
+    } catch (auditError) {
+      this.logger.error(
+        `写退款失败审计也失败 refundId=${params.fallbackRefund.id}: ${
+          auditError instanceof Error ? auditError.message : String(auditError)
+        }`,
+      );
+    }
+  }
+
+  /**
    * 管理端退款审计
    *
    * 契约要求响应里带 `auditLogId`，而 `AdminAuditService.log()` 只返回布尔值，
    * 因此这里直接写表以拿到 ID。**审计失败不影响退款结果**（钱已经退出去的
    * 事实不会因为审计表写不进去而改变），但会打 error 日志供运维发现审计链路故障。
+   *
+   * `failure` 非空表示这次是**出款异常**的记录（见 `auditAdminRefundFailure`）：
+   * 此时 `success` 强制定为 `false` 并落 `errorCode`，其余字段照常记录。
+   *
+   * `note` 用于"业务成功但过程有异常"（例如出款已成功、结算后回读失败）：
+   * 只往摘要里追加说明，**不**改变按状态推断的 `success` —— 把成功记成失败
+   * 会让对账的人去追一笔根本没出问题的钱。
    */
   private async writeAdminAudit(params: {
     adminUserId: string;
@@ -1365,7 +1480,18 @@ export class RefundService {
     ctx: RefundRequestContext;
     isForced: boolean;
     ticketId: string | null;
+    failure?: { errorCode: number | null; message: string };
+    note?: string;
   }): Promise<string | null> {
+    const amountText = `退款 ${String(params.refund.refundAmount)} 分（${params.refund.refundNo}）`;
+    // `diff_summary` 是 VarChar(1024)：错误消息不可控（可能带上游整段报文），必须截断
+    const diffSummary = (
+      params.failure === undefined
+        ? `${amountText} → ${params.refund.status}${params.note === undefined ? '' : `；${params.note}`}`
+        : `${amountText} 执行失败：${params.failure.message}`
+    ).slice(0, 1024);
+    const failureCode = params.failure?.errorCode ?? null;
+
     try {
       const row = await this.prisma.adminAuditLog.create({
         data: {
@@ -1386,12 +1512,13 @@ export class RefundService {
             refundedAmount: params.order.refundedAmount,
             isForced: params.isForced,
           },
-          diffSummary: `退款 ${String(params.refund.refundAmount)} 分（${params.refund.refundNo}）→ ${params.refund.status}`,
+          diffSummary,
           reason: params.refund.reason ?? null,
           ip: params.ctx.ip ?? null,
           userAgent: params.ctx.userAgent ?? null,
           requestId: params.ctx.requestId ?? null,
-          success: params.refund.status !== 'FAILED',
+          success: params.failure === undefined && params.refund.status !== 'FAILED',
+          errorCode: failureCode === null ? null : String(failureCode),
         },
         select: { id: true },
       });
@@ -1430,6 +1557,31 @@ export class RefundService {
 
 /** UUID 形态判定 */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * 从异常里取业务错误码（取不到返回 `null`）
+ *
+ * 用于把"出款为什么失败"写进审计的 `error_code` 列。判定顺序与
+ * `report-generation.service.ts` / `chat-message.service.ts` 的同名函数一致：
+ * 先认 `BusinessException.code`，再认结构化对象的数字 `code`（异常可能被
+ * 拦截器或 SDK 包装过，读 `code` 比 `instanceof` 稳；`isUniqueConstraintError`
+ * 判定 Prisma 冲突时也是同一思路）。
+ *
+ * 这里刻意**不**跨模块 import 那两份：payment 去依赖 ai 模块的内部工具会把
+ * 资金链路与 AI 链路耦在一起。三份副本的收敛单独做（与 `common/utils/uuid.util.ts`
+ * 文件头记的 UUID 正则收敛是同一批待办）。
+ */
+const readErrorCode = (error: unknown): number | null => {
+  if (error instanceof BusinessException) return error.code;
+
+  if (typeof error === 'object' && error !== null) {
+    const raw = (error as { code?: unknown }).code;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
+  }
+
+  return null;
+};
 
 /** Prisma 唯一约束冲突判定 */
 const isUniqueConstraintError = (error: unknown): boolean =>

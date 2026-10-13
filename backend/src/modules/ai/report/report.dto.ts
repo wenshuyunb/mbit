@@ -6,8 +6,9 @@
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsInt, IsIn, IsOptional, IsString, Length, Max, Min } from 'class-validator';
+import { IsInt, IsIn, IsOptional, IsString, Length, Matches, Max, Min } from 'class-validator';
 
+import { UUID_SHAPE_PATTERN } from '../../../common/utils/uuid.util';
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
@@ -59,10 +60,25 @@ export class CreateReportDto {
   sessionId?: string;
 }
 
+/**
+ * 报告 ID 路径参数（`GET /reports/{id}`、`GET /reports/{id}/progress`）
+ *
+ * **必须校验 UUID 形状**：非法值（如 `/reports/not-a-uuid`）直接进 Prisma 的
+ * `where: { id }` 会让 PostgreSQL 抛 `invalid input syntax for type uuid`，
+ * 被全局过滤器翻译成 `90002` / **HTTP 500** —— 契约对同一参数的要求是
+ * `400` / `10001`（§3.5.3 错误码表），且前端会把 500 当服务端故障上报，
+ * 把「参数写错」误报成「后端挂了」。
+ *
+ * 用 `@Matches(UUID_SHAPE_PATTERN)` 而不是 `@IsUUID()`：本仓库主键是 UUIDv7，
+ * 而 `class-validator` 的 `isUUID` 只认 v1–v5，会把**全部合法请求**判成 400
+ * （理由详见 `common/utils/uuid.util.ts`）。同模块的 `ReportIdPathDto` 也用同一个
+ * 模式 —— 两处必须一致，否则同一份 ID 在两个接口上一个能过一个报错。
+ */
 export class ReportIdParamDto {
   @ApiProperty({ description: '报告 ID（UUID）', example: '0195f3a2-3ad0-7c0e-8d79-f5ca2d3e4b2d' })
   @IsString({ message: '报告 ID 必须是字符串' })
   @Length(1, 36, { message: '报告 ID 长度不合法' })
+  @Matches(UUID_SHAPE_PATTERN, { message: '报告 ID 不是合法的 UUID' })
   reportId!: string;
 }
 

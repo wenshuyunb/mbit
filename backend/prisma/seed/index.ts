@@ -27,6 +27,7 @@ import { MEMBERSHIP_PLANS, PRODUCTS } from './data/catalog';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
 import { PROMPT_TEMPLATES } from './data/prompt-templates';
+import { SYSTEM_CONFIGS } from './data/system-configs';
 import { TEST_DEFINITIONS } from './data/test-definitions';
 import type { SeedQuestion } from './types';
 const prisma = new PrismaClient();
@@ -53,6 +54,8 @@ interface SeedSummary {
   rules: number;
   /** Prompt 模板数（`seedQuestionsFor` 不产出该字段，故可选） */
   promptTemplates?: number;
+  /** 系统配置项数（`system_configs`） */
+  systemConfigs?: number;
   /** 匹配权重矩阵数 */
   compatibilityWeights?: number;
   /** 会员套餐数 */
@@ -380,6 +383,45 @@ const seedPromptTemplates = async (): Promise<number> => {
 };
 
 /**
+ * 灌入系统配置（`system_configs`）
+ *
+ * 此前这张表**一行都没有**，AI 助手链路的文案与限额全靠代码里的兜底值 ——
+ * 运营改一句话要走发版流程，后台也看不到线上到底用的什么值（详见
+ * `data/system-configs.ts` 的文件头）。
+ *
+ * 幂等：按 `key` upsert（`key` 是唯一约束）。
+ *
+ * `update` 里**必须显式写 `deletedAt: null`**：后台"删除配置"是软删，
+ * 一行软删过的同名键被 upsert 命中后仍是删除态 —— `SystemConfigService`
+ * 的查询条件带 `deletedAt: null`，表现就是"种子说灌成功了、线上读不到"
+ * （与 `admin-config.service.ts` 的写入路径同一处理）。
+ *
+ * 只 upsert 本文件声明的键，**不做 deleteMany**：运维在后台新增的键与改过的值
+ * 不能被种子脚本抹掉，`system_configs` 是运行时真值而不是种子的从属数据。
+ */
+const seedSystemConfigs = async (): Promise<number> => {
+  for (const config of SYSTEM_CONFIGS) {
+    const data = {
+      value: config.value,
+      valueType: config.valueType,
+      group: config.group,
+      description: config.description,
+      isPublic: config.isPublic,
+      isEditable: config.isEditable,
+      deletedAt: null,
+    };
+
+    await prisma.systemConfig.upsert({
+      where: { key: config.key },
+      create: { key: config.key, ...data },
+      update: data,
+    });
+  }
+
+  return SYSTEM_CONFIGS.length;
+};
+
+/**
  * 灌入匹配权重矩阵（`(code, version)` 唯一）
  *
  * 只 upsert、不删除旧版本：历史报告的 `scoreBreakdown` 会引用当时的
@@ -679,6 +721,7 @@ async function main(): Promise<void> {
 
   summary.rules = await seedRelationshipRules();
   summary.promptTemplates = await seedPromptTemplates();
+  summary.systemConfigs = await seedSystemConfigs();
   summary.compatibilityWeights = await seedCompatibilityWeights();
 
   // 顺序不可颠倒：商品通过 membershipPlanId 引用套餐
@@ -700,6 +743,7 @@ async function main(): Promise<void> {
       `  选项     : ${summary.options}`,
       `  关系规则 : ${summary.rules}`,
       `  Prompt   : ${summary.promptTemplates ?? 0}`,
+      `  系统配置 : ${summary.systemConfigs ?? 0}`,
       `  匹配权重 : ${summary.compatibilityWeights ?? 0}`,
       `  会员套餐 : ${summary.membershipPlans ?? 0}`,
       `  商品     : ${summary.products ?? 0}`,

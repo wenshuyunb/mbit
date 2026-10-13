@@ -1,12 +1,24 @@
 /**
  * Prompt 模板种子数据契约测试
  *
- * 本文件守住一条**跨模块不变量**：模板里写的占位符，必须是
- * `buildReportContext` 真的会产出的变量名。
+ * 本文件守住一条**跨模块不变量**：模板里写的占位符，必须是上下文组装代码
+ * 真的会产出的变量名。
  *
  * 两边任何一处笔误（`{{mbtiType}}` 写成 `{{mbtitype}}`）都不会在编译期被发现，
  * 而会在运行时表现为「50012 缺少必需变量」—— 那时用户已经消耗了一次生成请求，
  * 且错误出现在 AI 链路深处，排查成本高。因此这里逐个模板提取占位符并比对。
+ *
+ * ## 两套变量族（按模板路由，不合并成一个大集合）
+ *
+ * | 模板族 | 变量来源 |
+ * | --- | --- |
+ * | `report.*`（报告） | `buildReportContext` / `buildRelationshipReportContext` |
+ * | `ai.companion`（AI 情感助手对话） | `buildPromptVariables`（`chat-prompt.ts`） |
+ *
+ * 两个族的变量集合**没有交集**，因此必须按模板键路由到对应的生产函数：
+ * 统一用报告变量校验会让对话模板的 `{{myPersona}}` 被判为"不存在的变量"；
+ * 反过来把两族并集成一个大集合，笔误就再也测不出来了 ——
+ * 那正是这个契约测试存在的意义。
  */
 
 import { PROMPT_TEMPLATES } from './prompt-templates';
@@ -16,7 +28,9 @@ import {
   type RelationshipReportContextInput,
   type RelationshipReportSide,
 } from '../../../src/modules/ai/context/relationship-report-context.builder';
-import { extractPlaceholders } from '../../../src/modules/ai/prompt/prompt-renderer';
+import { assembleChatContext, type ChatContextAssembly } from '../../../src/modules/ai/chat/chat-context.util';
+import { buildPromptVariables, templateKeyCandidatesOf } from '../../../src/modules/ai/chat/chat-prompt';
+import { extractPlaceholders, renderPromptVersion } from '../../../src/modules/ai/prompt/prompt-renderer';
 import { readExpectedSections } from '../../../src/modules/ai/report/report-section.parser';
 
 /** 数据齐全的画像 */
@@ -92,6 +106,15 @@ const placeholdersOf = (template: (typeof PROMPT_TEMPLATES)[number]): string[] =
  */
 const isRelationshipTemplate = (key: string): boolean => key.startsWith('report.relationship');
 
+/**
+ * 对话模板的近似判定
+ *
+ * 用前缀而不是白名单常量：`ai.companion` 是 `chat-prompt.ts` 候选链里的**库内键名**
+ * （契约键名 `AI_COMPANION` 落库时按 spec 的 `域.用途` 规则写成点号小写），
+ * 日后若新增 `ai.*` 对话类模板（例如另一种模式），会自然落进这一族。
+ */
+const isCompanionTemplate = (key: string): boolean => key.startsWith('ai.companion');
+
 const fullRelationshipContext = (): RelationshipReportContextInput => ({
   relationTypeName: '伴侣关系',
   counterpartLabel: '伴侣',
@@ -153,11 +176,75 @@ const relationshipSide = (mbtiType: string | null, allMissing = false): Relation
   conflictStyle: allMissing ? null : 'COLLABORATING',
 });
 
+// ---------------------------------------------------------------------------
+// 对话上下文（AI 情感助手）
+// ---------------------------------------------------------------------------
+
+/**
+ * 对话变量**必须从 `buildPromptVariables()` 取**，不能手写一份清单：
+ * 手写的清单会在 `chat-prompt.ts` 增删变量时静默过期，而它一旦过期，
+ * 这个契约测试就从"守住跨模块不变量"退化成"守住我自己抄的那份名单"。
+ */
+const fullChatContext = (): ChatContextAssembly =>
+  assembleChatContext({
+    includePersona: true,
+    myPersona: '我：MBTI INFJ（内向 72%、直觉 68%）\n依恋风格：安全型依恋',
+    partnerPersona: '我的伴侣（阿哲）：MBTI ENFP\n依恋风格：焦虑型依恋',
+    memorySummary: '用户在开头提到最近工作压力大，聊到过两次和伴侣的沟通冲突。',
+    recentMessages: [
+      { role: 'USER', content: '他昨天又说我想太多' },
+      { role: 'ASSISTANT', content: '听起来那句话让你挺难受的。' },
+    ],
+    hintSnippets: [{ label: 'MBTI 报告', text: '倾向于先处理感受再处理事情。' }],
+  });
+
+/** 数据全缺（首次倾诉：无画像、无对方、无历史、无摘要），模板同样必须可渲染 */
+const emptyChatContext = (): ChatContextAssembly =>
+  assembleChatContext({
+    includePersona: true,
+    myPersona: null,
+    partnerPersona: null,
+    memorySummary: null,
+    recentMessages: [],
+  });
+
+/** 数据齐全时的对话变量 */
+const fullChatVariables = (): Record<string, string> =>
+  buildPromptVariables({
+    mode: 'COMPANION',
+    tone: 'WARM',
+    includePersona: true,
+    userInput: '他昨天又说我想太多，我一句话都不想说了。',
+    context: fullChatContext(),
+    userName: '小满',
+    partnerName: '阿哲',
+  });
+
+/** 数据全缺时的对话变量（`includePersona: false` 会走"画像未启用"分支，此处覆盖该分支） */
+const emptyChatVariables = (): Record<string, string> =>
+  buildPromptVariables({
+    mode: 'COMPANION',
+    tone: 'NEUTRAL',
+    includePersona: false,
+    userInput: '在吗',
+    context: emptyChatContext(),
+    userName: '小满',
+    partnerName: null,
+  });
+
+// ---------------------------------------------------------------------------
+// 变量集合路由
+// ---------------------------------------------------------------------------
+
 /** 某模板在「数据齐全」与「数据全缺」两种情形下可用的变量名 */
 const availableVariables = (templateKey: string, dataComplete: boolean): Set<string> => {
   if (isRelationshipTemplate(templateKey)) {
     const context = dataComplete ? fullRelationshipContext() : emptyRelationshipContext();
     return new Set(Object.keys(buildRelationshipReportContext(context).variables));
+  }
+
+  if (isCompanionTemplate(templateKey)) {
+    return new Set(Object.keys(dataComplete ? fullChatVariables() : emptyChatVariables()));
   }
 
   return new Set(Object.keys(buildReportContext(dataComplete ? fullProfile() : emptyProfile()).variables));
@@ -332,6 +419,58 @@ describe('Prompt 模板种子数据契约', () => {
         expect(template.name.length).toBeGreaterThan(2);
         expect(template.description.length).toBeGreaterThan(10);
       }
+    });
+  });
+
+  /**
+   * 对话模板（AI 情感助手）
+   *
+   * 上面那批断言已经覆盖了"占位符名对得上"，但**对不上的一半**仍然可能出问题：
+   * 键名不在候选链里（模板建了却不生效，线上照样 50011），
+   * 或者模板自己又包了一层定界符（定界结构被拆成两段）。
+   * 这两条都不会被占位符比对发现，因此单独钉住。
+   */
+  describe('对话模板（AI 情感助手）', () => {
+    const companion = (): (typeof PROMPT_TEMPLATES)[number] | undefined =>
+      PROMPT_TEMPLATES.find((template) => template.key === 'ai.companion');
+
+    it('【关键】对话模板的键在 chat-prompt.ts 的候选链里（否则建了也不生效，仍报 50011）', () => {
+      const template = companion();
+
+      expect(template).toBeDefined();
+      expect(templateKeyCandidatesOf('AI_COMPANION')).toContain(template?.key);
+    });
+
+    it('【关键】对话模板能用 buildPromptVariables() 真实渲染（无残留占位符）', () => {
+      const template = companion();
+      expect(template).toBeDefined();
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: template?.systemPrompt ?? '', userPromptTemplate: template?.userPromptTemplate ?? '' },
+        fullChatVariables(),
+      );
+
+      expect(rendered.system.length).toBeGreaterThan(0);
+      expect(rendered.user.length).toBeGreaterThan(0);
+      // 渲染器对"模板写了占位符但没给值"是硬失败，能走到这里就说明变量全给了；
+      // 再确认没有残留（`{{` 只会来自没被识别成占位符的错误写法）
+      expect(rendered.user).not.toContain('{{');
+      expect(rendered.system).not.toContain('{{');
+      expect(rendered.usedVariables.length).toBeGreaterThan(3);
+    });
+
+    it('【关键】定界符由代码包裹，模板不得自己再包一层', () => {
+      const template = companion();
+      const rendered = renderPromptVersion(
+        { systemPrompt: '', userPromptTemplate: template?.userPromptTemplate ?? '' },
+        fullChatVariables(),
+      );
+
+      // `wrapUserInput` 恰好产出 1 组定界符（见 chat-context.util.ts）；
+      // 模板若自己再写一次 `<user_data>`，注入面会被拆成两段
+      expect(rendered.user.match(/<user_data>/g) ?? []).toHaveLength(1);
+      expect(rendered.user.match(/<\/user_data>/g) ?? []).toHaveLength(1);
+      expect(rendered.user).toContain('他昨天又说我想太多，我一句话都不想说了。');
     });
   });
 });

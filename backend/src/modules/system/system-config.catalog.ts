@@ -120,6 +120,16 @@ const DISCLAIMER_CONFIDENCE_NOTICE =
   '人格特质在成年后相对稳定，单次测评结果可能受当下状态影响。报告中标注了本次作答的置信度，可作为参考。';
 const DISCLAIMER_CRISIS_NOTICE =
   '如果你正经历严重的心理困扰或有伤害自己的念头，请立即联系上方的专业热线，或告知身边可信任的人。SoulMap 无法提供危机干预。';
+/**
+ * AI 助手会话首屏提示（合规文案，契约 §3.7.1 响应字段 `systemNotice`）
+ *
+ * 必须与 `modules/ai/chat/chat.types.ts` 的 `DEFAULT_SYSTEM_NOTICE` 逐字一致：
+ * 库里一旦有 `ai.systemNotice` 这一行，它就**取代**代码兜底值成为真值，
+ * 两者不同会出现「注释里的兜底文案」与「用户实际看到的提示」不一致 ——
+ * 而这段文字是合规文本（必须含"不能提供心理诊断或医疗建议"与转介建议）。
+ */
+const AI_SYSTEM_NOTICE =
+  '我是 SoulMap 的 AI 情感助手。我可以陪你梳理情绪、理解关系，但我不能提供心理诊断或医疗建议。如果你正经历严重的心理困扰，请寻求专业帮助。';
 
 /** 危机干预资源（合规要求，随 `disclaimer.safetyResources` 下发） */
 const SAFETY_RESOURCES = [
@@ -268,6 +278,91 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     requiresConfirmPassword: false,
     impactScope: 'GLOBAL',
     isPublic: true,
+  },
+
+  // ------------------------------------------- 订阅消息的权威模板 ID（APP 组）
+  //
+  // 为什么必须进目录：`notification.service.ts` 的 `resolveAuthoritativeTemplateId`
+  // 按 `notify.template.{scene}` 读**库中该键**（`getEntry` 能返回目录之外的键）。
+  // 键不在目录里时，后台既列不出来也管不了，实际效果是**永远读不到权威值** ——
+  // 于是服务端只能采用客户端上报的 `templateId`，任何人伪造一个模板 ID 就能把
+  // 用户授权的额度"存"到一个永远不会被发送的场景上。服务端每次都记 `warn` 日志，
+  // 但那只是"事后可见"，运营没有任何办法把它改成对的。
+  //
+  // 为什么默认值是空串：这些是**微信后台配置的模板 ID**，属于"每套小程序账号一套"
+  // 的环境相关值。若在目录里预置一个假的 `TMPL_xxx`，库中一旦出现该行就会**覆盖**
+  // 用户/客户端送来的真值，线上通知会全部发不出去。空串 → `readConfiguredTemplateId`
+  // 判为"未配置"→ 维持现状（回落客户端值），直到运营把真值填进来。
+  //
+  // 为什么不按 `SUBSCRIPTION_SCENES` 生成而是逐条写死：那需要让 `system` 模块反向
+  // 依赖 `notification` 模块，而 notification 本来就依赖 system（读配置），
+  // 双向依赖正是交接文档 §6.3 第 15 条记录过的"整个后端起不来"那类故障。
+  // 漂移风险改由 `notification` 侧的一致性单测守住（遍历所有场景断言目录里有键）。
+  {
+    key: 'notify.template.REPORT_READY',
+    group: 'APP',
+    label: '订阅消息模板 ID — 报告生成完成',
+    valueType: ConfigValueType.STRING,
+    defaultValue: '',
+    description: '场景 REPORT_READY 的权威模板 ID（微信后台配置）；留空时服务端只能采用客户端上报值',
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: false,
+  },
+  {
+    key: 'notify.template.RELATIONSHIP_INVITE',
+    group: 'APP',
+    label: '订阅消息模板 ID — 收到关系邀请',
+    valueType: ConfigValueType.STRING,
+    defaultValue: '',
+    description: '场景 RELATIONSHIP_INVITE 的权威模板 ID；留空时服务端只能采用客户端上报值',
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: false,
+  },
+  {
+    key: 'notify.template.RELATIONSHIP_CONFIRMED',
+    group: 'APP',
+    label: '订阅消息模板 ID — 关系已确认',
+    valueType: ConfigValueType.STRING,
+    defaultValue: '',
+    description: '场景 RELATIONSHIP_CONFIRMED 的权威模板 ID；留空时服务端只能采用客户端上报值',
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: false,
+  },
+  {
+    key: 'notify.template.MEMBERSHIP_EXPIRING',
+    group: 'APP',
+    label: '订阅消息模板 ID — 会员即将到期',
+    valueType: ConfigValueType.STRING,
+    defaultValue: '',
+    description: '场景 MEMBERSHIP_EXPIRING 的权威模板 ID；留空时服务端只能采用客户端上报值',
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: false,
+  },
+  {
+    key: 'notify.template.DELETION_REMINDER',
+    group: 'APP',
+    label: '订阅消息模板 ID — 注销冷静期提醒',
+    valueType: ConfigValueType.STRING,
+    defaultValue: '',
+    description: '场景 DELETION_REMINDER 的权威模板 ID；留空时服务端只能采用客户端上报值',
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: false,
+  },
+  {
+    key: 'notify.template.PAYMENT_RESULT',
+    group: 'APP',
+    label: '订阅消息模板 ID — 支付结果通知',
+    valueType: ConfigValueType.STRING,
+    defaultValue: '',
+    description: '场景 PAYMENT_RESULT 的权威模板 ID；留空时服务端只能采用客户端上报值',
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: false,
   },
 
   // ---------------------------------------------------------------- 功能开关
@@ -693,6 +788,20 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     max: 10,
     description: '单用户同时进行的流式对话数，防止刷爆上游额度',
     requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: true,
+  },
+  {
+    key: 'ai.systemNotice',
+    group: 'AI',
+    label: 'AI 助手会话首屏提示',
+    valueType: ConfigValueType.STRING,
+    defaultValue: AI_SYSTEM_NOTICE,
+    description:
+      '会话创建响应 `systemNotice` 的来源（合规提示，契约 §3.7.1 要求由服务端下发、前端不得硬编码）；' +
+      '文案必须包含「不能提供心理诊断或医疗建议」与转介建议，因此改动需二次确认',
+    // 与 `disclaimer.*` 同类：合规文案被改错会直接影响合规性，故要求 X-Confirm-Password
+    requiresConfirmPassword: true,
     impactScope: 'GLOBAL',
     isPublic: true,
   },
