@@ -23,7 +23,7 @@ import type { AppConfig } from '../../config/config.type';
 import { CryptoService } from '../../infra/crypto/crypto.service';
 import type { PrismaService } from '../../infra/prisma/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
-import { TokenService, type AccessTokenPayload } from './token.service';
+import { TokenService, SESSION_COLUMN_LIMITS, clampToColumn, type AccessTokenPayload } from './token.service';
 // ============================================================================
 // 测试替身
 // ============================================================================
@@ -183,6 +183,65 @@ describe('TokenService', () => {
       expect(jti).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       expect(secret?.length).toBeGreaterThanOrEqual(42);
       expect(issued.jti).toBe(jti);
+    });
+
+    /**
+     * `user_sessions` 的列宽是**真实数据库层面的硬约束**，而这个文件把 Prisma 整个 mock 掉了
+     * —— 因此"值比列还长"这类错误在**改之前永远不会被这些单测发现**。
+     * 真实事故就是如此：微信开发者工具的 User-Agent 超过 256 字符，
+     * `userSession.create` 抛 Prisma `P2000`，登录整体 500（用户建出来了却拿不到令牌）。
+     *
+     * 下面两条用例守的就是"写入审计表的每个文本值都不超列宽"。
+     */
+    it('【关键】超长 User-Agent 被截断到列宽，不影响签发（P2000 回归）', async () => {
+      const longUserAgent = 'Mozilla/5.0 '.repeat(60); // 720 字符，远超 VarChar(256)
+
+      const issued = await service.issueTokens({
+        userId: USER_ID,
+        openid: OPENID,
+        userVersion: 3,
+        context: { userAgent: longUserAgent, platform: 'miniapp' },
+      });
+
+      const data = prisma.userSession.create.mock.calls.at(-1)?.[0] as {
+        data: { userAgent: string | null };
+      };
+
+      expect(data.data.userAgent).toHaveLength(SESSION_COLUMN_LIMITS.userAgent);
+      expect(longUserAgent.startsWith(data.data.userAgent ?? '')).toBe(true);
+      // 签发本身必须成功
+      expect(issued.accessToken.length).toBeGreaterThan(0);
+    });
+
+    it('【关键】写入 user_sessions 的每个文本值都不超过其列宽', async () => {
+      await service.issueTokens({
+        userId: USER_ID,
+        openid: OPENID,
+        userVersion: 3,
+        context: {
+          // 每个字段都给一个明显超长的值
+          platform: 'p'.repeat(200),
+          deviceId: 'd'.repeat(300),
+          ip: 'i'.repeat(200),
+          userAgent: 'u'.repeat(1000),
+        },
+      });
+
+      const data = prisma.userSession.create.mock.calls.at(-1)?.[0] as {
+        data: { platform: string; deviceId: string | null; ip: string | null; userAgent: string | null };
+      };
+
+      expect(data.data.platform.length).toBeLessThanOrEqual(SESSION_COLUMN_LIMITS.platform);
+      expect(data.data.deviceId?.length ?? 0).toBeLessThanOrEqual(SESSION_COLUMN_LIMITS.deviceId);
+      expect(data.data.ip?.length ?? 0).toBeLessThanOrEqual(SESSION_COLUMN_LIMITS.ip);
+      expect(data.data.userAgent?.length ?? 0).toBeLessThanOrEqual(SESSION_COLUMN_LIMITS.userAgent);
+    });
+
+    it('clip 语义：恰好等于列宽不截断、null/undefined 原样传递', () => {
+      expect(clampToColumn('x'.repeat(256), 256)).toHaveLength(256);
+      expect(clampToColumn('x'.repeat(257), 256)).toHaveLength(256);
+      expect(clampToColumn(null, 256)).toBeNull();
+      expect(clampToColumn(undefined, 256)).toBeNull();
     });
 
     it('Redis 中只保存 secret 的哈希，不保存 secret 本身', async () => {

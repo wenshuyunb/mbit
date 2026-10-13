@@ -92,6 +92,48 @@ export interface SessionContext {
   userAgent?: string;
 }
 
+/**
+ * `user_sessions` 各文本列的宽度
+ *
+ * 与 `prisma/schema.prisma` 的 `@db.VarChar(...)` **一一对应**，改一处必须改另一处。
+ * 写成常量而不是散落的字面量，是为了让"列宽"这件事在代码里有个唯一的、可被测试引用的来源。
+ */
+export const SESSION_COLUMN_LIMITS = {
+  platform: 32,
+  deviceId: 128,
+  ip: 64,
+  userAgent: 256,
+} as const;
+
+/**
+ * 按列宽截断文本（`null` / `undefined` 原样传递）
+ *
+ * ## 为什么必须有这一步
+ *
+ * 这些列宽是**数据库层面的硬约束**，而其中 `userAgent` 直接来自请求头 ——
+ * 长度完全由客户端决定，服务端从不校验。**微信小程序的 User-Agent 会超过 256 字符**，
+ * 于是 `user_sessions` 插入失败（Prisma `P2000`），`issueTokens` 抛错，
+ * **整个登录以 HTTP 500 收场**：用户明明已经被创建出来了，却拿不到令牌。
+ *
+ * 实测（`.runlogs/probe-uagent-limit.cjs`，对真实 PostgreSQL）：
+ * UA 长度 256 可写入、**257 立刻 P2000** —— 与你线上日志里的报错逐字一致。
+ *
+ * ## 为什么用截断而不是别的
+ *
+ * `userAgent` / `ip` 这类字段只是**诊断信息**，价值远低于"用户能不能登录"。
+ * 截断确实有损（这里丢的是尾部），但比让登录整体失败代价小得多；
+ * 若将来需要完整 UA，正确做法是**加宽列**（迁移），而不是取消这里的保护。
+ *
+ * ⚠ 这个缺陷此前 124 个测试套件全都没发现，原因很具体：
+ * `token.service.spec.ts` 把 Prisma **整个 mock 掉了**（`userSession.create.mockResolvedValue`），
+ * 而"列宽约束"只存在于真实数据库里 —— mock 永远不会报 `P2000`。
+ */
+export const clampToColumn = (value: string | null | undefined, maxLength: number): string | null => {
+  if (value === null || value === undefined) return null;
+
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
+};
+
 @Injectable()
 export class TokenService {
   private readonly logger = new Logger(TokenService.name);
@@ -188,10 +230,12 @@ export class TokenService {
           userId: options.userId,
           jti,
           refreshTokenHash: secretHash,
-          platform: options.context?.platform ?? 'miniapp',
-          deviceId: options.context?.deviceId ?? null,
-          ip: options.context?.ip ?? null,
-          userAgent: options.context?.userAgent ?? null,
+          // ⚠ 这几列都有 VarChar 上限，且 platform / deviceId / ip / userAgent 全部
+          // 来自请求（其中 userAgent 长度完全不受控）—— 必须截断，否则超长即 P2000 + 登录 500
+          platform: clampToColumn(options.context?.platform ?? 'miniapp', SESSION_COLUMN_LIMITS.platform) ?? 'miniapp',
+          deviceId: clampToColumn(options.context?.deviceId, SESSION_COLUMN_LIMITS.deviceId),
+          ip: clampToColumn(options.context?.ip, SESSION_COLUMN_LIMITS.ip),
+          userAgent: clampToColumn(options.context?.userAgent, SESSION_COLUMN_LIMITS.userAgent),
           expiresAt,
           replacedById: replacesId,
         },
