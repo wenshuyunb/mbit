@@ -1560,14 +1560,18 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **请求体**
 
-| 字段        | 类型    | 必填 | 约束                                       | 说明                                              |
-| ----------- | ------- | ---- | ------------------------------------------ | ------------------------------------------------- |
-| `objectKey` | string  | 是   | 长度 1–200；必须以 `avatar/{userId}/` 开头 | OSS 对象键，由 `/storage/upload-ticket` 返回      |
-| `etag`      | string  | 否   | 长度 8–64                                  | OSS 返回的 ETag，用于服务端二次确认对象存在       |
-| `size`      | number  | 否   | 整数，`0 < size ≤ 2097152`（2MB）          | 文件字节数；服务端以 OSS HEAD 结果为准            |
-| `width`     | number  | 否   | 整数 1–4096                                | 图片宽度（前端 `getImageInfo` 取得）              |
-| `height`    | number  | 否   | 整数 1–4096                                | 图片高度                                          |
-| `isDefault` | boolean | 否   | 默认 `false`                               | 是否使用系统默认头像（`true` 时忽略 `objectKey`） |
+| 字段        | 类型    | 必填 | 约束                                       | 说明                                                                    |
+| ----------- | ------- | ---- | ------------------------------------------ | ----------------------------------------------------------------------- |
+| `objectKey` | string  | 是   | 长度 1–200；必须以 `avatar/{userId}/` 开头 | OSS 对象键，由 `/storage/upload-ticket` 返回                            |
+| `etag`      | string  | 否   | 长度 8–64                                  | OSS 返回的 ETag；服务端按 OSS HEAD 的 `etag` **比对**，不一致即 `10001` |
+| `size`      | number  | 否   | 整数，`0 < size ≤ 2097152`（2MB）          | 文件字节数；服务端以 OSS HEAD 结果为准                                  |
+| `isDefault` | boolean | 否   | 默认 `false`                               | 是否使用系统默认头像（`true` 时忽略 `objectKey`）                       |
+
+> ⚠ **`width` / `height` 已从请求体移除**（2026-10-13 契约漂移审计）：`stored_files`
+> 没有宽高列、也没有任何策略按尺寸校验，而真正校验尺寸必须解码图片。
+> 此前它们被 DTO 收下却完全不参与校验 —— 客户端以为"服务端校验过尺寸"。
+> 现在传入会得到明确的 `400 / 10001`（`property width should not exist`），
+> 而不是一个虚假的成功。契约示例中的这两个字段同步删除。
 
 **请求示例**
 
@@ -1576,8 +1580,6 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "objectKey": "avatar/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/20260214_a7c3f9.webp",
   "etag": "F1A2B3C4D5E6F708192A3B4C5D6E7F80",
   "size": 86420,
-  "width": 512,
-  "height": 512,
   "isDefault": false
 }
 ```

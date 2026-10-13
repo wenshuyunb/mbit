@@ -295,15 +295,17 @@ export class CountLimitDto {
 /** 头像大小上限（2MB，与 AVATAR 场景策略一致） */
 export const AVATAR_MAX_BYTES = 2097152;
 
-/** 头像边长上限（契约 §3.2.3） */
-export const AVATAR_MAX_DIMENSION = 4096;
-
 /**
  * 上传头像（登记已直传至 OSS 的对象）
  *
  * 本接口**不接收文件二进制**：真实流程是「申请票据 → 客户端直传 OSS → 用本接口登记」。
  * `objectKey` 与 `isDefault` 至少提供一个（跨字段约束在 Service 中校验，
  * 与 `BindPhoneDto` 同一处理方式）。
+ *
+ * 契约 §3.2.3 还声明了 `width` / `height`（边长上限 4096），本 DTO **不再接收**：
+ * `stored_files` 没有宽高列、没有任何策略按尺寸校验，而真正校验尺寸必须解码图片
+ * （项目禁止新增依赖）。收下再忽略会让客户端以为"服务端校验过尺寸"——
+ * 属本次契约漂移审计要消灭的"静默失效"，故改为明确拒绝（见类体内注释）。
  */
 export class UpdateAvatarDto {
   @ApiPropertyOptional({
@@ -317,7 +319,7 @@ export class UpdateAvatarDto {
   objectKey?: string;
 
   @ApiPropertyOptional({
-    description: 'OSS 返回的 ETag（服务端用于二次确认对象版本）',
+    description: 'OSS 返回的 ETag（服务端按 OSS HEAD 结果**二次确认对象版本**，不一致即拒绝）',
     maxLength: 64,
   })
   @IsOptional()
@@ -336,19 +338,17 @@ export class UpdateAvatarDto {
   @Max(AVATAR_MAX_BYTES)
   size?: number;
 
-  @ApiPropertyOptional({ description: '图片宽度（前端 getImageInfo 取得）', minimum: 1, maximum: AVATAR_MAX_DIMENSION })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(AVATAR_MAX_DIMENSION)
-  width?: number;
-
-  @ApiPropertyOptional({ description: '图片高度（前端 getImageInfo 取得）', minimum: 1, maximum: AVATAR_MAX_DIMENSION })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(AVATAR_MAX_DIMENSION)
-  height?: number;
+  /**
+   * ⚠ 这里**刻意没有** `width` / `height`
+   *
+   * 契约 §3.2.3 声明了这两个字段（前端 `getImageInfo` 取得），但：
+   *   · `stored_files` 表**没有宽高列**，收下也无处可存；
+   *   · 没有任何策略按宽高做校验（`SCENE_POLICIES` 只有 `maxBytes` 与 MIME 白名单）；
+   *   · 要真正校验尺寸必须解码图片，而项目禁止新增依赖。
+   * 收下再忽略，会让客户端以为"服务端校验过尺寸/比例"—— 这正是本次审计要消灭的
+   * "静默失效"。因此改为**不收**：客户端若传会得到明确的 `400/10001`，
+   * 而不是一个虚假的成功。
+   */
 
   @ApiPropertyOptional({
     description: '是否改用系统默认头像（`true` 时忽略 `objectKey`，不触碰 OSS）',

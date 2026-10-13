@@ -466,6 +466,14 @@ export class StorageService {
     readonly scene: StorageScene;
     /** 前端声明的大小，仅用于提前拒绝；权威值取 OSS HEAD 结果（契约 §3.2.3） */
     readonly declaredSize?: number;
+    /**
+     * 前端声明的 ETag（契约 §3.2.3：**服务端二次确认对象版本**）
+     *
+     * 与 `declaredSize` 一样属于"客户端声明"，因此权威值取 OSS HEAD 的 `etag`；
+     * 两者不一致说明对象在"直传完成"与"业务登记"之间被替换过（或客户端登记的
+     * 根本不是它刚上传的那个对象），必须拒绝 —— 否则"登记的是 A、存的是 B"。
+     */
+    readonly declaredEtag?: string;
   }): Promise<RegisteredObject> {
     if (!this.oss.isConfigured) {
       throw new BusinessException(ErrorCode.OSS_NOT_CONFIGURED);
@@ -501,6 +509,20 @@ export class StorageService {
         ErrorCode.FILE_TOO_LARGE,
         `文件大小超出限制（上限 ${Math.floor(policy.maxBytes / 1024)} KB）`,
       );
+    }
+
+    /**
+     * ETag 二次确认（契约 §3.2.3 明确写了该字段的用途）
+     *
+     * 此前这个字段被 DTO 收下、却**从不与真实对象比对** —— 客户端以为服务端确认过版本，
+     * 实际什么都没校验。现在按 OSS HEAD 的 `etag` 比对：不一致即拒绝。
+     *
+     * `metadata.etag === null` 时**放行**（部分 OSS 兼容存储不返回 ETag）：
+     * 拿不到权威值就不能声称"不一致"，把"无法校验"当成"校验失败"会让这类存储上
+     * 所有上传都失败 —— 那是拿可用性换一个并不存在的保证。
+     */
+    if (params.declaredEtag !== undefined && metadata.etag !== null && params.declaredEtag !== metadata.etag) {
+      throw new BusinessException(ErrorCode.PARAM_INVALID, '对象内容与声明的 ETag 不一致，请重新上传');
     }
 
     const now = new Date();

@@ -806,6 +806,9 @@ export class UserService {
       userId,
       scene: 'AVATAR',
       ...(typeof dto.size === 'number' ? { declaredSize: dto.size } : {}),
+      // 契约 §3.2.3：ETag 用于**服务端二次确认对象版本**。
+      // 此前它只被 DTO 收下、从不参与校验，客户端以为服务端确认过版本。
+      ...(dto.etag !== undefined ? { declaredEtag: dto.etag } : {}),
     });
 
     // 旧头像安排延迟清理：仅当它确属本系统对象时才精确清理

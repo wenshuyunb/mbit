@@ -203,6 +203,68 @@ describe('StorageService.registerUploadedObject', () => {
     ).rejects.toMatchObject({ code: ErrorCode.FILE_TOO_LARGE });
   });
 
+  /**
+   * ETag 二次确认（契约 §3.2.3）
+   *
+   * 这一项此前**只被 DTO 收下、从不参与校验** —— 客户端以为服务端确认过对象版本，
+   * 实际什么都没比对。四条守的是：不一致要拒、一致要放、拿不到权威值不能当失败、
+   * 未声明时不额外读取。
+   */
+  describe('declaredEtag（对象版本二次确认）', () => {
+    it('【关键】声明的 ETag 与 OSS HEAD 不一致时拒绝登记', async () => {
+      oss.headObject.mockResolvedValue({ exists: true, sizeBytes: 1024, mimeType: 'image/png', etag: 'REAL' });
+
+      await expect(
+        service.registerUploadedObject({
+          objectKey: AVATAR_KEY,
+          userId: USER_ID,
+          scene: 'AVATAR',
+          declaredEtag: 'FAKE',
+        }),
+      ).rejects.toMatchObject({ code: ErrorCode.PARAM_INVALID });
+
+      // 拒绝时不得落库、不得公开化 —— 否则"登记的是 A、存的是 B"
+      expect(prisma.storedFile.upsert).not.toHaveBeenCalled();
+      expect(oss.putObjectAcl).not.toHaveBeenCalled();
+    });
+
+    it('一致时正常登记', async () => {
+      oss.headObject.mockResolvedValue({ exists: true, sizeBytes: 1024, mimeType: 'image/png', etag: 'REAL' });
+
+      await expect(
+        service.registerUploadedObject({
+          objectKey: AVATAR_KEY,
+          userId: USER_ID,
+          scene: 'AVATAR',
+          declaredEtag: 'REAL',
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('【关键】OSS 不返回 ETag 时放行（拿不到权威值 ≠ 校验失败）', async () => {
+      // 把"无法校验"当成"校验失败"，会让这类存储上所有上传都失败 ——
+      // 那是拿可用性换一个并不存在的保证
+      oss.headObject.mockResolvedValue({ exists: true, sizeBytes: 1024, mimeType: 'image/png', etag: null });
+
+      await expect(
+        service.registerUploadedObject({
+          objectKey: AVATAR_KEY,
+          userId: USER_ID,
+          scene: 'AVATAR',
+          declaredEtag: 'ANY',
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('未声明 ETag 时不做比对', async () => {
+      oss.headObject.mockResolvedValue({ exists: true, sizeBytes: 1024, mimeType: 'image/png', etag: 'REAL' });
+
+      await expect(
+        service.registerUploadedObject({ objectKey: AVATAR_KEY, userId: USER_ID, scene: 'AVATAR' }),
+      ).resolves.toBeDefined();
+    });
+  });
+
   it('HEAD 显示对象不存在时返回 80010', async () => {
     oss.headObject.mockResolvedValue({ exists: false, sizeBytes: null, mimeType: null, etag: null });
 
