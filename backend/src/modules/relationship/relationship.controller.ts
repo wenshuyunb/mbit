@@ -27,11 +27,15 @@
  *
  * 契约 §3.6.1 的响应含 `inviter`（邀请方昵称/头像/MBTI）、`dailyQuota`、
  * `qrCodeUrl`/`wideQrCodeUrl`、`suggestedTestCode`、`shareText`/`shareTitle`，
- * 本控制器**不下发这些字段**，而不是下发空对象或占位文案：
+ * 本控制器对其中的 `inviter` / `dailyQuota` / `shareText` / `shareTitle`
+ * **不下发这些字段**，而不是下发空对象或占位文案：
  *
- *   · `qrCodeUrl` / `wideQrCodeUrl` —— 小程序码生成（`wxacode.getUnlimited`
- *     + OSS 上传）是独立一段工作，尚未实现。Service 已按契约返回 `null`
- *     表示"降级"，前端据此回落到展示短码
+ *   · `qrCodeUrl` —— ✅ **已下发**（2026-10-13 接入）：`RelationshipService.attachInviteQrCode`
+ *     走 `WechatService.getMiniAppCode()`（`wxacode.getUnlimited`）+ OSS 上传，并把地址写回
+ *     `relationship_invites.qrCodeUrl`。该列此前**只有读、没有写**，"扫码邀请"从来没生效过。
+ *     ⚠ 未配置微信凭证、或**页面在微信侧尚不存在**（`errcode=41030 invalid page`，
+ *     小程序代码未上传时必然如此）时返回 `null`，邀请本身不受影响（契约规则 6 的降级），
+ *     前端据此回落到展示短码。`wideQrCodeUrl` 仍未下发。
  *   · `inviter` / `dailyQuota` —— 需要额外的用户联查与配额计数表，未实现；
  *     下发空对象会让前端 `inviter.nickname` 拿到 `undefined` 并在渲染层炸开，
  *     比"字段不存在"更难排查
