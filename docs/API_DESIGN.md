@@ -175,17 +175,29 @@ const BASE_URL_MAP = {
 
 ### 2.2 请求头约定
 
-| 请求头              | 必填           | 取值示例                                    | 说明                                                                                                                                |
-| ------------------- | -------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `Authorization`     | 需鉴权接口必填 | `Bearer eyJhbGciOiJIUzI1NiIs...`            | 用户 AccessToken（`realm: user`）或管理员 AdminAccessToken（`realm: admin`）。缺失返回 `20000`，过期/无效返回 `20001`/`20002`。     |
-| `Content-Type`      | 有请求体时必填 | `application/json; charset=utf-8`           | 上传类走 OSS 直传，不经后端。非 JSON 且非法 → `10007`。                                                                             |
-| `X-Request-Id`      | 否（推荐）     | `req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5`            | 全链路追踪 ID。缺失时服务端生成 UUIDv7 并回写响应头。格式非法（长度 > 64 或含非法字符）时服务端忽略客户端值并重新生成，**不报错**。 |
-| `X-Idempotency-Key` | 幂等接口必填   | `idem_7f3a91c2-4b8e-4d1f-9a02-6c5e8b7d1f30` | 幂等键，建议 UUIDv4 或 32 位随机串。**长度 8–64，字符白名单 `[A-Za-z0-9_-]`**（格式非法 → `10001`）。缺失 → `10009`。详见 2.9。     |
-| `Accept-Language`   | 否             | `zh-CN` / `en-US`                           | 默认 `zh-CN`。影响 `message` 与部分业务文案（免责声明、关怀文案）的语言；不支持的语言回退 `zh-CN`。                                 |
-| `X-Client-Version`  | 否（推荐）     | `1.4.2`                                     | 小程序/Admin 版本号（语义化版本）。用于灰度开关与最低版本强升判断；低于最低支持版本返回 `90013`。                                   |
-| `X-Platform`        | 是（推荐）     | `miniapp` \| `admin`                        | 声明调用端。服务端据此校验 realm 是否匹配（admin 接口必须 `admin`），并写入日志与埋点。缺失时按路由前缀推断。                       |
-| `X-Device-Id`       | 否             | `d9f1c3a7e5b24f60`                          | 设备指纹（小程序端本地生成并持久化），用于风控与登录审计，非敏感。                                                                  |
-| `User-Agent`        | 自动           | —                                           | 由客户端运行时自动携带（`uni.request` / axios）。服务端仅记录，不做业务判断。                                                       |
+| 请求头              | 必填           | 取值示例                                    | 说明                                                                                                                                            |
+| ------------------- | -------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Authorization`     | 需鉴权接口必填 | `Bearer eyJhbGciOiJIUzI1NiIs...`            | 用户 AccessToken（`realm: user`）或管理员 AdminAccessToken（`realm: admin`）。缺失返回 `20000`，过期/无效返回 `20001`/`20002`。                 |
+| `Content-Type`      | 有请求体时必填 | `application/json; charset=utf-8`           | 上传类走 OSS 直传，不经后端。非 JSON 且非法 → **`10006 UNSUPPORTED_MEDIA_TYPE`**（HTTP 415；`error-code.ts:22`，由全局过滤器按 415 兜底映射）。 |
+| `X-Request-Id`      | 否（推荐）     | `req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5`            | 全链路追踪 ID。缺失时服务端生成 UUIDv7 并回写响应头。格式非法（长度 > 64 或含非法字符）时服务端忽略客户端值并重新生成，**不报错**。             |
+| `X-Idempotency-Key` | 幂等接口必填   | `idem_7f3a91c2-4b8e-4d1f-9a02-6c5e8b7d1f30` | 幂等键，建议 UUIDv4 或 32 位随机串。**长度 8–64，字符白名单 `[A-Za-z0-9_-]`**（格式非法 → `10001`）。缺失 → `10009`。详见 2.9。                 |
+| `Accept-Language`   | 否             | `zh-CN` / `en-US`                           | 默认 `zh-CN`。影响 `message` 与部分业务文案（免责声明、关怀文案）的语言；不支持的语言回退 `zh-CN`。                                             |
+| `X-Client-Version`  | 否（推荐）     | `1.4.2`                                     | 小程序/Admin 版本号（语义化版本）。仅用于 `GET /system/config` 计算 `app.forceUpdate`；**本项目未分配 `90013`，也没有 426 拦截**（见下方 ⚠）。  |
+| `X-Platform`        | 是（推荐）     | `miniapp` \| `admin`                        | 声明调用端。服务端据此校验 realm 是否匹配（admin 接口必须 `admin`），并写入日志与埋点。缺失时按路由前缀推断。                                   |
+| `X-Device-Id`       | 否             | `d9f1c3a7e5b24f60`                          | 设备指纹（小程序端本地生成并持久化），用于风控与登录审计，非敏感。                                                                              |
+| `User-Agent`        | 自动           | —                                           | 由客户端运行时自动携带（`uni.request` / axios）。服务端仅记录，不做业务判断。                                                                   |
+
+> ⚠ **2026-10-13 契约漂移审计**：契约原文写「低于最低支持版本返回 `90013`（HTTP 426）」。
+> 实际上 `error-code.ts` 的 90 段最大只到 `90009 SERVICE_SHUTTING_DOWN`（`:198`），**全项目不存在
+> `90013`**；全局管道里也没有任何「按 `X-Client-Version` 拒绝请求」的 426 拦截。服务端唯一能下发的
+> 「版本过低」信号是 `GET /system/config`（§3.12.1）响应里的 `app.forceUpdate`
+> （`system-config.service.ts:271-272,310`：`clientVersion < minClientVersion` 时置 `true`）。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                      | 未交付的内容与前置工作                                                                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `90013` / HTTP 426 全局强更拦截 | 需在全局管道（Guard/Interceptor）读取 `X-Client-Version` 并与版本下限比对，再分配 90 段错误码；当前客户端只能自行读取 `app.forceUpdate` 弹窗 |
 
 **响应头约定**：
 
@@ -821,43 +833,78 @@ Accept-Language: zh-CN
   │                                   │     │    └─ 失败(5xx) → 删除键（允许重试）
   │                                   │     └─ 命中 → 读取缓存记录
   │                                   │          ├─ DONE → 直接回放原始响应（含原 requestId）
-  │                                   │          ├─ PROCESSING → 409 code=10013
-  │                                   │          └─ 请求体指纹不一致 → 409 code=10012
+  │                                   │          └─ PROCESSING → 409 code=10003（RESOURCE_CONFLICT）
   │◄────── 幂等回放/首次响应 ─────────│
 ```
 
-| 规则       | 说明                                                                                                                |
-| ---------- | ------------------------------------------------------------------------------------------------------------------- |
-| 键作用域   | `{userId}:{X-Idempotency-Key}`，用户间不互相影响                                                                    |
-| 存储位置   | Redis `sm:idem:{userId}:{key}`，TTL **24 小时**                                                                     |
-| 请求体指纹 | `SHA-256(method + path + 规范化 JSON body)`；不一致返回 `10012`                                                     |
-| 响应回放   | 首次成功响应体完整缓存（上限 64KB，超出仅缓存 `code` 与关键 ID）                                                    |
-| 失败重试   | 仅 **5xx / 504 / 499** 会清除幂等键（允许客户端安全重试）；4xx 业务错误**保留**键（同一键重复请求得到同一业务错误） |
-| 服务端降级 | Redis 不可用时，幂等降级为「数据库唯一约束兜底」（订单号唯一、`idempotencyKey` 唯一列），行为仍正确                 |
+| 规则          | 说明                                                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 键作用域      | `{userId}:{X-Idempotency-Key}`，用户间不互相影响                                                                                      |
+| 存储位置      | Redis `sm:idem:{userId}:{key}`，TTL **24 小时**                                                                                       |
+| 并发冲突      | 同键首次请求仍在处理中 → **`10003 RESOURCE_CONFLICT`（HTTP 409）**，客户端可稍后用**同一幂等键**重试（`chat-message.service.ts:371`） |
+| 🚫 请求体指纹 | 契约声明的 `SHA-256(method + path + 规范化 JSON body)` 比对**未交付**（见下表）                                                       |
+| 响应回放      | 首次成功响应体完整缓存（上限 64KB，超出仅缓存 `code` 与关键 ID）                                                                      |
+| 失败重试      | 仅 **5xx / 504 / 499** 会清除幂等键（允许客户端安全重试）；4xx 业务错误**保留**键（同一键重复请求得到同一业务错误）                   |
+| 服务端降级    | Redis 不可用时，幂等降级为「数据库唯一约束兜底」（订单号唯一、`idempotencyKey` 唯一列），行为仍正确                                   |
+
+> ⚠ **2026-10-13 契约漂移审计**：契约原文给了两个**本项目不存在**的码 ——
+> `10013`（并发重复提交）与 `10012`（请求体指纹不一致）。`error-code.ts` 的 10 段只定义到
+> `10011 VERSION_OUTDATED` 与 `10019 ADMIN_ORIGIN_FORBIDDEN`，**没有 `10012`/`10013`**。
+> 实现里「同键请求仍在处理中」抛的是 **`10003 RESOURCE_CONFLICT`**
+> （`chat-message.service.ts:356-372` 的 `claimIdempotencyOrReplay`），故图与上表已按实现改写。
+> **全仓没有任何**「对 `method + path + body` 求指纹做幂等比对」的逻辑：报表 PDF / 分享卡的
+> `contentHash` 是**内容缓存指纹**，与请求体幂等无关，不能当成该机制的实现。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                | 未交付的内容与前置工作                                                                                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 请求体指纹校验（`10012`） | 需在幂等存储里同时落 `SHA-256(method+path+规范化 body)` 并在命中时比对；**当前未实现**，同一幂等键换 body 重发会**静默重放首次响应**（客户端会拿到与本次请求无关的旧结果），需先补指纹比对再分配错误码 |
+| 并发冲突专用码（`10013`） | 契约单列的「相同请求正在处理中」码未分配；当前复用 `10003 RESOURCE_CONFLICT`。若客户端需要区分「并发中」与「其他资源冲突」，需在 10 段新分配一个码并同步全部调用点                                     |
 
 #### 2.9.2 必须携带 `X-Idempotency-Key` 的接口清单
 
-| 接口                                        | 幂等键的业务语义                             | 缺失返回                   |
-| ------------------------------------------- | -------------------------------------------- | -------------------------- |
-| `POST /orders`                              | 同一商品的下单创建                           | `10009`                    |
-| `POST /orders/{id}/refund`                  | 一次退款发起                                 | `10009`                    |
-| `POST /reports`                             | 一次报告生成创建                             | `10009`                    |
-| `POST /reports/{id}/regenerate`             | 一次重新生成（防重复扣配额）                 | `10009`                    |
-| `POST /reports/{id}/export-pdf`             | 一次 PDF 导出任务创建                        | `10009`                    |
-| `POST /reports/{id}/share-card`             | 一次分享图生成                               | `10009`                    |
-| `POST /tests/{code}/sessions`               | 一次测试会话创建（防止快速双击建两个会话）   | `10009`                    |
-| `POST /tests/sessions/{id}/submit`          | 一次提交（**核心**：防重复提交导致重复算分） | `10009`                    |
-| `POST /relationships/invites`               | 一次邀请创建                                 | `10009`                    |
-| `POST /relationships/invites/{code}/accept` | 一次接受邀请（防双击建立多关系）             | `10009`                    |
-| `POST /relationships/{id}/compatibility`    | 一次匹配报告触发（防重复扣费）               | `10009`                    |
-| `POST /ai/conversations`                    | 一次会话创建                                 | `10009`                    |
-| `POST /ai/conversations/{id}/messages`      | 一条用户消息（非流式）                       | `10009`                    |
-| `POST /users/me/export`                     | 一次导出申请                                 | `10009`                    |
-| `POST /users/me/deletion`                   | 一次注销申请                                 | `10009`                    |
-| `POST /storage/upload-ticket`               | 一次上传票据申请                             | 否（可不带，重复申请无害） |
-| `POST /admin/orders/{id}/refund`            | 管理员退款                                   | `10009`                    |
+| 接口                                        | 幂等键的业务语义                             | 缺失返回                   | 实现状态（2026-10-13 按代码核对）                                                                                                                                                   |
+| ------------------------------------------- | -------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /payment/orders`                      | 同一商品的下单创建                           | `10009`                    | ✅ 已实现（`payment.controller.ts` 的 `createOrder` 已声明 `@IdempotencyKey()`；重放结果整份存 Redis，TTL = 订单有效期 30 分钟）                                                    |
+| `POST /orders/{id}/refund`                  | 一次退款发起                                 | `10009`                    | ✅ 已实现（`orders.controller.ts:258`）                                                                                                                                             |
+| `POST /reports`                             | 一次报告生成创建                             | `10009`                    | 🚫 **未交付**：`report.controller.ts:58` 的 `@Post()` **没有** `@IdempotencyKey()`，缺失**不会**返回 `10009`；重复提交由「同画像 + 同 Prompt 版本直接复用（`isReused: true`）」兜底 |
+| `POST /reports/{id}/regenerate`             | 一次重新生成（防重复扣配额）                 | `10009`                    | ✅ 已实现（`report-engagement.controller.ts:360`）                                                                                                                                  |
+| `POST /reports/{id}/export-pdf`             | 一次 PDF 导出任务创建                        | `10009`                    | ✅ 已实现（`report-engagement.controller.ts:409`）                                                                                                                                  |
+| `POST /reports/{id}/share-card`             | 一次分享图生成                               | `10009`                    | ✅ 已实现（`report-engagement.controller.ts:458`）                                                                                                                                  |
+| `POST /tests/{code}/sessions`               | 一次测试会话创建（防止快速双击建两个会话）   | `10009`                    | ✅ 已实现（`test.controller.ts:223`）                                                                                                                                               |
+| `POST /tests/sessions/{id}/submit`          | 一次提交（**核心**：防重复提交导致重复算分） | `10009`                    | 🚫 **未交付**：`submitSession` 未声明 `@IdempotencyKey()`；幂等由状态机保证（重复提交返回既有结果 `isDuplicate: true`，不重复递增画像版本）                                         |
+| `POST /relationships/invites`               | 一次邀请创建                                 | `10009`                    | 🚫 **未交付**：`relationship.controller.ts:152` 的 `createInvite` 无该参数；兜底是「未使用邀请 ≤ 5」（`60007`），不会无限创建                                                       |
+| `POST /relationships/invites/{code}/accept` | 一次接受邀请（防双击建立多关系）             | `10009`                    | 🚫 **未交付**：`relationship.controller.ts:221` 的 `acceptInvite` 无该参数；天然幂等（重复接受返回既有关系 + `isDuplicate: true`）                                                  |
+| `POST /relationships/{id}/compatibility`    | 一次匹配报告触发（防重复扣费）               | `10009`                    | 🚫 **未交付**：`relationship.controller.ts:284` 无该参数                                                                                                                            |
+| `POST /ai/conversations`                    | 一次会话创建                                 | `10009`                    | ✅ 已实现（`chat.controller.ts:132`）                                                                                                                                               |
+| `POST /ai/conversations/{id}/messages`      | 一条用户消息（非流式）                       | `10009`                    | ✅ 已实现（`chat.controller.ts:353`）；并发同键返回 `10003`（见 2.9.1）                                                                                                             |
+| `POST /users/me/export`                     | 一次导出申请                                 | `10009`                    | ✅ 已实现（`user.controller.ts:233`）                                                                                                                                               |
+| `POST /users/me/deletion`                   | 一次注销申请                                 | `10009`                    | ✅ 已实现（`user.controller.ts:354`）                                                                                                                                               |
+| `POST /storage/upload-ticket`               | 一次上传票据申请                             | 否（可不带，重复申请无害） | 🚫 无 `@IdempotencyKey()`，与「可不带」一致                                                                                                                                         |
+| `POST /admin/orders/{id}/refund`            | 管理员退款                                   | `10009`                    | ✅ 已实现（`admin-order-refund.controller.ts:113`）                                                                                                                                 |
 
 > **不需要幂等键**的接口：所有 `GET`（天然幂等，前端可自动重试 1 次）、`POST /auth/refresh`（RT 旋转自带幂等检测）、`POST /payments/wechat/notify`（幂等键 = `transactionId`，由微信侧提供，服务端 DB UNIQUE 兜底）、`PUT /tests/sessions/{id}/answers`（upsert 天然幂等）。
+
+> ⚠ **2026-10-13 契约漂移审计**：上表原先把 17 个端点**一律**写成「缺失返回 `10009`」，
+> 但按 `grep -rn "@IdempotencyKey" backend/src` 核对，真实声明该装饰器的只有 10 处调用点
+> （上表标 ✅ 的行；另有管理端订单导出 `admin-order.controller.ts:144`、管理端题目导入
+> `admin-question.controller.ts:340` 的 `@IdempotencyKey(false)` 可选形态）。
+> 标 🚫 的 5 行（`POST /reports`、`POST /tests/sessions/{id}/submit`、
+> `POST /relationships/invites`、`POST /relationships/invites/{code}/accept`、
+> `POST /relationships/{id}/compatibility`）**缺失幂等键不会返回 `10009`**，请求头被静默忽略。
+> 它们的幂等语义由业务状态机/唯一约束兜底（见各行说明），**不要**据本表在前端做「缺键拦截」。
+>
+> 另：契约原文把下单端点写成 `POST /orders`，但 `orders.controller.ts`（`@Controller('orders')`）
+> 下**没有** `POST /` 路由 —— 真实路径是 §3.9.2 的 `POST /payment/orders`
+> （`payment.controller.ts:44`），上表已按实现修正。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                            | 未交付的内容与前置工作                                                                                                                                                                                                                                           |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5 个端点的必带幂等键                  | 需在 `POST /reports`、`POST /tests/sessions/{id}/submit`、`POST /relationships/invites`、`POST /relationships/invites/{code}/accept`、`POST /relationships/{id}/compatibility` 补 `@IdempotencyKey()` 参数并接入幂等存储；否则「必带」只是文档约定，缺键不会报错 |
+| 幂等键格式校验（`10001`）在 🚫 行生效 | 上述端点连请求头都不读取，格式非法同样不会返回 `10001`                                                                                                                                                                                                           |
 
 #### 2.9.3 天然幂等接口（无需请求头）
 
@@ -1720,7 +1767,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "code": 0,
   "message": "ok",
   "data": {
-    "items": [
+    "consents": [
       {
         "type": "PRIVACY_POLICY",
         "version": "2.1.0",
@@ -1732,7 +1779,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
         "url": "https://www.soulmap.cn/legal/privacy-2.1.0.html"
       },
       {
-        "type": "USER_AGREEMENT",
+        "type": "TERMS_OF_SERVICE",
         "version": "1.8.0",
         "currentVersion": "1.8.0",
         "isLatest": true,
@@ -1790,21 +1837,28 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **业务规则**
 
-1. 返回固定 5 类同意项：`PRIVACY_POLICY`、`USER_AGREEMENT`、`AGE_DECLARATION`、`AI_CONTENT_NOTICE`、`MARKETING`。其中前三项为**必同意项**，`MARKETING` 为可选项。
-2. `requiresReconsent = true` 且 `pendingTypes` 非空时，前端**必须在下次进入关键页面（首页/测试/支付）前**弹出重新同意弹窗；服务端在关键写接口（`POST /orders`、`POST /reports`、`POST /ai/conversations`）也会校验并返回 `30008`。
+1. 返回固定 5 类同意项：`PRIVACY_POLICY`、`TERMS_OF_SERVICE`、`AGE_DECLARATION`、`AI_CONTENT_NOTICE`、`MARKETING`。其中前三项为**必同意项**，`MARKETING` 为可选项。（枚举与 `ConsentType`（`schema.prisma:72`）及 `CONSENT_TYPES` 白名单（`user.dto.ts:39-45`）逐字一致；契约原文的 `USER_AGREEMENT` **不存在于本端点**，对应项应为 `TERMS_OF_SERVICE`。注意 §3.12.1 的 `policies.currentVersions.USER_AGREEMENT` 是**另一个**字典，两者不通用。）
+2. `requiresReconsent = true` 且 `pendingTypes` 非空时，前端**必须**在下次进入关键页面（首页/测试/支付）前弹出重新同意弹窗。同意类校验的错误码是 **`30002 CONSENT_REQUIRED`**（`error-code.ts:74`，HTTP 403）——契约原文的 `30008` 在本项目是 `PHONE_DECRYPT_FAILED`，与本规则无关。🚫 **但服务端拦截本身尚未交付**：`30002` 全仓**没有任何抛出点**（`grep -rn CONSENT_REQUIRED backend/src` 只命中错误码声明），关键写接口目前**不会**因未同意而拒绝请求，同意闸门完全依赖前端自觉。
 3. `currentVersion` 来自 `system_config`，与用户已同意版本比对得出 `isLatest`。
 4. 同意记录**不可删除**（合规审计要求），只能追加新版本记录。
 5. 政策版本从旧到新的完整历史可通过 `GET /system/disclaimers` 获取（仅文案，不含个人记录）。
 
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                      | 未交付的内容与前置工作                                                                                                                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 关键写接口的同意闸门（`30002`） | `30002 CONSENT_REQUIRED` 已定义但**无抛出点**：需在 Guard/Interceptor 里按 `requiresReconsent` 拦 `POST /payment/orders`、`POST /reports`、`POST /ai/conversations` 等写接口（含白名单放行 `GET /users/me/consents` 与提交同意本身） |
+| `30008` 用作同意类错误          | 契约原文把 `30008` 当「需重新同意」，本项目中它是 `PHONE_DECRYPT_FAILED`（400）；**不要**按 `30008` 做前端分支                                                                                                                       |
+
 #### 3.2.6 `POST /api/v1/users/me/consents` — 提交同意/撤回同意 🔑
 
-| 项   | 值                                                           |
-| ---- | ------------------------------------------------------------ |
-| 用途 | 记录用户对某类政策的同意或撤回（含隐私政策更新后的重新同意） |
-| 鉴权 | 🔑 登录                                                      |
-| 限流 | userId 20 次/60min                                           |
-| 幂等 | 天然幂等（同 `type + version` 重复提交返回已存在记录）       |
-| 异步 | 否                                                           |
+| 项   | 值                                                               |
+| ---- | ---------------------------------------------------------------- |
+| 用途 | 记录用户对某类政策的同意或撤回（含隐私政策更新后的重新同意）     |
+| 鉴权 | 🔑 登录                                                          |
+| 限流 | userId 30 次/60s（`user.controller.ts:288`）                     |
+| 幂等 | 天然幂等（同 `type + policyVersion` upsert，重复提交只更新时间） |
+| 异步 | 否                                                               |
 
 **请求体**
 
@@ -1827,12 +1881,11 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 {
   "type": "PRIVACY_POLICY",
   "policyVersion": "2.1.0",
-  "agreed": true,
-  "channel": "MINIAPP"
+  "agreed": true
 }
 ```
 
-**成功响应 201**
+**成功响应 200**
 
 ```json
 {
@@ -1841,35 +1894,56 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "data": {
     "type": "PRIVACY_POLICY",
     "version": "2.1.0",
+    "currentVersion": "2.1.0",
+    "isLatest": true,
     "agreed": true,
     "agreedAt": "2026-02-14T12:55:00.000Z",
-    "isNewRecord": true,
-    "requiresReconsent": false,
-    "pendingTypes": []
+    "revokedAt": null,
+    "url": "https://www.soulmap.cn/legal/privacy-2.1.0.html"
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T12:55:00.000Z"
 }
 ```
 
+> ⚠ **2026-10-13 契约漂移审计**（响应体与状态码）：实现是 `@HttpCode(HttpStatus.OK)`
+> （`user.controller.ts:287`）即 **HTTP 200**（不是契约原文的 201），响应体是 `submitConsent`
+> 的返回（`user.service.ts:987-996`）**8 个字段**：`type`、`version`、`currentVersion`、
+> `isLatest`、`agreed`、`agreedAt`、`revokedAt`、`url`。契约原文的 `isNewRecord`、
+> `requiresReconsent`、`pendingTypes` **一律不返回**（要拿重新同意状态请再调 §3.2.5）。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                                |
-| ------- | ---- | --------------------------------------------------------------------------------------- |
-| `10001` | 400  | `type`/`version` 非法，或 `createdAt` 语义不符                                          |
-| `10002` | 400  | `type = AGE_DECLARATION` 但缺少 `ageDeclared`                                           |
-| `10010` | 429  | 命中限流                                                                                |
-| `10016` | 400  | `version` 低于当前生效版本（禁止降级同意）                                              |
-| `30008` | 409  | 提交的 `version` 与当前生效版本不一致（政策刚更新，需刷新页面后重新同意）               |
-| `30017` | 400  | 试图撤回必同意项（`PRIVACY_POLICY`/`USER_AGREEMENT`/`AGE_DECLARATION`）→ 只能走注销流程 |
+| 错误码            | HTTP | 触发条件                                                                                                                                                                                        |
+| ----------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `10001`           | 400  | `type` 非白名单枚举；`policyVersion` 缺失或超 32 字符；`agreed` 非布尔；**或传入契约原文的 `version`/`ageDeclared`/`channel` 任一**（`forbidNonWhitelisted` → `property xxx should not exist`） |
+| `10007`           | 429  | 命中限流（userId 30 次/60s，`user.controller.ts:288`）                                                                                                                                          |
+| `20000` / `20001` | 401  | 未登录 / AT 过期                                                                                                                                                                                |
+| `30017`           | 409  | `agreed = true` 且 `policyVersion` ≠ 服务端当前版本（`CONSENT_VERSION_STALE`，`user.service.ts:942-946`）；`details[0].field = policyVersion`                                                   |
+
+> ⚠ **2026-10-13 契约漂移审计**（本节错误码表按 `error-code.ts` 与实现全表重写）：
+> · 契约原文的 `version` 字段名实为 **`policyVersion`**；
+> · `10002` 在本项目是 `RESOURCE_NOT_FOUND`（**404**），**不是**「缺 `ageDeclared`」；
+> · 限流是 **`10007 RATE_LIMITED`（429）**，`10010` 是 `IDEMPOTENCY_CONFLICT`（409）；
+> · **`10016` 全项目不存在**；
+> · 版本不一致是 **`30017 CONSENT_VERSION_STALE` + 409**（不是 `30008`、也不是 400）；
+> · `30008` 在本项目是 `PHONE_DECRYPT_FAILED`（400），与本端点无关。
 
 **业务规则与边界条件**
 
-1. **必同意项不可撤回**：`agreed: false` 仅对 `MARKETING` 有效；其他三类撤回请求返回 `30017` 并提示走账号注销（架构 9.4）。
-2. **`AGE_DECLARATION` 副作用**：提交后写 `users.ageVerified = (ageDeclared >= 18)`；< 18 岁则 `FEATURE_COUPLE_MATCH` 对该用户不可用（返回 `30015`）。
-3. **版本严格匹配**：只接受当前生效版本，防止客户端缓存旧页面导致「同意旧版本」的合规漏洞。
-4. **审计字段**：写入 `user_consents` 时记录 `ip`、`userAgent`、`channel`、`policyUrl`（政策快照 URL），保留至账号注销后 3 年（法律留存）。
-5. 成功响应返回 `requiresReconsent` 与 `pendingTypes`，前端可据此直接决定是否还需要弹其它政策的同意框。
+1. **必同意项目前也可撤回（未交付拦截）**：实现**不区分**同意项类型，`agreed: false` 对 5 类一律生效（`user.service.ts:952-975` 的 upsert 只按 `(userId, type, policyVersion)` 落库），**不会**返回 `30017`。契约原文的「撤回必同意项 → `30017` 并引导注销」在实现中不存在，见下方「未交付能力」。
+2. **`AGE_DECLARATION` 无副作用**：本端点**不接受**年龄声明（DTO 只有 `type`/`policyVersion`/`agreed`），因此**不写** `users.ageVerified`。`ageVerified` 只在**注册**（`auth.service.ts:363-370`，按 `ageDeclared`）与**资料更新**（`user.service.ts:467-471`，生日显示 < 18 岁时置 `false`）两处写入。契约原文的「< 18 岁则 `FEATURE_COUPLE_MATCH` 不可用（返回 `30015`）」有**两处错**：`30015` 在本项目是 `INCLUDE_FIELD_INVALID`（同意/年龄语境应为 **`30009 AGE_RESTRICTED`**），且**该年龄闸门本身未实现**——关系链路完全不读 `ageVerified`（`invite-view.util.ts:89` 明确标注本函数不会返回 `AGE_RESTRICTED`）。
+3. **版本严格匹配**：`agreed = true` 时只接受服务端**当前**版本，防止客户端缓存旧页面导致「同意旧版本」的合规漏洞；**撤回（`agreed = false`）不校验版本** —— 用户有权随时撤回，不应因版本变化被阻断（`user.service.ts:942` 的条件里带 `dto.agreed &&`）。
+4. **审计字段**：写入 `user_consents` 时记录 `ip`、`userAgent`、`channel`（服务端硬编码 `'miniapp'`）与 `policyVersion`，保留至账号注销后 3 年（法律留存）。
+5. 成功响应**不含** `requiresReconsent` / `pendingTypes`；前端需要这两个字段请再调一次 §3.2.5。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                                 | 未交付的内容与前置工作                                                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 必同意项不可撤回（`30017` 语义）           | 需在 service 里按 `REQUIRED_CONSENT_TYPES` 拒绝 `agreed = false` 的撤回请求（并复用 `30017` 之外的语义，或新分配码）；当前任何类型都可撤回 |
+| `AGE_DECLARATION` 写 `ageVerified`         | 需 DTO 加 `ageDeclared` 并把结果写入 `users.ageVerified`；当前只能通过注册/改资料间接写入                                                  |
+| `FEATURE_COUPLE_MATCH` 年龄闸门（`30009`） | 需关系链路读取 `ageVerified` 并抛 `30009 AGE_RESTRICTED`（该码已定义但**无抛出点**）；前端入口同步隐藏（架构 14.3）                        |
 
 #### 3.2.7 `POST /api/v1/users/me/export` — 申请数据导出（异步） 🔑 ♻️
 
@@ -1896,9 +1970,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 ```json
 {
-  "format": ["JSON", "PDF"],
-  "include": ["PROFILE", "TEST", "REPORT", "AI_CONVERSATION", "ORDER", "RELATIONSHIP"],
-  "deliveryMode": "SIGNED_URL"
+  "scope": "ALL"
 }
 ```
 
@@ -1911,19 +1983,21 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "data": {
     "taskId": "0195f3a2-3ad0-7c0e-8d79-f5ca2d3e4b2d",
     "status": "PENDING",
-    "progress": 0,
-    "format": ["JSON", "PDF"],
-    "include": ["PROFILE", "TEST", "REPORT", "AI_CONVERSATION", "ORDER", "RELATIONSHIP"],
-    "estimatedSeconds": 45,
-    "estimatedSizeBytes": 2516582,
+    "stage": "QUEUED",
+    "pollUrl": "/api/v1/users/me/export/0195f3a2-3ad0-7c0e-8d79-f5ca2d3e4b2d",
     "requestedAt": "2026-02-14T13:00:00.000Z",
-    "expiresAt": "2026-02-15T13:00:00.000Z",
-    "pollUrl": "/api/v1/users/me/export/0195f3a2-3ad0-7c0e-8d79-f5ca2d3e4b2d"
+    "isReused": false
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T13:00:00.000Z"
 }
 ```
+
+> ⚠ **2026-10-13 契约漂移审计**（请求/响应示例已按实现重写）：`ExportRequestedView`
+> （`data-export.service.ts:47-55`）**只有 6 个字段**：`taskId`、`status`、`stage`、`pollUrl`、
+> `requestedAt`、`isReused`。契约原文的 `progress`、`format`、`include`、`estimatedSeconds`、
+> `estimatedSizeBytes`、`expiresAt` **均不返回**（`expiresAt`/`progress`/`files` 在任务查询
+> §3.2.8 里给）。请求体只有 `scope`，故示例不再携带 `format`/`include`/`deliveryMode`。
 
 **curl 示例**
 
@@ -1934,9 +2008,7 @@ curl -X POST 'https://api.soulmap.cn/api/v1/users/me/export' \
   -H 'X-Idempotency-Key: idem_7f3a91c2-4b8e-4d1f-9a02-6c5e8b7d1f30' \
   -H 'X-Platform: miniapp' \
   -d '{
-    "format": ["JSON", "PDF"],
-    "include": ["PROFILE", "TEST", "REPORT", "AI_CONVERSATION", "ORDER", "RELATIONSHIP"],
-    "deliveryMode": "SIGNED_URL"
+    "scope": "ALL"
   }'
 ```
 
@@ -2334,7 +2406,7 @@ CREATED ──取卷成功──► IN_PROGRESS ──提交全部答案──�
 | ---- | -------------------------------------------------------------------------------------------------------------------- |
 | 用途 | 返回全部启用中的测试定义（首页卡片、测试中心列表）                                                                   |
 | 鉴权 | 🔑 登录（`completedCount`/`hasInProgress` 是**当前用户**的个性化字段，故实现未标 `@Public()`，匿名访问返回 `20000`） |
-| 限流 | userId 120 次/60s                                                                                                    |
+| 限流 | userId 60 次/60s（`test.controller.ts:166`：`limit: 60, ttl: 60_000`）                                               |
 | 幂等 | 是                                                                                                                   |
 | 异步 | 否                                                                                                                   |
 
@@ -2451,13 +2523,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 #### 3.3.2 `GET /api/v1/tests/{code}` — 测试定义详情 🔑
 
-| 项   | 值                                                                 |
-| ---- | ------------------------------------------------------------------ |
-| 用途 | 进入测试介绍页：展示说明、维度解释、题量、时长、所需权益与历史成绩 |
-| 鉴权 | 🔑 登录                                                            |
-| 限流 | userId 120 次/60s                                                  |
-| 幂等 | 是                                                                 |
-| 异步 | 否                                                                 |
+| 项   | 值                                                                     |
+| ---- | ---------------------------------------------------------------------- |
+| 用途 | 进入测试介绍页：展示说明、维度解释、题量、时长、所需权益与历史成绩     |
+| 鉴权 | 🔑 登录                                                                |
+| 限流 | userId 60 次/60s（`test.controller.ts:180`：`limit: 60, ttl: 60_000`） |
+| 幂等 | 是                                                                     |
+| 异步 | 否                                                                     |
 
 **Path 参数**
 
@@ -2830,7 +2902,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | ---- | ----------------------------------------------------------------------------------------------- |
 | 用途 | 小程序被杀/切后台后恢复：返回同一试卷快照 + 已答进度 + 已答答案，实现断点续答（架构 2. 要点 2） |
 | 鉴权 | 🔑 登录 + **归属校验**（`session.userId === currentUser.id`，否则 `40004`）                     |
-| 限流 | userId 240 次/60s                                                                               |
+| 限流 | userId 120 次/60s（`test.controller.ts:64`：`limit: 120, ttl: 60_000`）                         |
 | 幂等 | 是                                                                                              |
 | 异步 | 否                                                                                              |
 
@@ -3141,7 +3213,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 用途 | 校验题量完整性 → 置 `SUBMITTED` → 同步调用 `PersonalityEngine`（纯函数，< 10ms）算分 → 落 `TestResult` + `PersonalityProfile` + `PersonalitySnapshot` → 置 `SCORED` |
 | 鉴权 | 🔑 登录 + 归属校验                                                                                                                                                  |
-| 限流 | userId + sessionId 5 次/60s                                                                                                                                         |
+| 限流 | userId 20 次/60s（`test.controller.ts:132`：`limit: 20, ttl: 60_000`）                                                                                              |
 | 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）；重复提交返回 `40010` 并带出 `resultId`                                                                            |
 | 异步 | 否（算分同步，架构 3.3「人格算分 < 10ms，无 I/O」）                                                                                                                 |
 
@@ -3288,7 +3360,7 @@ curl -X POST 'https://api.soulmap.cn/api/v1/tests/sessions/0195f3a2-91a7-7d53-b8
 | ---- | ------------------------------------------------------------------------ |
 | 用途 | 分页返回当前用户的测试会话历史（含状态、得分摘要），用于「我的测试记录」 |
 | 鉴权 | 🔑 登录                                                                  |
-| 限流 | userId 120 次/60s                                                        |
+| 限流 | userId 60 次/60s（`test.controller.ts:47`：`limit: 60, ttl: 60_000`）    |
 | 幂等 | 是                                                                       |
 | 异步 | 否                                                                       |
 
@@ -3333,62 +3405,43 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
         "sessionId": "0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12",
         "testCode": "MBTI_LITE",
         "testName": "MBTI 精简版",
-        "testVersion": "1.3.0",
         "status": "SCORED",
+        "mbtiType": "INFJ",
+        "answeredCount": 48,
+        "totalQuestions": 48,
         "createdAt": "2026-02-14T13:30:00.000Z",
         "submittedAt": "2026-02-14T13:38:12.000Z",
-        "expiresAt": "2026-02-14T15:30:00.000Z",
-        "progress": {
-          "totalQuestions": 48,
-          "answeredCount": 48,
-          "completionRate": 100
-        },
-        "resultSummary": {
-          "resultId": "0195f3a2-9f2c-7e64-c9da-5b8c2f3a4d23",
-          "mbtiType": "INFJ",
-          "confidence": 78.4,
-          "engineVersion": "pe-v1.0.0",
-          "headline": "提倡者 · 内向 直觉 情感 判断"
-        },
-        "hasReport": false,
-        "reportId": null
+        "scoredAt": "2026-02-14T13:38:12.000Z"
       },
       {
         "sessionId": "0195f3a2-9c8e-7f42-8a11-5b6c7d8e9f21",
         "testCode": "BIG_FIVE_50",
         "testName": "大五人格（Big Five）",
-        "testVersion": "1.1.0",
         "status": "REPORT_READY",
+        "mbtiType": "INFJ",
+        "answeredCount": 50,
+        "totalQuestions": 50,
         "createdAt": "2026-02-10T08:25:00.000Z",
         "submittedAt": "2026-02-10T08:35:41.000Z",
-        "expiresAt": "2026-02-10T10:25:00.000Z",
-        "progress": {
-          "totalQuestions": 50,
-          "answeredCount": 50,
-          "completionRate": 100
-        },
-        "resultSummary": {
-          "resultId": "0195f3a2-9a1b-7d42-8e11-4a5b6c7d8e90",
-          "mbtiType": "INFJ",
-          "confidence": 78.4,
-          "engineVersion": "pe-v1.0.0",
-          "headline": "高开放 · 高宜人 · 中神经质"
-        },
-        "hasReport": true,
-        "reportId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45"
+        "scoredAt": "2026-02-10T08:35:41.000Z"
+      },
+      {
+        "sessionId": "0195f3a2-9d1f-7a33-9c22-6d7e8f9a0b13",
+        "testCode": "MBTI_LITE",
+        "testName": "MBTI 精简版",
+        "status": "IN_PROGRESS",
+        "mbtiType": null,
+        "answeredCount": 12,
+        "totalQuestions": 48,
+        "createdAt": "2026-02-14T15:02:00.000Z",
+        "submittedAt": null,
+        "scoredAt": null
       }
     ],
     "total": 6,
     "page": 1,
     "pageSize": 20,
-    "hasNext": false,
-    "summary": {
-      "totalSessions": 6,
-      "scoredSessions": 5,
-      "inProgressSessions": 0,
-      "expiredSessions": 1,
-      "latestMbtiType": "INFJ"
-    }
+    "hasNext": false
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T13:40:00.000Z"
@@ -3410,16 +3463,15 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 **业务规则**
 
 1. **强归属过滤**：`WHERE userId = currentUser.id`（架构 14.1），无任何跨用户返回可能。
-2. 列表项**只有 10 个字段**（实现实际返回，见下方「响应结构校正」），**没有** `resultSummary`/`testVersion`/`expiresAt`/`progress`/`hasReport`/`reportId`。
+2. 列表项**只有 10 个字段**（与上方响应示例逐字一致），**没有** `resultSummary`/`testVersion`/`expiresAt`/`progress`/`hasReport`/`reportId`。
 3. **无 `summary` 统计块**：响应只有 `items`/`total`/`page`/`pageSize`/`hasNext`（标准分页包络），契约原文的固定统计块未实现。
 4. **排序固定 `createdAt DESC`**（`orderBy: { createdAt: 'desc' }`），**没有**「进行中会话排最前」的优先级逻辑。
 5. **不返回**答案明细（避免高频大响应）；需要明细走 `GET /tests/sessions/{id}`。
 
-> ⚠ **响应结构校正（2026-10-13）**：上文响应示例已过期。真实结构为
-> `{ items: SessionHistoryItem[], total, page, pageSize, hasNext }`，其中 `SessionHistoryItem` 的
-> 10 个字段是：`sessionId`、`testCode`、`testName`、`status`、`mbtiType`（可为 `null`）、
-> `answeredCount`、`totalQuestions`、`createdAt`、`submittedAt`（可为 `null`）、`scoredAt`（可为 `null`）。
-> 注意 `mbtiType` 在**顶层**（不在嵌套的 `resultSummary` 里），进度是**两个扁平数字**而非 `progress` 对象。
+> 📌 列表项字段以 `test.service.ts:926-943` 为准（`SessionHistoryItem`，共 10 个）：
+> `sessionId`、`testCode`、`testName`、`status`、`mbtiType`（可为 `null`）、`answeredCount`、
+> `totalQuestions`、`createdAt`、`submittedAt`（可为 `null`）、`scoredAt`（可为 `null`）。
+> `mbtiType` 在**顶层**（不在嵌套的 `resultSummary` 里），进度是**两个扁平数字**而非 `progress` 对象。
 > 小程序 `api/test.ts:153-164` 的 `SessionHistoryItem` 与实现逐字一致。
 
 #### 3.3.8 `GET /api/v1/tests/sessions/{id}/result` — 测试结果详情 🔑
@@ -3428,7 +3480,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | ---- | -------------------------------------------------------------------------------------- |
 | 用途 | 结果页数据：MBTI 四维倾向、Big Five 雷达图、关系风格、答题质量指标，并给出报告生成入口 |
 | 鉴权 | 🔑 登录 + 归属校验                                                                     |
-| 限流 | userId 120 次/60s                                                                      |
+| 限流 | userId 60 次/60s（`test.controller.ts:86`：`limit: 60, ttl: 60_000`）                  |
 | 幂等 | 是                                                                                     |
 | 异步 | 否（结果已算分落库；报告生成为独立异步流程）                                           |
 
@@ -3681,10 +3733,10 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 **Query 参数**
 
-| 参数           | 类型    | 必填 | 约束         | 说明                                  |
-| -------------- | ------- | ---- | ------------ | ------------------------------------- |
-| `version`      | number  | 否   | 整数 ≥ 1     | 指定画像版本；不传返回最新版本        |
-| `includeTrend` | boolean | 否   | 默认 `false` | 是否附带与上一版本的变化量（`delta`） |
+| 参数           | 类型    | 必填 | 约束        | 说明                                                                                                                                                                               |
+| -------------- | ------- | ---- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`      | number  | 否   | 整数 ≥ 1    | 指定画像版本；不传返回最新版本                                                                                                                                                     |
+| `includeTrend` | boolean | 否   | 默认 `true` | 是否附带与上一版本的变化量（`delta`）；**只有显式传 `false` 才关闭**（`personality.dto.ts:52` 的 `default: true`、`personality.service.ts:253` 的 `query.includeTrend !== false`） |
 
 **请求示例**
 
@@ -6043,20 +6095,25 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 > **邀请方**（`relationship.service.ts:572-578`）—— 接受方自己无画像只会在 §3.6.2 得到
 > 引导性 `blockedReason = NO_PROFILE`，**不会被拦**。该语义差异见交付报告存疑清单。
 > 另：该端点**未声明 `@IdempotencyKey()`**，`10009` 实际不会返回（契约保留要求，实现待补）。
-> | `60008` | 409 | `pairKey` 已存在（双方已有关系）→ 响应 `data.relationshipId` 指向已有关系 |
-> | `60014` | 403 | `COUPLE` 类型但年龄校验未通过 |
-> | `60016` | 409 | 任一方关系数已达上限（20） |
-> | `60020` | 400 | 我已有 `ACTIVE` 的 `COUPLE` 关系（关系类型冲突） |
 
 **业务规则与边界条件**
 
 1. **接受前置校验四件套**（架构 12.1）：
    ```
-   ① 邀请未过期且未被使用（Redis + DB 双查）
-   ② 非自邀（inviterId !== currentUser.id）
-   ③ B 已有 TestResult / PersonalityProfile（否则 60005，前端引导先测试并保留邀请码）
+   ① 邀请未过期且未被使用（Redis + DB 双查）—— 过期/撤销 → 60004，已被使用 → 60005
+   ② 非自邀（inviterId !== currentUser.id）—— 否则 60006
+   ③ 邀请方 A 已有 TestResult / PersonalityProfile（否则 60009，前端引导对方先测试并保留邀请码）
    ④ pairKey 不存在（否则返回已有关系，不报错）
    ```
+
+> ⚠ 规则 ③ 于 **2026-10-13 按实现重写方向**：校验的是**邀请方**（`relationship.service.ts:572-578`），
+> 不是接受方；码是 **`60009 COMPATIBILITY_PEER_NOT_READY`**，不是 `60005`
+> （`60005` 在本项目是 `RELATIONSHIP_INVITE_USED`：邀请已被使用）。
+> 接受方自己无画像不会在本端点被拦 —— 只会在 §3.6.2 得到引导性 `blockedReason = NO_PROFILE`。
+> 本节错误码表（上方）已按此语义列 `60009`；表格外的 `60008`/`60014`/`60016`/`60020`
+> 四行是旧契约残留，**本项目均不存在**（`60008` 是 `RELATIONSHIP_STATUS_INVALID`/409，
+> `60014`/`60016`/`60020` 未分配），已删除。
+
 2. **pairKey 规范化**：`[min(userIdA, userIdB), max(userIdA, userIdB)].join(':')`（按字符串字典序比较 UUID）；**UNIQUE 约束**兜底：并发接受时数据库唯一冲突 → 捕获后返回已有关系（幂等语义），不返回 500。
 3. **状态流转**：`PENDING_A_CONFIRM`（等待邀请方 A 确认）——**这是架构 12.1 的明确设计**：B 接受后需 A 确认才生效，避免单方面建立关系。
 4. **通知邀请方**：写 `outbox_event` → `notify.subscribe` 队列发微信订阅消息（需 A 已授权，见 3.12.3）；订阅消息失败不影响关系创建。
@@ -8296,7 +8353,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 **请求示例**
 
 ```http
-GET /api/v1/membership/products?includeBenefitsCompare=true HTTP/1.1
+GET /api/v1/membership/products?type=AI_CREDITS HTTP/1.1
 X-Platform: miniapp
 ```
 
@@ -8309,183 +8366,51 @@ X-Platform: miniapp
   "data": {
     "items": [
       {
-        "planCode": "MEMBER_MONTHLY",
-        "name": "月度会员",
-        "subtitle": "先试一个月",
-        "description": "解锁 AI 情感助手每日 50 次对话、报告无限重新生成、PDF 导出与匹配深度报告。",
-        "durationDays": 30,
-        "priceAmount": 3900,
-        "originalAmount": 6900,
-        "priceDisplay": "¥39.00",
-        "originalPriceDisplay": "¥69.00",
-        "discountLabel": "首月 5.6 折",
+        "productId": "0195f3a2-c31f-7b64-9e02-7a5c8b1d3f40",
+        "code": "AI_CREDITS_50",
+        "name": "AI 对话 50 次",
+        "description": "50 次 AI 情感助手对话额度，非会员也可使用，与会员每日额度独立叠加。",
+        "type": "AI_CREDITS",
+        "priceAmount": 2900,
+        "originalAmount": 4900,
         "currency": "CNY",
+        "durationDays": 180,
+        "credits": 50,
+        "tags": ["可叠加", "有效期 180 天"],
         "isRecommended": false,
-        "isActive": true,
-        "tags": ["随时可取消"],
-        "productCode": "MEMBERSHIP_MONTHLY",
-        "benefits": [
-          {
-            "key": "AI_DAILY_LIMIT",
-            "label": "AI 助手每日对话",
-            "value": "50 次",
-            "highlight": true
-          },
-          {
-            "key": "UNLIMITED_REPORTS",
-            "label": "人格报告",
-            "value": "不限份数",
-            "highlight": true
-          },
-          {
-            "key": "REGENERATE",
-            "label": "报告重新生成",
-            "value": "每日 5 次",
-            "highlight": false
-          },
-          { "key": "PDF_EXPORT", "label": "PDF 导出", "value": "不限次", "highlight": true },
-          {
-            "key": "COMPATIBILITY_REPORT",
-            "label": "情侣匹配深度报告",
-            "value": "包含",
-            "highlight": true
-          },
-          { "key": "HISTORY_ARCHIVE", "label": "历史关系档案", "value": "包含", "highlight": false }
-        ],
-        "sortOrder": 10
-      },
-      {
-        "planCode": "MEMBER_QUARTERLY",
-        "name": "季度会员",
-        "subtitle": "最受欢迎",
-        "description": "90 天完整权益，折合每月更低，覆盖完整的关系探索周期。",
-        "durationDays": 90,
-        "priceAmount": 9900,
-        "originalAmount": 20700,
-        "priceDisplay": "¥99.00",
-        "originalPriceDisplay": "¥207.00",
-        "discountLabel": "省 ¥108",
-        "currency": "CNY",
-        "isRecommended": true,
-        "isActive": true,
-        "tags": ["最受欢迎", "折合 ¥33/月"],
-        "productCode": "MEMBERSHIP_QUARTERLY",
-        "benefits": [
-          {
-            "key": "AI_DAILY_LIMIT",
-            "label": "AI 助手每日对话",
-            "value": "50 次",
-            "highlight": true
-          },
-          {
-            "key": "UNLIMITED_REPORTS",
-            "label": "人格报告",
-            "value": "不限份数",
-            "highlight": true
-          },
-          {
-            "key": "REGENERATE",
-            "label": "报告重新生成",
-            "value": "每日 5 次",
-            "highlight": false
-          },
-          { "key": "PDF_EXPORT", "label": "PDF 导出", "value": "不限次", "highlight": true },
-          {
-            "key": "COMPATIBILITY_REPORT",
-            "label": "情侣匹配深度报告",
-            "value": "包含",
-            "highlight": true
-          },
-          { "key": "HISTORY_ARCHIVE", "label": "历史关系档案", "value": "包含", "highlight": false }
-        ],
-        "sortOrder": 20
-      },
-      {
-        "planCode": "MEMBER_YEARLY",
-        "name": "年度会员",
-        "subtitle": "最划算",
-        "description": "365 天完整权益，适合希望长期记录人格成长的用户。",
-        "durationDays": 365,
-        "priceAmount": 29900,
-        "originalAmount": 82800,
-        "priceDisplay": "¥299.00",
-        "originalPriceDisplay": "¥828.00",
-        "discountLabel": "省 ¥529",
-        "currency": "CNY",
-        "isRecommended": false,
-        "isActive": true,
-        "tags": ["最划算", "折合 ¥25/月"],
-        "productCode": "MEMBERSHIP_YEARLY",
-        "benefits": [
-          {
-            "key": "AI_DAILY_LIMIT",
-            "label": "AI 助手每日对话",
-            "value": "50 次",
-            "highlight": true
-          },
-          {
-            "key": "UNLIMITED_REPORTS",
-            "label": "人格报告",
-            "value": "不限份数",
-            "highlight": true
-          },
-          {
-            "key": "REGENERATE",
-            "label": "报告重新生成",
-            "value": "每日 5 次",
-            "highlight": false
-          },
-          { "key": "PDF_EXPORT", "label": "PDF 导出", "value": "不限次", "highlight": true },
-          {
-            "key": "COMPATIBILITY_REPORT",
-            "label": "情侣匹配深度报告",
-            "value": "包含",
-            "highlight": true
-          },
-          { "key": "HISTORY_ARCHIVE", "label": "历史关系档案", "value": "包含", "highlight": false }
-        ],
-        "sortOrder": 30
+        "benefits": []
       }
     ],
-    "total": 3,
-    "benefitsCompare": [
-      { "feature": "基础测试（MBTI 精简版 48 题）", "free": "✓", "member": "✓" },
-      { "feature": "MBTI 四字母结果与 Big Five 雷达图", "free": "✓", "member": "✓" },
-      {
-        "feature": "人格深度报告",
-        "free": "每月 1 份（含 20% 预览）",
-        "member": "不限份数 · 全文"
-      },
-      { "feature": "报告重新生成", "free": "✗", "member": "每日 5 次" },
-      { "feature": "AI 情感助手", "free": "共 10 次", "member": "每日 50 次" },
-      { "feature": "情侣匹配深度报告", "free": "看总分（不含 AI 解读）", "member": "完整解读" },
-      { "feature": "PDF 导出", "free": "✗", "member": "不限次" },
-      { "feature": "历史关系档案", "free": "✗", "member": "✓" }
-    ],
-    "currentPlan": {
-      "planCode": "MEMBER_MONTHLY",
-      "isActive": true,
-      "expiresAt": "2026-03-14T10:00:00.000Z",
-      "renewable": true
-    },
-    "purchaseNotice": {
-      "autoRenew": false,
-      "notice": "微信小程序虚拟支付需遵循平台规则；当前为一次性购买，不会自动续费。",
-      "refundPolicy": "虚拟内容类商品，在权益未使用的情况下可在 7 天内申请退款，详见《用户协议》。"
-    },
-    "serverTime": "2026-02-14T17:00:00.000Z"
+    "membership": {
+      "isMember": false,
+      "expireAt": null,
+      "remainingDays": null
+    }
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T17:00:00.000Z"
 }
 ```
 
+> ⚠ **2026-10-13 契约漂移审计**（本节响应示例已按 `membership.controller.ts:260-278` 重写）：
+> · items 每项**只有 13 个字段**：`productId`、`code`、`name`、`description`、`type`、
+> `priceAmount`、`originalAmount`、`currency`、`durationDays`、`credits`、`tags`、
+> `isRecommended`、`benefits`（形状 `{ key, label, value, highlight }[]`，**未挂套餐的商品返回 `[]` 而非省略**）；
+> · 契约示例里的 `planCode`、`productCode`、`isActive`、`sortOrder`、`priceDisplay`、
+> `originalPriceDisplay`、`discountLabel`、`subtitle`、`coverImageUrl`、`grantedEntitlement`、
+> `typeName`、`isStackable`、`maxPurchaseCount` **一律不返回**；展示价需前端自行把「分」除以 100；
+> · 外层**只有** `items` 与 `membership`，**没有** `total`、`benefitsCompare`、`serverTime`、`userContext`；
+> · 会员状态字段名是 **`membership`**（不是 `currentPlan`），形状 `{ isMember, expireAt, remainingDays }`，
+> 游客为 `{ isMember: false, expireAt: null, remainingDays: null }`（字段**必有**，不是 `null`）。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                                                   |
-| ------- | ---- | ---------------------------------------------------------------------------------------------------------- |
-| `10001` | 400  | `platform` 非枚举；`includeBenefitsCompare` 非布尔                                                         |
-| `90009` | 403  | `FEATURE_PAYMENT` 关闭 → **仍返回 200**，但 `purchaseNotice.notice` 说明「支付暂不可用」且前端隐藏购买按钮 |
+| 错误码  | HTTP | 触发条件                                                                                                                                                                                                        |
+| ------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `10001` | 400  | `type` 不在 `MEMBERSHIP` \| `AI_CREDITS` \| `REPORT_PERSONAL` \| `REPORT_COMPATIBILITY` 内；**或传入已移除的 `includeBenefitsCompare`/`platform`/`code`**（`property xxx should not exist`）                    |
+| `70018` | 403  | `FEATURE_PAYMENT` 关闭（`PAYMENT_FEATURE_DISABLED`）。⚠ 契约原文写 `90009` —— 本项目中 `90009` 是 `SERVICE_SHUTTING_DOWN`（503）；且本接口**不返回该码**：功能关闭只影响下单链路，本端点始终返回 200 与商品列表 |
+
+> ⚠ **2026-10-13 契约漂移审计**：`FEATURE_PAYMENT` 关闭对应的码是 **`70018 PAYMENT_FEATURE_DISABLED`**（403，`error-code.ts:166`）。契约原文的 `90009` 在本项目被 `SERVICE_SHUTTING_DOWN` 占用（`error-code.ts:198`），**语义完全不同**。
 
 **业务规则**
 
@@ -8498,7 +8423,17 @@ X-Platform: miniapp
    ⚠ 契约原文要求游客返回 `currentPlan: null`，本实现对应字段名为 `membership`（见 ADR-033 的合并说明）。
 3. **`isRecommended`** 由后台配置，前端据此打标。
 4. **不返回**成本/利润相关字段。
-5. **合规**：`purchaseNotice` 明确「不会自动续费」与退款政策（微信平台运营规范，架构 1.2）。
+5. 🚫 **`purchaseNotice` 未交付**：契约要求的「不会自动续费 / 退款政策」文案块**不在响应里**
+   （实现只返回 `items` + `membership`），故「支付功能关闭时由 `purchaseNotice.notice` 提示」也无从实现。
+   合规文案目前只能来自 `GET /system/config` 的 `disclaimers.*`（§3.12.1）或前端写死 —— 见下方「未交付能力」。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                  | 未交付的内容与前置工作                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `purchaseNotice` 合规文案块 | 需在响应里补 `{ autoRenew, notice, refundPolicy }`（文案走 `system_config`），并让下单链路复用；当前前端拿不到统一退款口径 |
+| `benefitsCompare` 权益对比  | 需把「免费 vs 会员」逐项差异做成可配置数据源（现只有挂套餐商品的 `benefits` 矩阵，无跨档位对比）                           |
+| `currentPlan` 当前套餐      | 契约字段名与实现不一致（实现是 `membership`）；如需 `expiresAt`/`renewable` 语义请改走 §3.8.2 `GET /membership`            |
 
 #### 3.8.2 `GET /api/v1/membership` — 我的会员状态与权益 🔑
 
@@ -8789,25 +8724,29 @@ CLOSED（关单）            CANCELLED           REFUNDED / PARTIAL_REFUNDED
 > 单次商品，用 `type` 区分）与当前会员状态，避免会员页出现「价格已渲染但会员状态
 > 还在转圈」的中间态。两节内容若有冲突，**以 §3.8.1 为准**。 🔓
 
-| 项   | 值                                                                  |
-| ---- | ------------------------------------------------------------------- |
-| 用途 | 返回可售商品（单次报告、匹配报告、AI 次数包），供付费墙与商品页展示 |
-| 鉴权 | 🔑 公开（价格透明，便于转化）；`userContext` 需登录才返回           |
-| 限流 | IP 120 次/60s                                                       |
-| 幂等 | 是                                                                  |
-| 异步 | 否                                                                  |
+| 项   | 值                                                                                                        |
+| ---- | --------------------------------------------------------------------------------------------------------- |
+| 用途 | 返回可售商品（单次报告、匹配报告、AI 次数包），供付费墙与商品页展示                                       |
+| 鉴权 | 🔓 公开（价格透明，便于转化）；带合法令牌时返回真实 `membership`（游客返回 `isMember: false` 的匿名视图） |
+| 限流 | IP 120 次/60s                                                                                             |
+| 幂等 | 是                                                                                                        |
+| 异步 | 否                                                                                                        |
 
 **Query 参数**
 
-| 参数   | 类型   | 必填 | 约束                                                                            | 说明                                            |
-| ------ | ------ | ---- | ------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `type` | string | 否   | 逗号分隔：`REPORT_PERSONAL`\|`REPORT_COMPATIBILITY`\|`MEMBERSHIP`\|`AI_CREDITS` | 商品类型筛选                                    |
-| `code` | string | 否   | 长度 ≤ 64                                                                       | 按商品编码精确查询（如 `REPORT_PERSONAL_DEEP`） |
+| 参数   | 类型   | 必填 | 约束                                                                                                                | 说明                               |
+| ------ | ------ | ---- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `type` | string | 否   | **单值**枚举：`MEMBERSHIP` \| `AI_CREDITS` \| `REPORT_PERSONAL` \| `REPORT_COMPATIBILITY`（**不接受逗号分隔多值**） | 商品类型筛选；不传返回全部可售商品 |
+
+> ⚠ **2026-10-13 契约漂移审计**：`type` 在实现里是 `@IsIn` 的**单值**枚举
+> （`product.dto.ts:29-37`），传 `?type=A,B` 会得到 `400 / 10001`；
+> `code` 参数**在 DTO 里不存在**（传即 `400 / 10001 property code should not exist`），
+> 本节字段表已删除该行与逗号多值写法 —— 以 §3.8.1 为准（同一端点）。
 
 **请求示例**
 
 ```http
-GET /api/v1/membership/products?type=REPORT_PERSONAL,AI_CREDITS HTTP/1.1
+GET /api/v1/membership/products?type=AI_CREDITS HTTP/1.1
 X-Platform: miniapp
 ```
 
@@ -8820,100 +8759,65 @@ X-Platform: miniapp
   "data": {
     "items": [
       {
-        "productCode": "REPORT_PERSONAL_DEEP",
-        "name": "人格深度报告",
-        "subtitle": "3000+ 字 · 6 大板块 · AI 生成",
-        "description": "基于你的人格画像生成的深度解读报告，包含核心画像、维度解析、关系模式、优势盲点、成长建议与 30 天行动清单。",
-        "type": "REPORT_PERSONAL",
-        "typeName": "个人报告",
-        "priceAmount": 9900,
-        "originalAmount": 19900,
-        "priceDisplay": "¥99.00",
-        "originalPriceDisplay": "¥199.00",
-        "discountLabel": "限时 5 折",
-        "currency": "CNY",
-        "isActive": true,
-        "isRecommended": true,
-        "isStackable": false,
-        "maxPurchaseCount": null,
-        "grantedEntitlement": {
-          "type": "REPORT_UNLOCK",
-          "description": "解锁 1 份报告全文（永久有效）",
-          "durationDays": null,
-          "count": null
-        },
-        "tags": ["限时优惠", "一次购买永久有效"],
-        "coverImageUrl": "https://cdn.soulmap.cn/static/product/report-personal.webp",
-        "sortOrder": 10
-      },
-      {
-        "productCode": "AI_CREDITS_50",
+        "productId": "0195f3a2-c31f-7b64-9e02-7a5c8b1d3f40",
+        "code": "AI_CREDITS_50",
         "name": "AI 对话 50 次",
-        "subtitle": "次数包 · 有效期 180 天",
         "description": "50 次 AI 情感助手对话额度，非会员也可使用，与会员每日额度独立叠加。",
         "type": "AI_CREDITS",
-        "typeName": "AI 次数包",
         "priceAmount": 2900,
         "originalAmount": 4900,
-        "priceDisplay": "¥29.00",
-        "originalPriceDisplay": "¥49.00",
-        "discountLabel": null,
         "currency": "CNY",
-        "isActive": true,
-        "isRecommended": false,
-        "isStackable": true,
-        "maxPurchaseCount": 10,
-        "grantedEntitlement": {
-          "type": "AI_CREDITS",
-          "description": "AI 对话次数",
-          "durationDays": 180,
-          "count": 50
-        },
+        "durationDays": 180,
+        "credits": 50,
         "tags": ["可叠加", "有效期 180 天"],
-        "coverImageUrl": "https://cdn.soulmap.cn/static/product/ai-credits.webp",
-        "sortOrder": 30
+        "isRecommended": false,
+        "benefits": []
       }
     ],
-    "total": 2,
-    "userContext": {
-      "userId": "0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70",
-      "canPurchase": true,
-      "blockedReason": null,
-      "alreadyOwnedProductCodes": ["REPORT_PERSONAL_DEEP"],
-      "pendingOrder": {
-        "orderId": "0195f3a2-f68c-7eca-8f35-b1ec8f9a0d89",
-        "orderNo": "SM20260214A7K3M9Q1",
-        "status": "FULFILLED",
-        "productCode": "MEMBERSHIP_MONTHLY"
-      }
-    },
-    "purchaseNotice": {
-      "payMethod": "WECHAT_JSAPI",
-      "notice": "支付由微信支付提供，SoulMap 不存储你的支付账户信息。",
-      "refundPolicy": "虚拟内容类商品，未使用时支持 7 天内退款。"
-    },
-    "serverTime": "2026-02-14T17:15:00.000Z"
+    "membership": {
+      "isMember": false,
+      "expireAt": null,
+      "remainingDays": null
+    }
   },
   "requestId": "req_01HQ8Z3K7M2XQ9V4T6B1NDCFA5",
   "timestamp": "2026-02-14T17:15:00.000Z"
 }
 ```
 
+> ⚠ **2026-10-13 契约漂移审计**：本节响应示例已按实现（`membership.controller.ts:260-278`）
+> 与 §3.8.1 对齐重写。契约原文的 `productCode`、`subtitle`、`typeName`、`isActive`、
+> `isStackable`、`maxPurchaseCount`、`grantedEntitlement`、`coverImageUrl`、`sortOrder`、
+> `priceDisplay`、`originalPriceDisplay`、`discountLabel` 以及外层的 `total`、`userContext`、
+> `purchaseNotice`、`serverTime` **一律不返回**；`items` 每项 13 个字段、外层只有
+> `items` + `membership`。
+
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                                                                 |
-| ------- | ---- | -------------------------------------------------------------------------------------------------------- |
-| `10001` | 400  | `type` 含非法枚举值                                                                                      |
-| `70001` | 404  | 指定 `code` 不存在或已下架                                                                               |
-| `90009` | 403  | `FEATURE_PAYMENT` 关闭 → 返回 200，`userContext.canPurchase = false`、`blockedReason = PAYMENT_DISABLED` |
+| 错误码  | HTTP | 触发条件                                                                                                              |
+| ------- | ---- | --------------------------------------------------------------------------------------------------------------------- |
+| `10001` | 400  | `type` 非白名单枚举；**或传入 `code`（本端点无该参数）**                                                              |
+| `70018` | 403  | `FEATURE_PAYMENT` 关闭（`PAYMENT_FEATURE_DISABLED`）；⚠ 契约原文写 `90009`，本项目 `90009` 是 `SERVICE_SHUTTING_DOWN` |
+
+> ⚠ **2026-10-13 契约漂移审计**：契约原文的 `70001`（「指定 `code` 不存在或已下架」）随 `code` 参数一并失效 —— 本端点没有按编码查询的能力（无调用方，未交付）；`90009` 见下表。
 
 **业务规则**
 
 1. **价格来自 `products` 表**（单位分，架构 P8）；🚫 前端不得展示本地写死的价格。
-2. `grantedEntitlement` 明确「买了会得到什么权益」，与架构 13.1 的权益模型对齐（透明化，减少纠纷）。
-3. `alreadyOwnedProductCodes` 用于提示「你已购买过」（**不阻断再次购买**，因为报告解锁按 `reportId` 区分，次数包可叠加）。
-4. **公开可访问**：游客可看价格；`userContext` 为 `null`。
-5. `isStackable` 标识多次购买是否叠加（次数包叠加，报告解锁不叠加）。
+2. 🚫 **`grantedEntitlement` 未交付**：实现不返回「买了会得到什么权益」的结构化字段；次数包/报告解锁的权益口径只能由前端按 `type` + `credits` + `durationDays` 自行表达（见下方「未交付能力」）。
+3. 🚫 **`alreadyOwnedProductCodes` 未交付**：实现不返回「你已购买过」的提示信息，前端需自行调 `GET /membership/entitlements` 比对。
+4. **公开可访问**：游客可看价格，且**仍返回 `membership` 字段**（`{ isMember: false, expireAt: null, remainingDays: null }`），不是 `null` —— 游客只需一条渲染分支。契约原文的 `userContext` 不存在。
+5. 🚫 **`isStackable` 未交付**：实现不返回「多次购买是否叠加」的标识；报告解锁按 `reportId` 区分、次数包可叠加的规则由前端写死（这也是 §3.8.1 未交付的 `benefitsCompare` 缺口之一）。
+
+**未交付能力（2026-10-13 契约漂移审计登记）**
+
+| 契约原声明                                                     | 未交付的内容与前置工作                                                                                   |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `code` 参数 + `70001`                                          | 按商品编码精确查询：需 DTO 加 `code`（`@IsString` + 长度 ≤ 64）并在 SQL 里按 `code` 过滤（当前无调用方） |
+| `grantedEntitlement`                                           | 需在商品表/关联表里存「购买后发放的权益」描述（type/description/durationDays/count）并随列表下发         |
+| `userContext`（含 `alreadyOwnedProductCodes`、`pendingOrder`） | 需登录态下聚合「可购买性 + 已购编排 + 进行中订单」，属独立的产品能力（现由前端多次请求拼接）             |
+| `isStackable` / `maxPurchaseCount`                             | 需在 `products` 加列并在下单校验里读取；当前叠加行为只体现在业务逻辑里，前端拿不到声明                   |
+| `purchaseNotice` / `serverTime`                                | 同 §3.8.1 的 `purchaseNotice` 缺口；`serverTime` 可考虑统一在响应头或全局字段下发                        |
 
 #### 3.9.2 `POST /api/v1/payment/orders` — 创建订单并返回 JSAPI 支付参数 🔑 ♻️
 
@@ -8925,10 +8829,19 @@ X-Platform: miniapp
 | 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10009`）                                                                                  |
 | 异步 | 否（微信下单调用同步，超时 5s + 重试 2 次）                                                                                       |
 
-> ⚠ **幂等键尚未落地（2026-10-13 审计）**：契约与小程序（`api/order.ts:87,97` 每次下单都带该头）
-> 都要求 `X-Idempotency-Key`，但实现的 `createOrder` **既没有 `@IdempotencyKey()` 也没有任何按幂等键去重**，
-> 请求头被静默忽略（每次调用都新建订单，`orders.idempotencyKey` 写的是服务端随机值）。
-> 本条**保留契约要求**，实现缺陷另见交付报告的「需改实现」清单。
+> 📌 **幂等的实现方式（2026-10-13 落地并活体验证）**：`createOrder` 已声明 `@IdempotencyKey()`，
+> 缺失返回 `10009`、格式非法返回 `10001`。命中的重放**短路在任何业务校验之前**，
+> 原样返回首次的 `orderId`/`orderNo`/`amount`/`expiresAt`/`payment`（含同一份支付参数），
+> **不会产生第二张订单**；重放窗口 = 订单有效期 30 分钟，订单过期后同键重放会建新单
+> （否则用户会永久卡在一张付不了款的过期订单上）。
+> 键空间为 `idem:payment:order:{userId}:{sha256(userId:clientKey)[0:32]}` —— 客户端键只以摘要形式落库，
+> 且带 `userId` 隔离，避免两个用户偶然用同一个键互相顶掉。Redis 故障时**降级为新建订单**，
+> 资金链路不会因缓存不可用而下不了单。
+>
+> ⚠ **服务端幂等只对「同一个键」生效，挡不住"每次点击换新键"**：小程序 `api/order.ts:97`
+> 在**每次调用时**现取 `createIdempotencyKey()`（该函数自己的注释却写着"必须在触发操作时生成一次并复用"），
+> 因此**双击下单仍会产生两笔订单** —— 这一半只能在客户端修（按键去重 / 请求中禁用按钮 / 复用同一个键）。
+> 服务端这边保证的是"同一操作的重试不会重复建单"。
 
 **请求体**
 
@@ -10752,7 +10665,10 @@ Accept-Language: zh-CN
       "FEATURE_GROWTH_CURVE": true,
       "FEATURE_VOICE_INPUT": false,
       "maintenanceMode": false,
-      "maintenanceNotice": null
+      "maintenanceNotice": null,
+      "payment": true,
+      "coupleMatch": true,
+      "aiChat": true
     },
     "featuresExplain": {
       "FEATURE_COUPLE_MATCH": {
@@ -10929,6 +10845,16 @@ Accept-Language: zh-CN
 6. **`requiresReconsent`** 仅在**未登录时不返回**（游客数组为空）；登录用户走 `GET /users/me/consents` 获取个性化状态。
 7. **`maintenanceMode`** 通过配置字段表达（HTTP 200），让前端能渲染维护公告；**实现中没有"写接口返回维护错误"的拦截逻辑**（`90011` 未分配，见上表）。
 8. **强更：信号下发已实现，全局拦截未实现**（2026-10-13 按实现校正）。服务端按 `clientVersion < minClientVersion` 置 `app.forceUpdate = true` 并下发 `updateUrl`/`updateNote`；但**没有**任何"其他业务接口返回 `90013`（HTTP 426）"的全局拦截（`90013` 在本项目**未分配**）。客户端必须自行读取 `app.forceUpdate` 弹窗。
+9. **`features` 同时下发两套键名，且小程序消费的是小写别名**（2026-10-13 按实现与消费方补记）：
+   `features` 里既有契约形态的 `FEATURE_PAYMENT` / `FEATURE_COUPLE_MATCH` / `FEATURE_AI_CHAT`（以及
+   `FEATURE_PDF_EXPORT` / `FEATURE_SHARE_CARD` / `FEATURE_GROWTH_CURVE` / `FEATURE_VOICE_INPUT`、
+   `maintenanceMode`、`maintenanceNotice`），**又追加**三个小写别名 **`payment` / `coupleMatch` / `aiChat`**
+   （`system-config.service.ts:316-322`）。**小程序实际消费的是别名** ——
+   `frontend/miniapp/src/pages/index/index.vue:70,78` 读的是 `appStore.features.coupleMatch` 与
+   `appStore.features.aiChat`。两套键**语义相同、取值同源**，属已知的契约矛盾，
+   按「别名只增不改」处理（`system-config.service.ts:250-254`）：**客户端不要依赖别名会被删除**，
+   服务端也不因前端切到 `FEATURE_*` 而移除别名。另：三个别名**永远读未被 `keys` 白名单裁剪的真值**
+   （`system-config.service.ts:276-284`），避免「按需拉取」被误解为「按需关闭功能」。
 
 #### 3.12.2 `GET /api/v1/system/disclaimers` — 免责声明与合规文案 🔓
 
@@ -11841,28 +11767,28 @@ X-Platform: admin
         "version": "2.1.0",
         "agreed": true,
         "agreedAt": "2026-02-01T03:12:50.000Z",
-        "channel": "MINIAPP"
+        "channel": "miniapp"
       },
       {
-        "type": "USER_AGREEMENT",
+        "type": "TERMS_OF_SERVICE",
         "version": "1.8.0",
         "agreed": true,
         "agreedAt": "2026-02-01T03:12:50.000Z",
-        "channel": "MINIAPP"
+        "channel": "miniapp"
       },
       {
         "type": "AGE_DECLARATION",
         "version": "1.0.0",
         "agreed": true,
         "agreedAt": "2026-02-01T03:12:52.000Z",
-        "channel": "MINIAPP"
+        "channel": "miniapp"
       },
       {
         "type": "AI_CONTENT_NOTICE",
         "version": "1.2.0",
         "agreed": true,
         "agreedAt": "2026-02-10T08:15:00.000Z",
-        "channel": "MINIAPP"
+        "channel": "miniapp"
       },
       {
         "type": "MARKETING",
