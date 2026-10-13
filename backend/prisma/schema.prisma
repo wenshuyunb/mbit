@@ -172,6 +172,12 @@ enum PromptType {
   AI_COMPANION
   EMOTION_ANALYSIS
   SYSTEM_SAFETY
+  // 与 `AiReportType` 对齐的两个报告类型：大五报告与成长回顾报告各有自己的模板
+  // （`report.bigfive` / `report.growth`），此前因枚举里没有对应取值，模板只能
+  // 借 `MBTI_REPORT` 登记，导致后台按类型筛选时它们混在「MBTI 报告」里。
+  // 追加在末尾：`ALTER TYPE ... ADD VALUE` 只能往末尾加，保持文档顺序与库内顺序一致。
+  BIG_FIVE_REPORT
+  GROWTH_SUMMARY
 
   @@map("prompt_type")
 }

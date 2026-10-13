@@ -563,8 +563,10 @@ describe('Prompt 模板种子数据契约', () => {
     it('【关键】键名与 report.service.ts 的 TEMPLATE_KEY_BY_TYPE 一致（否则该报告类型开箱即 50011）', () => {
       // `TEMPLATE_KEY_BY_TYPE` 未导出，这里按它当前的字面值断言：改动任一侧都会让这条断红
       expect(bigFive()?.key).toBe('report.bigfive');
-      // `PromptType` 枚举里没有 BIG_FIVE_REPORT（理由见模板内的 ⚠ 注释），因此 type 只能借 MBTI_REPORT
-      expect(bigFive()?.type).toBe('MBTI_REPORT');
+      // 用真实类型：`prompt_type` 已补 BIG_FIVE_REPORT（迁移 20261013000000），
+      // 后台按类型筛选时不会再与 MBTI 模板混在一起
+      expect(bigFive()?.type).toBe('BIG_FIVE_REPORT');
+      expect(Object.values(PromptType)).toContain('BIG_FIVE_REPORT');
     });
 
     it('【关键】能用真实上下文渲染成功（占位符全有值、无残留）', () => {
@@ -655,10 +657,10 @@ describe('Prompt 模板种子数据契约', () => {
     it('【关键】键名与 report.service.ts 的 TEMPLATE_KEY_BY_TYPE 一致（否则该报告类型开箱即 50011）', () => {
       // `TEMPLATE_KEY_BY_TYPE` 未导出，这里按它当前的字面值断言：改动任一侧都会让这条断红
       expect(growth()?.key).toBe('report.growth');
-      // `PromptType` 枚举里没有 GROWTH_SUMMARY（它是 `AiReportType` 的取值，理由见模板内的 ⚠ 注释），
-      // 写别的值会让 tsc 失败 + 整个种子脚本落库被拒，因此只能借 MBTI_REPORT
-      expect(growth()?.type).toBe('MBTI_REPORT');
-      expect(Object.values(PromptType)).not.toContain('GROWTH_SUMMARY');
+      // 用真实类型：`prompt_type` 已补 GROWTH_SUMMARY（迁移 20261013000000），
+      // 后台按类型筛选时不会再与 MBTI / 大五模板混在一起
+      expect(growth()?.type).toBe('GROWTH_SUMMARY');
+      expect(Object.values(PromptType)).toContain('GROWTH_SUMMARY');
     });
 
     it('【关键】能用真实的多画像上下文渲染成功（占位符全有值、无残留）', () => {

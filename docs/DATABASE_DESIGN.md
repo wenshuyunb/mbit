@@ -4086,6 +4086,12 @@ enum PromptType {
   AI_COMPANION
   EMOTION_ANALYSIS
   SYSTEM_SAFETY
+  // 与 `AiReportType` 对齐的两个报告类型：大五报告与成长回顾报告各有自己的模板
+  // （`report.bigfive` / `report.growth`），此前因枚举里没有对应取值，模板只能
+  // 借 `MBTI_REPORT` 登记，导致后台按类型筛选时它们混在「MBTI 报告」里。
+  // 追加在末尾：`ALTER TYPE ... ADD VALUE` 只能往末尾加，保持文档顺序与库内顺序一致。
+  BIG_FIVE_REPORT
+  GROWTH_SUMMARY
 
   @@map("prompt_type")
 }
@@ -6289,7 +6295,7 @@ model UserPhoneHistory {
 | 10  | `Dimension`                 | `dimension`                   | `EI`=外向/内向；`SN`=实感/直觉；`TF`=思考/情感；`JP`=判断/知觉；`OPENNESS`=开放性；`CONSCIENTIOUSNESS`=尽责性；`EXTRAVERSION`=外向性；`AGREEABLENESS`=宜人性；`NEUROTICISM`=神经质；`ATTACHMENT`=依恋类型；`LOVE_LANGUAGE`=爱的语言；`CONFLICT_STYLE`=冲突风格                                                   |
 | 11  | `TestSessionStatus`         | `test_session_status`         | `CREATED`=已创建未取卷；`IN_PROGRESS`=作答中；`SUBMITTED`=已提交待算分；`SCORED`=已算分；`REPORT_READY`=报告已生成；`EXPIRED`=超时过期；`ABANDONED`=用户放弃                                                                                                                                                     |
 | 12  | `AttachmentStyle`           | `attachment_style`            | `SECURE`=安全型；`ANXIOUS`=焦虑型；`AVOIDANT`=回避型；`FEARFUL`=恐惧型（紊乱型）                                                                                                                                                                                                                                 |
-| 13  | `PromptType`                | `prompt_type`                 | `MBTI_REPORT`=MBTI 报告；`RELATIONSHIP_REPORT`=关系匹配报告；`AI_COMPANION`=情感助手对话；`EMOTION_ANALYSIS`=情绪分析；`SYSTEM_SAFETY`=安全兜底（危险内容固定回复）                                                                                                                                              |
+| 13  | `PromptType`                | `prompt_type`                 | `MBTI_REPORT`=MBTI 报告；`RELATIONSHIP_REPORT`=关系匹配报告；`AI_COMPANION`=情感助手对话；`EMOTION_ANALYSIS`=情绪分析；`SYSTEM_SAFETY`=安全兜底（危险内容固定回复）；`BIG_FIVE_REPORT`=大五特质报告；`GROWTH_SUMMARY`=成长回顾报告                                                                               |
 | 14  | `PromptVersionStatus`       | `prompt_version_status`       | `DRAFT`=草稿；`ACTIVE`=生效中（可参与 AB 分流）；`ARCHIVED`=已归档                                                                                                                                                                                                                                               |
 | 15  | `AiTaskType`                | `ai_task_type`                | `MBTI_REPORT`=MBTI 报告生成；`RELATIONSHIP_REPORT`=关系报告生成；`AI_COMPANION`=对话回复；`EMOTION_ANALYSIS`=情绪分析；`MEMORY_SUMMARY`=历史摘要；`STRUCTURED_EXTRACT`=结构化抽取；`SAFETY_CHECK`=内容安全辅助判定                                                                                               |
 | 16  | `AiProvider`                | `ai_provider`                 | `DEEPSEEK`=深度求索；`OPENAI`=OpenAI；`QWEN`=通义千问                                                                                                                                                                                                                                                            |

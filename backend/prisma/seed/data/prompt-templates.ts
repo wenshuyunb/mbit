@@ -248,11 +248,11 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      * 好在它**不影响报告生成**：模板只按 `key` 查找（`prompt.service.ts` 的 `loadTemplate`
      * 条件为 `{ key, isActive: true, deletedAt: null }`），`type` 只用于后台列表的筛选与展示
      * （`admin/prompt/prompt.service.ts` 的 `PROMPT_TYPE_NAMES`）。
-     * 因此这里暂借语义最近的 `MBTI_REPORT`（后台"个人报告"那一档），
-     * 代价是后台按类型筛选时它会和 MBTI 模板混在一起 ——
-     * 要彻底修掉需要给 `prompt_type` 增加枚举值并配迁移（超出本次改动范围，见交付说明）。
+     * `prompt_type` 枚举已补上 `BIG_FIVE_REPORT`（见迁移
+     * `20261013000000_prompt_type_report_variants`），因此这里用**真实类型**，
+     * 后台按类型筛选时不会再与 MBTI 模板混在一起。
      */
-    type: 'MBTI_REPORT',
+    type: 'BIG_FIVE_REPORT',
     description:
       '基于大五（Big Five / OCEAN）五维特质分数生成个人深度解读报告（4 段：五维特质概览 / 特质优势 / 需要留意的张力 / 成长建议）',
     version: 1,
@@ -423,11 +423,11 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      * 好在它**不影响报告生成**：模板只按 `key` 查找（`prompt.service.ts` 的 `loadTemplate`
      * 条件为 `{ key, isActive: true, deletedAt: null }`），`type` 只用于后台列表的筛选与展示
      * （`admin/prompt/prompt.service.ts` 的 `PROMPT_TYPE_NAMES`）。
-     * 因此这里暂借语义最近的 `MBTI_REPORT`（后台"个人报告"那一档），
-     * 代价是后台按类型筛选时它会和 MBTI / 大五模板混在一起 ——
-     * 要彻底修掉需要给 `prompt_type` 增加枚举值并配迁移（超出本次改动范围，见交付说明）。
+     * `prompt_type` 枚举已补上 `GROWTH_SUMMARY`（见迁移
+     * `20261013000000_prompt_type_report_variants`），因此这里用**真实类型**，
+     * 后台按类型筛选时不会再与 MBTI / 大五模板混在一起。
      */
-    type: 'MBTI_REPORT',
+    type: 'GROWTH_SUMMARY',
     description:
       '基于同一用户多个历史画像的时间序列（2–12 版）生成成长回顾报告（4 段：成长轨迹回顾 / 特质变化解析 / 稳定特质与延续性 / 下一阶段建议）',
     version: 1,

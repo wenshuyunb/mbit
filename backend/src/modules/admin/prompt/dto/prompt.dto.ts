@@ -45,6 +45,11 @@ export const PROMPT_TYPES = [
   'AI_COMPANION',
   'EMOTION_ANALYSIS',
   'SYSTEM_SAFETY',
+  // 与 `AiReportType` 对齐的两个报告类型：大五与成长回顾各有自己的模板
+  // （`report.bigfive` / `report.growth`）。此前枚举里没有它们，模板只能借
+  // `MBTI_REPORT` 登记，后台按类型筛选时混在「MBTI 深度报告」里。
+  'BIG_FIVE_REPORT',
+  'GROWTH_SUMMARY',
 ] as const;
 export type PromptTypeValue = (typeof PROMPT_TYPES)[number];
 

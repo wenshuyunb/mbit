@@ -112,6 +112,8 @@ const PROMPT_TYPE_NAMES: Readonly<Record<PromptTypeValue, string>> = {
   AI_COMPANION: 'AI 情感助手',
   EMOTION_ANALYSIS: '情绪与成长分析',
   SYSTEM_SAFETY: '系统安全护栏',
+  BIG_FIVE_REPORT: '大五特质报告',
+  GROWTH_SUMMARY: '成长回顾报告',
 };
 
 /** 管理端操作者 */
