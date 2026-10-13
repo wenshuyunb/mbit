@@ -533,6 +533,27 @@ worker 没跑时这些任务会**停在排队态**，表现为"接口 202 了但
 只有"匿名 false / 带令牌 true"的对比才能证明身份真的被解析出来了
 （演示用户本来不是会员时，两条路径长得一样，断言会**假绿**）。
 
+### 3.14 ✅ 付费墙链接指向不存在的路由（已修，含连带的筛选缺口）
+
+`GET /ai/quota` 的 `nextActions.upgradeUrl` / `creditsUrl` 原为
+`/api/v1/membership/plans` 与 `/api/v1/products?type=AI_CREDITS` —— 这两个路径
+在本项目**一个路由都没有**（ADR-033 已把 `plans`/`products` 合并到 `GET /membership/products`）。
+客户端照着跳直接 404，而这条链路正是「额度耗尽 → 拉起付费墙 → 去升级」，
+**链接坏掉等于把付费用户挡在门外**，且不报错、不告警。
+
+已改为 `/api/v1/membership/products`（+ `?type=AI_CREDITS`），并提成具名常量；
+`chat-paywall-links.spec.ts` 把它们与 `MembershipController` 的**路由元数据绑定**断言 ——
+直接比字面量会在路由改名时依然通过，等于摆设。
+
+⚠ **连带缺口**：`?type=` 这个筛选**在实现里根本不存在**（该端点当时没绑定 `@Query()`），
+所以链接改对了、用户点"买次数包"仍会看到会员档位混进展厅。已一并实现
+（`ListProductsQueryDto`），并按"要么实现、要么明确拒绝"的原则把契约里另外三个
+未交付参数（`includeBenefitsCompare` / `platform` / `code`）**从契约移除** ——
+该端点现在绑定了 `@Query()`，传它们会返回 `400/10001`（此前是静默忽略）。
+
+**活体实测**：`?type=AI_CREDITS` → 1 件、`?type=MEMBERSHIP` → 3 件、非法值 → `400/10001`、
+不传 → 6 件；两个付费墙地址实测均 `200`（此前 404）。
+
 ## 4. 下一步做什么（按这个顺序，别跳）
 
 ### 第 1 步：收干净新交付的四个域（**2026-10-12 已完成，见 §3.5**）

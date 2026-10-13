@@ -17,6 +17,7 @@ import { Throttle } from '@nestjs/throttler';
 import { CurrentUser, OptionalUser, Public } from '../../common/decorators';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { ListEntitlementsQueryDto } from './dto/entitlement.dto';
+import { ListProductsQueryDto } from './dto/product.dto';
 import { EntitlementService, type EntitlementListView, type MembershipView } from './entitlement.service';
 
 /** 会员权益项（契约 §3.8.1：`key` / `label` / `value` / `highlight`） */
@@ -211,7 +212,11 @@ export class MembershipController {
     ].join('\n'),
   })
   @ApiResponse({ status: 200, description: '查询成功（游客返回匿名 `membership`）' })
-  async listProducts(@OptionalUser('userId') userId: string | undefined): Promise<ProductListView> {
+  @ApiResponse({ status: 400, description: '`type` 非枚举（`10001`）' })
+  async listProducts(
+    @OptionalUser('userId') userId: string | undefined,
+    @Query() query: ListProductsQueryDto,
+  ): Promise<ProductListView> {
     const now = new Date();
 
     const [products, membership] = await Promise.all([
@@ -219,6 +224,9 @@ export class MembershipController {
         where: {
           status: 'ON_SALE',
           deletedAt: null,
+          // `?type=` 筛选：付费墙的"买次数包"入口带着 `type=AI_CREDITS` 进来，
+          // 不过滤会把会员档位混进展厅（契约 §3.8.1 字段表声明了该参数）
+          ...(query.type !== undefined ? { type: query.type } : {}),
           // 有效期窗口：`validFrom`/`validTo` 两端都判，只判一端会让
           // 「还没开始卖」或「已经停售」的商品出现在列表里
           AND: [

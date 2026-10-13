@@ -78,7 +78,7 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
   it('【关键】会员商品下发套餐的 benefits（此前只下发 tags，权益对照表拿不到）', async () => {
     const { controller } = createHarness([productRow()]);
 
-    const result = await controller.listProducts('user-1');
+    const result = await controller.listProducts('user-1', {});
 
     expect(result.items[0]?.benefits).toEqual(BENEFITS);
   });
@@ -86,7 +86,7 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
   it('查询时按商品关联套餐取权益（权益挂在套餐上，商品行没有这一列）', async () => {
     const { controller, findMany } = createHarness([productRow()]);
 
-    await controller.listProducts('user-1');
+    await controller.listProducts('user-1', {});
 
     const args = findMany.mock.calls[0][0] as { select: Record<string, unknown> };
     expect(args.select['membershipPlan']).toEqual({ select: { benefits: true } });
@@ -97,7 +97,7 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
       productRow({ id: 'product-2', code: 'AI_CREDITS_50', type: 'AI_CREDITS', credits: 50, membershipPlan: null }),
     ]);
 
-    const result = await controller.listProducts('user-1');
+    const result = await controller.listProducts('user-1', {});
 
     expect(result.items[0]?.benefits).toEqual([]);
     expect('benefits' in (result.items[0] as object)).toBe(true);
@@ -121,7 +121,7 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
       }),
     ]);
 
-    const result = await controller.listProducts('user-1');
+    const result = await controller.listProducts('user-1', {});
 
     expect(result.items[0]?.benefits).toEqual(BENEFITS);
   });
@@ -132,7 +132,7 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
       productRow({ id: 'product-3', membershipPlan: { benefits: null } }),
     ]);
 
-    const result = await controller.listProducts('user-1');
+    const result = await controller.listProducts('user-1', {});
 
     expect(result.items.map((item) => item.benefits)).toEqual([[], []]);
   });
@@ -142,7 +142,7 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
       productRow({ membershipPlan: { benefits: [{ key: 'K', label: 'L', value: 'V' }] } }),
     ]);
 
-    const result = await controller.listProducts('user-1');
+    const result = await controller.listProducts('user-1', {});
 
     expect(result.items[0]?.benefits).toEqual([{ key: 'K', label: 'L', value: 'V', highlight: false }]);
   });
@@ -150,8 +150,39 @@ describe('MembershipController.listProducts —— 权益矩阵（契约 §3.8.1
   it('与会员状态一起返回（会员页一次请求拿全，避免首屏中间态）', async () => {
     const { controller } = createHarness([productRow()]);
 
-    const result = await controller.listProducts('user-1');
+    const result = await controller.listProducts('user-1', {});
 
     expect(result.membership).toEqual(MEMBERSHIP_VIEW);
+  });
+
+  /**
+   * `?type=` 筛选（契约 §3.8.1 字段表）
+   *
+   * 该参数此前被静默忽略（端点没绑定 `@Query()`），而**有真实调用方依赖它**：
+   * `chat-conversation.service.ts` 下发给付费墙的 `creditsUrl` 就带着 `?type=AI_CREDITS`
+   * —— 用户点"买次数包"若不过滤，会看到会员档位混进展厅。
+   */
+  describe('type 筛选', () => {
+    it('传 type 时下推到查询条件（而不是取回全量再在内存里筛）', async () => {
+      const { controller, findMany } = createHarness([productRow()]);
+
+      await controller.listProducts('user-1', { type: 'AI_CREDITS' });
+
+      const args = findMany.mock.calls[0][0] as { where: Record<string, unknown> };
+      expect(args.where['type']).toBe('AI_CREDITS');
+    });
+
+    it('不传 type 时不加类型条件（会员页要看到全部可售商品）', async () => {
+      const { controller, findMany } = createHarness([productRow()]);
+
+      await controller.listProducts('user-1', {});
+
+      const args = findMany.mock.calls[0][0] as { where: Record<string, unknown> };
+      expect('type' in args.where).toBe(false);
+      // 其余条件必须照旧：状态、软删与有效期窗口一个都不能少
+      expect(args.where['status']).toBe('ON_SALE');
+      expect(args.where['deletedAt']).toBeNull();
+      expect(args.where['AND']).toBeDefined();
+    });
   });
 });

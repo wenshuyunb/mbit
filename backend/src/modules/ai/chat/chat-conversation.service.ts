@@ -165,6 +165,23 @@ const MAX_CONVERSATIONS_PER_DAY_LIMIT = MAX_CONVERSATIONS_PER_DAY;
 /** 新用户日上限（契约 §3.7.5 规则 5；见 `AiQuotaView.limits.newUserDailyLimit` 的说明） */
 const NEW_USER_DAILY_LIMIT = 30;
 
+/**
+ * 付费墙跳转地址（契约 §3.7.8 `nextActions.upgradeUrl` / `creditsUrl`）
+ *
+ * **必须指向真实存在的路由**。原先是 `/api/v1/membership/plans` 与
+ * `/api/v1/products?type=AI_CREDITS` —— 这两个路径在本项目**都没有路由**
+ * （ADR-033 已把 `plans` 与 `products` 合并到 `GET /membership/products`）。
+ * 客户端照着跳直接 404，而这条链路正是「额度耗尽 → 拉起付费墙 → 去升级」的转化路径，
+ * 链接坏掉等于把付费用户挡在门外。
+ *
+ * 提成常量是为了让 `chat-paywall-links.spec.ts` 能把它与
+ * `MembershipController` 的**路由声明**绑定起来断言 —— 路由改名时那里会立刻变红。
+ */
+export const PAYWALL_UPGRADE_URL = '/api/v1/membership/products';
+
+/** 次数包入口：带 `?type=AI_CREDITS`，该筛选已在本端点上实现 */
+export const PAYWALL_CREDITS_URL = '/api/v1/membership/products?type=AI_CREDITS';
+
 /** Prompt 元信息 */
 interface PromptMetaView {
   readonly contractKey: string;
@@ -464,8 +481,8 @@ export class ChatConversationService {
       exhausted,
       nextActions: {
         canChat: !exhausted,
-        upgradeUrl: '/api/v1/membership/plans',
-        creditsUrl: '/api/v1/products?type=AI_CREDITS',
+        upgradeUrl: PAYWALL_UPGRADE_URL,
+        creditsUrl: PAYWALL_CREDITS_URL,
         reason: exhausted ? exhaustedReasonOf(availability.view.limitedBy) : null,
       },
       usage,

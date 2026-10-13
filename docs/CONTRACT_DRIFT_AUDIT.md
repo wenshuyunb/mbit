@@ -110,6 +110,23 @@ class-transformer 会**先**按属性的反射类型做隐式转换 —— `bool
 （`{"autoGenerateReport":"false"}` → `true`）。JSON 客户端本来会发真布尔，故危害小得多；
 若将来要收紧，给字段加 `@Transform(parseQueryBoolean)` 即可（`'yes'` 会 400）。
 
+### [§3.7.8] ✅ **已修（2026-10-13）**：`nextActions.upgradeUrl`/`creditsUrl` 指向不存在的路由
+
+原值 `/api/v1/membership/plans` 与 `/api/v1/products?type=AI_CREDITS` 在本项目
+**一个路由都没有**（ADR-033 已把 `plans`/`products` 合并到 `GET /membership/products`）
+—— 而这是「额度耗尽 → 拉起付费墙 → 去升级」的转化路径，客户端照着跳就是 404，
+**等于把付费用户挡在门外**，且不报错、不告警。
+
+已改为 `/api/v1/membership/products` 与 `?type=AI_CREDITS`，并把它们提成具名常量，
+由 `chat-paywall-links.spec.ts` **与 `MembershipController` 的路由元数据绑定断言**
+（直接比别人手写的字面量会在路由改名时依然通过，等于摆设）。
+**活体验证**：两个地址实测均返回 `200`（此前 404）。
+
+⚠ 连带发现：`?type=` 这个筛选**在实现里根本不存在**（该端点当时没绑定 `@Query()`），
+所以即便链接改对了，用户点"买次数包"仍会看到会员档位混进展厅。
+已一并实现 `type` 筛选（`ListProductsQueryDto`），并**活体实测**：
+`?type=AI_CREDITS` → 1 件、`?type=MEMBERSHIP` → 3 件、非法值 → `400/10001`。
+
 ## 2. 被接收却静默失效的字段（**建议优先修，需改代码或从 DTO 移除**）
 
 **通则**：一个参数被 DTO 收下、却没有任何读取方，比"直接 400"更糟 ——
