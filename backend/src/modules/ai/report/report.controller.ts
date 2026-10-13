@@ -70,15 +70,20 @@ export class ReportController {
     ].join('\n'),
   })
   @ApiResponse({ status: 202, description: '申请已受理，返回 reportId 与轮询地址' })
-  @ApiResponse({ status: 400, description: '报告类型不合法（`10001`）' })
-  @ApiResponse({ status: 404, description: '尚无可用画像，请先完成测评（`40010`）' })
-  @ApiResponse({ status: 409, description: '报告正在生成中（`50017`）' })
+  @ApiResponse({ status: 400, description: '报告类型不合法（`10001`）或关系报告缺 `relationshipId`（`10001`）' })
+  @ApiResponse({ status: 404, description: '尚无可用画像（`40010`）或关系不存在（`60000`）' })
+  @ApiResponse({
+    status: 409,
+    description: '报告正在生成中（`50017`）、关系未生效（`60008`）或匹配算分未完成（`60009`）',
+  })
   @ApiResponse({ status: 503, description: '队列不可用（`90004`，可直接重试）' })
   async createReport(@CurrentUser('userId') userId: string, @Body() dto: CreateReportDto): Promise<ReportCreatedView> {
     return this.reportService.createReport({
       userId,
       type: dto.type,
       ...(dto.sessionId !== undefined ? { sessionId: dto.sessionId } : {}),
+      // 关系报告的上下文来自"关系双方画像 + 算分报告"，服务层按它走另一条取数路径
+      ...(dto.relationshipId !== undefined ? { relationshipId: dto.relationshipId } : {}),
     });
   }
 

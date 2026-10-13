@@ -23,7 +23,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import type { BadRequestException } from '@nestjs/common';
 
-import { ReportIdParamDto } from './report.dto';
+import { CreateReportDto, REPORT_TYPES, ReportIdParamDto } from './report.dto';
 import { ReportIdPathDto } from './report-engagement.dto';
 
 /** 与 `main.ts` 的全局管道同配置（改一处必须改另一处，否则测试就成了摆设） */
@@ -94,5 +94,74 @@ describe('报告 ID 路径参数校验', () => {
 
       expect(a.length === 0).toBe(b.length === 0);
     }
+  });
+});
+
+/**
+ * `CreateReportDto`（契约 §3.5.1）
+ *
+ * 重点守两件事：
+ *   ① **DTO 对外宣称支持的枚举值必须都过得了校验** —— 枚举里有一个通不过、
+ *      或通过后服务层用不上，都会变成"Swagger 说能用、实际用不了"；
+ *   ② `relationshipId` 只做 UUID 形状校验（主键是 UUIDv7，`@IsUUID()` 会误杀），
+ *      且**是否必填由类型决定**，不在 DTO 层用条件校验表达 ——
+ *      DTO 里写条件必填会让错误码从服务层的 `10001`+"关系报告必须提供 relationshipId"
+ *      变成笼统的字段错误，前端拿不到可读原因。
+ */
+describe('CreateReportDto 校验（契约 §3.5.1）', () => {
+  const bodyPipe = new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    transformOptions: { enableImplicitConversion: true },
+  });
+
+  const transformBody = async (payload: Record<string, unknown>): Promise<CreateReportDto> =>
+    (await bodyPipe.transform(payload, { type: 'body', metatype: CreateReportDto })) as CreateReportDto;
+
+  const rejectionMessages = async (payload: Record<string, unknown>): Promise<string[]> => {
+    try {
+      await transformBody(payload);
+      return [];
+    } catch (error) {
+      const response = (error as BadRequestException).getResponse();
+      const messages = (response as { message?: string[] | string }).message ?? '';
+
+      return Array.isArray(messages) ? messages : [messages];
+    }
+  };
+
+  const RELATIONSHIP_ID = '0195f3a2-b24e-7a86-abf1-7dae4b5c6f45';
+
+  it('【关键】对外宣称支持的四种报告类型全部通过校验', async () => {
+    for (const type of REPORT_TYPES) {
+      await expect(transformBody({ type })).resolves.toMatchObject({ type });
+    }
+  });
+
+  it('RELATIONSHIP_REPORT 可以携带 relationshipId（此前 DTO 里没有这个字段，该类型必然 400）', async () => {
+    await expect(
+      transformBody({ type: 'RELATIONSHIP_REPORT', relationshipId: RELATIONSHIP_ID }),
+    ).resolves.toMatchObject({ type: 'RELATIONSHIP_REPORT', relationshipId: RELATIONSHIP_ID });
+  });
+
+  it('relationshipId 非法 UUID 在入参层被拒（不能让 PostgreSQL 当校验器）', async () => {
+    const messages = await rejectionMessages({ type: 'RELATIONSHIP_REPORT', relationshipId: 'not-a-uuid' });
+
+    expect(messages).not.toHaveLength(0);
+  });
+
+  it('UUIDv7 形状的 relationshipId 必须通过（用 @IsUUID() 会误杀真实主键）', async () => {
+    await expect(
+      transformBody({ type: 'RELATIONSHIP_REPORT', relationshipId: '0195f3a2-07ad-7fdb-9a46-c2fd9a0b1e9a' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('非关系类型不传 relationshipId 合法（必填性由服务层按类型判定）', async () => {
+    await expect(transformBody({ type: 'MBTI_REPORT' })).resolves.toMatchObject({ type: 'MBTI_REPORT' });
+  });
+
+  it('未声明的字段被拒绝（防止前端以为参数生效、实际被静默丢弃）', async () => {
+    expect(await rejectionMessages({ type: 'MBTI_REPORT', profileId: RELATIONSHIP_ID })).not.toHaveLength(0);
   });
 });

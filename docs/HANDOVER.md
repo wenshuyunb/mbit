@@ -313,6 +313,67 @@ worker 没跑时这些任务会**停在排队态**，表现为"接口 202 了但
 > `StartTime`，**不要看日志时间戳**（应用下发的 HTTP `timestamp` 是准确的，
 > 本轮实测 `2026-10-12T09:54:52.743Z` = 本地 17:54:52）。
 
+### 3.6 缺口补齐第一轮（2026-10-13）：契约 §3.5.1 定案 + 大五报告通路
+
+**已交付**
+
+1. **`RELATIONSHIP_REPORT` 从"必然 400"变成真正可达**（ADR-034）。
+   根因：`CreateReportDto` 没有 `relationshipId`，服务层 `createRelationshipReport`
+   那套完整校验（归属 / `ACTIVE` / 算分报告）**永远走不到**。
+   修法：DTO 新增可选 `relationshipId`（UUID 形状校验）+ 控制器透传 + Swagger 修正错误码。
+   **活体证据**：带合法形状但不存在的关系 ID → 返回前移到 `404/60000 关系不存在`
+   （修复前是 `400/10001`）；缺参仍是 `400/10001`、形状非法仍是 `400/10001`。
+   探针：`.runlogs/probe-relationship-report.cjs`。
+2. **契约 §3.5.1 按实现校正**（ADR-034）：`type` 枚举改为与 `ai_report_type` 逐字一致
+   （`GROWTH_REPORT` 这类简写是**文档错**，前端注释早已警告）；
+   删除 6 个无读取方字段（`profileId`/`profileIds`/`forceRegenerate`/`language`/`tone`/`focus`）
+   并登记为「未交付能力」；**错误码表也一并校正** —— 原文的 `10010`（限流）与
+   `10011`（缺幂等键）实际是 `10007 RATE_LIMITED` 与 `10009 IDEMPOTENCY_KEY_MISSING`。
+3. **`BIG_FIVE_REPORT` 的通路补齐**：新增 `report.bigfive` 模板（4 段、首段免费、
+   只用大五真实变量、不引用任何 MBTI 变量）。此前该类型必然 `50011`。
+
+⚠ **注意管理端那几处 `GROWTH_REPORT` 不要跟着改**：`admin/report` 与 `admin/ai-stats` 的
+`ADMIN_REPORT_TYPES` 是**刻意的对外词汇表**，有显式映射
+（`admin-report.util.ts` 的 `RELATIONSHIP_REPORT → COMPATIBILITY_REPORT`），与 `AiReportType` 不同源。
+
+### 3.7 本轮新确认的缺陷（**未修，按优先级排**）
+
+1. **🔴 `neuroticism` 的中文标签把含义说反了**（正确性缺陷，影响 AI 解读方向）。
+   `report-context.builder.ts` 的 `BIG_FIVE_LABELS` 把 `neuroticism` 标为「情绪稳定性」，
+   而引擎存的是**神经质原始分** —— `personality-engine.service.spec.ts` 写得很清楚：
+   「反向题选 5 → 情绪稳定性高 → **神经质得分为 0**」，关系规则也用
+   `neuroticism >= 90` 判**焦虑型**依恋。于是「情绪稳定性 90（高）」实际含义是
+   **情绪很不稳定**，模型会把最容易焦虑的用户解读成最稳的人。
+   `chat-persona.util.ts` 有同一份标签。**修法要点**：改标签为「神经质」并说明方向
+   （**不要**去反转数值 —— 关系规则、权重矩阵都按原始分比较，改了会连带失效），
+   同时要同步 `report.bigfive` 模板里那段"方向说明"与相关断言。
+2. **`report-generation.service.ts` 的报告标题按 MBTI 变量拼**：纯大五画像会得到标题
+   `（本次测评未包含此项） （本次测评未包含此项） 深度解读`；做过 MBTI 的用户做大五报告
+   则得到 `INFJ 提倡者 深度解读`。应按 `reportType` 选择标题。
+3. **`PromptType` 枚举没有 `BIG_FIVE_REPORT`**（`schema.prisma` + init 迁移 + 生成客户端都只有 5 个值：
+   `MBTI_REPORT`/`RELATIONSHIP_REPORT`/`AI_COMPANION`/`EMOTION_ANALYSIS`/`SYSTEM_SAFETY`）。
+   因此 `report.bigfive` 模板的 `type` 只能暂借 `'MBTI_REPORT'` —— **不影响生成**
+   （模板只按 `key` 查找），代价是后台按类型筛选时它混在「MBTI 报告」里。
+   彻底修法要动 schema + 迁移 + 后台中文名映射，且 `schema.prisma` 由
+   `DATABASE_DESIGN.md` 生成，属独立一轮。
+4. 两个沿袭自 `report.mbti` 的小瑕疵：`{{conflictStyle}}` 渲染出的是原始枚举码
+   （如 `COLLABORATING`，缺中文标签映射）；数据全缺时渲染成「完成率：（本次测评未包含此项）%」。
+
+### 3.8 `GROWTH_SUMMARY`（成长回顾）的现状与结论
+
+**该类型目前无可用通路，且不是"补个模板就行"**：
+
+- `TEMPLATE_KEY_BY_TYPE.GROWTH_SUMMARY = 'report.growth'`，模板**未种**；
+- 更根本的是**没有多画像上下文**：`report-generation.service.ts` 只有两条组装路径
+  `prepare`（单画像）与 `prepareForRelationship`，**没有任何按 `profileIds` 取历史画像序列的实现**；
+- 契约要求的输入字段 `profileIds`（长度 2–12）与会员门禁 `70014` 都未实现（已随 ADR-034 登记）。
+
+**结论**：按 ADR-034 的判据，这属**功能开发**而非对齐。要么按 ADR-035 正式立项
+（DTO 加 `profileIds` + 新增 `buildGrowthReportContext` 多画像组装器 + `prepareForGrowth`
+
+- 模板 + 会员门禁），要么把该类型从对外枚举中摘掉 —— **不要用单画像上下文糊一个"成长报告"**，
+  那会产出一份看起来像、实际与"成长"无关的内容，比明确报错更伤用户。
+
 ## 4. 下一步做什么（按这个顺序，别跳）
 
 ### 第 1 步：收干净新交付的四个域（**2026-10-12 已完成，见 §3.5**）

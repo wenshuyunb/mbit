@@ -4218,11 +4218,15 @@ Accept-Language: zh-CN
 
 **报告类型**
 
-| `type`            | 名称         | 输入                         | 默认 prompt key    | 主 provider                       |
-| ----------------- | ------------ | ---------------------------- | ------------------ | --------------------------------- |
-| `MBTI_REPORT`     | 人格深度报告 | `profileId`                  | `MBTI_REPORT`      | `deepseek-chat`（备 `qwen-plus`） |
-| `BIG_FIVE_REPORT` | 大五特质报告 | `profileId`                  | `MBTI_REPORT`      | `deepseek-chat`                   |
-| `GROWTH_REPORT`   | 成长回顾报告 | 多个 `profileId`（时间序列） | `EMOTION_ANALYSIS` | `qwen-plus`（备 `deepseek-chat`） |
+| `type`                | 名称             | 上下文来源                             | Prompt 模板键         |
+| --------------------- | ---------------- | -------------------------------------- | --------------------- |
+| `MBTI_REPORT`         | 人格深度报告     | 当前人格画像（`isCurrent = true`）     | `report.mbti`         |
+| `BIG_FIVE_REPORT`     | 大五特质报告     | 同上                                   | `report.bigfive`      |
+| `RELATIONSHIP_REPORT` | 关系（匹配）解读 | 关系双方画像 + 该关系的算分报告        | `report.relationship` |
+| `GROWTH_SUMMARY`      | 成长回顾报告     | 历史画像序列（**未交付**，见 ADR-035） | `report.growth`       |
+
+> 上表与数据库枚举 `ai_report_type` **逐字一致**（ADR-034）。`type` 只能取这四个值：
+> 不存在 `GROWTH_REPORT` 之类的简写，客户端按旧文档传简写只会拿到 `400/10001`。
 
 **报告状态机**
 
@@ -4249,35 +4253,34 @@ PENDING ──worker 取任务──► GENERATING ──成功──► SUCCEED
 | 项   | 值                                                                                                 |
 | ---- | -------------------------------------------------------------------------------------------------- |
 | 用途 | 创建报告任务并入队 `ai.report`（并发 5，重试 3 次，幂等键 `reportId`）；立即返回 202 + `taskId`    |
-| 鉴权 | 🔑 登录；💎 权益按 `type` 校验（`MBTI_REPORT` 免费用户可生成**一次**；`GROWTH_REPORT` 需会员）     |
+| 鉴权 | 🔑 登录；💎 权益按 `type` 校验（`MBTI_REPORT` 免费用户可生成**一次**）                             |
 | 限流 | userId 5 次/60min                                                                                  |
 | 幂等 | **必须**携带 `X-Idempotency-Key`（缺失 `10011`）；另有 `cacheKey` 语义幂等（命中直接返回已有报告） |
 | 异步 | **是**（`ai.report` 队列）                                                                         |
 
 **请求体**
 
-| 字段              | 类型           | 必填     | 约束                                                                      | 说明                                                           |
-| ----------------- | -------------- | -------- | ------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `type`            | string         | 是       | 枚举 `MBTI_REPORT` \| `BIG_FIVE_REPORT` \| `GROWTH_REPORT`                | 报告类型                                                       |
-| `profileId`       | string(UUIDv7) | 条件必填 | 必须属于当前用户                                                          | 画像 ID（`MBTI_REPORT`/`BIG_FIVE_REPORT` 必填）                |
-| `testSessionId`   | string(UUIDv7) | 否       | 必须属于当前用户且 `status ∈ {SCORED, REPORT_READY}`                      | 指定测试会话；不传时使用画像对应的主会话                       |
-| `profileIds`      | string[]       | 条件必填 | 长度 2–12，全部属于当前用户（`GROWTH_REPORT` 必填）                       | 成长报告使用的历史画像版本序列                                 |
-| `forceRegenerate` | boolean        | 否       | 默认 `false`                                                              | 忽略 `cacheKey` 命中，强制重新生成（**会扣配额**，仅会员可用） |
-| `language`        | string         | 否       | 枚举 `zh-CN`（默认）\| `en-US`                                            | 输出语言                                                       |
-| `tone`            | string         | 否       | 枚举 `WARM`（默认）\| `NEUTRAL` \| `DIRECT`                               | 语气偏好（注入 Prompt 变量）                                   |
-| `focus`           | string[]       | 否       | 子集：`RELATIONSHIP` \| `CAREER` \| `EMOTION` \| `SELF_GROWTH`，最多 2 个 | 内容侧重（注入 Prompt 变量，影响板块详略）                     |
+| 字段             | 类型         | 必填     | 约束                                                                                 | 说明                                                                      |
+| ---------------- | ------------ | -------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `type`           | string       | 是       | 枚举 `MBTI_REPORT` \| `BIG_FIVE_REPORT` \| `RELATIONSHIP_REPORT` \| `GROWTH_SUMMARY` | 报告类型。**与 `ai_report_type` 数据库枚举逐字一致**（ADR-034）           |
+| `sessionId`      | string(UUID) | 否       | 必须属于当前用户                                                                     | 指定测评会话；不传则绑定该用户**当前**人格画像（`isCurrent = true`）      |
+| `relationshipId` | string(UUID) | 条件必填 | 必须属于当前用户，且关系 `ACTIVE`、已有 `SUCCEEDED` 的算分报告                       | 关系（匹配）解读报告必填。`type = RELATIONSHIP_REPORT` 时缺它返回 `10001` |
 
 **请求示例**
 
 ```json
 {
   "type": "MBTI_REPORT",
-  "profileId": "0195f3a2-a13d-7f75-dae0-6c9d3a4b5e34",
-  "testSessionId": "0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12",
-  "forceRegenerate": false,
-  "language": "zh-CN",
-  "tone": "WARM",
-  "focus": ["RELATIONSHIP", "SELF_GROWTH"]
+  "sessionId": "0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12"
+}
+```
+
+关系（匹配）解读报告：
+
+```json
+{
+  "type": "RELATIONSHIP_REPORT",
+  "relationshipId": "0195f3a2-b24e-7a86-abf1-7dae4b5c6f45"
 }
 ```
 
@@ -4375,33 +4378,49 @@ curl -X POST 'https://api.soulmap.cn/api/v1/reports' \
 
 **错误码**
 
-| 错误码  | HTTP | 触发条件                                                               |
-| ------- | ---- | ---------------------------------------------------------------------- |
-| `10001` | 400  | `type` 非枚举；`focus` 超出 2 个或含非白名单值；`language`/`tone` 非法 |
-| `10002` | 400  | `MBTI_REPORT` 缺 `profileId`；`GROWTH_REPORT` 缺 `profileIds`          |
-| `10010` | 429  | 60min 内创建超过 5 次                                                  |
-| `10011` | 400  | 缺少 `X-Idempotency-Key`                                               |
-| `10016` | 400  | `profileIds` 长度不在 2–12                                             |
-| `40012` | 404  | `profileId` 不存在                                                     |
-| `40013` | 400  | `profileId` 不属于当前用户                                             |
-| `40005` | 409  | `testSessionId` 对应会话尚未完成（非 `SCORED`/`REPORT_READY`）         |
-| `50020` | 500  | Prompt 模板 `MBTI_REPORT` 无生效版本（运维级故障）                     |
-| `50022` | 503  | 当日 AI 预算已耗尽                                                     |
-| `50011` | 503  | provider 熔断中                                                        |
-| `70014` | 402  | `type = GROWTH_REPORT` 但无会员权益                                    |
-| `50015` | 402  | `forceRegenerate = true` 但非会员或超出会员每日重生成上限              |
-| `90005` | 503  | 队列不可用（不写半成品记录）                                           |
+| 错误码  | HTTP | 触发条件                                                                                 |
+| ------- | ---- | ---------------------------------------------------------------------------------------- |
+| `10001` | 400  | `type` 非枚举；`relationshipId` 形状非法；`type=RELATIONSHIP_REPORT` 缺 `relationshipId` |
+| `10007` | 429  | 60min 内创建超过 5 次                                                                    |
+| `10009` | 400  | 缺少 `X-Idempotency-Key`                                                                 |
+| `40010` | 404  | 尚无可用人格画像（个人报告需先完成一次测评）                                             |
+| `50017` | 409  | 该报告正在生成中                                                                         |
+| `50011` | 500  | Prompt 模板不存在或无生效版本（运维级故障）                                              |
+| `60000` | 404  | `relationshipId` 对应的关系不存在或不属于当前用户                                        |
+| `60008` | 409  | 关系尚未 `ACTIVE`                                                                        |
+| `60009` | 409  | 该关系尚无 `SUCCEEDED` 的算分报告（无分数不能凭空解读，ADR-005）                         |
+| `90004` | 503  | 队列不可用（不写半成品记录，可直接重试）                                                 |
+
+> ⚠ 本节错误码于 **ADR-034** 按实现校正：原文写的 `10010`（限流）与 `10011`（缺幂等键）
+> 在 `error-code.ts` 中分别是 `10010 IDEMPOTENCY_CONFLICT` 与 `10011`（另有含义），
+> 实际返回的是 `10007 RATE_LIMITED` 与 `10009 IDEMPOTENCY_KEY_MISSING`。
 
 **业务规则与边界条件**
 
 1. **异步强制**（ADR-008）：`POST /reports` **必须**在一次 DB 事务内创建 `ai_reports`（`status = PENDING`）并投递 `ai.report` 队列（或写 `outbox_event` 由 relay 投递），**禁止**任何同步等待 LLM 的实现。
-2. **`cacheKey` 幂等**：`cacheKey = SHA-256(userId | type | sourceId | promptVersionId)`（架构 6.3）；命中且 `status = SUCCEEDED` → 返回 **200** + `cacheHit: true` + 已有 `reportId`（**不扣配额、不重新生成**）。`forceRegenerate: true` 时跳过缓存（仅会员，且受 `50015` 限制）。
+2. **`cacheKey` 幂等**：`cacheKey = SHA-256(userId | type | sourceId | promptVersionId)`（架构 6.3）；命中且 `status = SUCCEEDED` → 返回 **200** + `cacheHit: true` + 已有 `reportId`（**不扣配额、不重新生成**）。⚠ "跳过缓存重新生成"的能力**不在本接口**：现有等价实现是 `POST /reports/{id}/regenerate`（会员每日次数受限，见 §3.5.7），本接口**没有** `forceRegenerate` 参数（ADR-034）。
 3. **配额扣减时机**：**成功后扣减**（`consumedOnSuccess: true`）；失败自动回补（架构 15.5「AI 报告生成失败 → 重试不重复扣费」）。免费用户默认每月可生成 **1** 份 `MBTI_REPORT`；`BIG_FIVE_REPORT` 同样受免费次数限制。
 4. **上下文装配**（架构 10.4）：由 `ContextBuilder` 注入①用户基础信息（年龄区间、性别，**不注入昵称明文**）②人格画像（MBTI + 四维百分比 + Big Five + 关系风格）③既有画像摘要（上一次报告核心结论，保证连贯性）④本次测试显著项（最强/最弱维度、一致性指标）。自由文本（如 `statusMessage`）必须转义并包裹定界符（防 Prompt 注入，架构 10.3）。
 5. **Provider 路由**：按 `ai_task_routing` 配置选择主/备 provider（架构 10.2），响应中的 `provider`/`model` 为**实际路由结果**，前端不得假设固定值。
 6. **字数要求**：`MBTI_REPORT` 目标 3000+ 字（约 4500–6500 token 输出）；`maxTokens` 由 `prompt_versions.maxTokens` 控制。
 7. **队列积压**：`ai.report` waiting > 100 触发告警（架构 15.4）；响应 `queuePosition` 供前端展示「前面还有 N 个任务」。
 8. **并发同报告**：同一 `reportId` 的重复入队由队列 `jobId = reportId` 去重（架构 6.4 幂等键）。
+
+**未交付能力（ADR-034 登记）**
+
+本节此前声明的下列字段在实现中**没有任何读取方**，已从请求体移除。它们不是"可选但被忽略"——
+全局管道开启了 `whitelist + forbidNonWhitelisted`（`main.ts`），客户端若照旧文档传这些字段
+会**直接 `400/10001`**（`property xxx should not exist`）。需要它们时按**功能**立项，
+不要只改回文档（只改文档等于让客户端在第一个请求上失败）：
+
+| 字段              | 需要的前置工作                                                           |
+| ----------------- | ------------------------------------------------------------------------ |
+| `profileId`       | 按指定画像版本生成（当前固定取该用户 `isCurrent = true` 的画像）         |
+| `profileIds`      | 成长回顾报告的多画像上下文组装（见 ADR-035）                             |
+| `forceRegenerate` | 跳过 `cacheKey` 复用并计费；等价能力已在 `POST /reports/{id}/regenerate` |
+| `language`        | 多语言模板与占位符体系配套                                               |
+| `tone`            | 语气注入的模板占位符；等价能力已在 `POST /reports/{id}/regenerate`       |
+| `focus`           | 内容侧重的模板占位符；等价能力已在 `POST /reports/{id}/regenerate`       |
 
 #### 3.5.2 `GET /api/v1/reports` — 报告列表 🔑
 
@@ -4497,7 +4516,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       },
       {
         "reportId": "0195f3a2-ab22-7c08-9d13-3f4a5b6c7d02",
-        "type": "GROWTH_REPORT",
+        "type": "GROWTH_SUMMARY",
         "typeName": "成长回顾报告",
         "title": "近半年，你的变化轨迹",
         "subtitle": "基于画像 v1 → v3",
@@ -18125,17 +18144,17 @@ X-Platform: admin
 
 ### A.5 报告 report（9）
 
-| #   | 接口                                   | 鉴权                            | 权限点 / 权益                               | 限流               | 幂等键       |
-| --- | -------------------------------------- | ------------------------------- | ------------------------------------------- | ------------------ | ------------ |
-| 29  | `POST /api/v1/reports`                 | 🔑 💎（`GROWTH_REPORT` 需会员） | `MEMBERSHIP_ACTIVE`（按类型）               | 5/60min            | **是**       |
-| 30  | `GET /api/v1/reports`                  | 🔑                              | —                                           | 120/60s            | 是           |
-| 31  | `GET /api/v1/reports/{id}`             | 🔑 + 归属 💎（全文）            | `REPORT_UNLOCK:{id}` 或 `MEMBERSHIP_ACTIVE` | 120/60s            | 是           |
-| 32  | `GET /api/v1/reports/{id}/sections`    | 🔑 + 归属 💎（全文）            | 同上                                        | 120/60s            | 是           |
-| 33  | `GET /api/v1/reports/{id}/progress`    | 🔑 + 归属                       | —                                           | 240/60s            | 是           |
-| 34  | `GET /api/v1/reports/{id}/stream`      | 🔑 + 归属                       | —                                           | 3 并发连接 / 10min | 是（只读流） |
-| 35  | `POST /api/v1/reports/{id}/regenerate` | 🔑 + 归属 💎                    | `MEMBERSHIP_ACTIVE`                         | 3/24h              | **是**       |
-| 36  | `POST /api/v1/reports/{id}/export-pdf` | 🔑 + 归属 💎                    | `MEMBERSHIP_ACTIVE` 或 `PDF_EXPORT`         | 5/24h              | **是**       |
-| 37  | `POST /api/v1/reports/{id}/share-card` | 🔑 + 归属                       | —                                           | 10/60min           | **是**       |
+| #   | 接口                                   | 鉴权                    | 权限点 / 权益                               | 限流               | 幂等键       |
+| --- | -------------------------------------- | ----------------------- | ------------------------------------------- | ------------------ | ------------ |
+| 29  | `POST /api/v1/reports`                 | 🔑 💎（按 `type` 校验） | `MEMBERSHIP_ACTIVE`（按类型）               | 5/60min            | **是**       |
+| 30  | `GET /api/v1/reports`                  | 🔑                      | —                                           | 120/60s            | 是           |
+| 31  | `GET /api/v1/reports/{id}`             | 🔑 + 归属 💎（全文）    | `REPORT_UNLOCK:{id}` 或 `MEMBERSHIP_ACTIVE` | 120/60s            | 是           |
+| 32  | `GET /api/v1/reports/{id}/sections`    | 🔑 + 归属 💎（全文）    | 同上                                        | 120/60s            | 是           |
+| 33  | `GET /api/v1/reports/{id}/progress`    | 🔑 + 归属               | —                                           | 240/60s            | 是           |
+| 34  | `GET /api/v1/reports/{id}/stream`      | 🔑 + 归属               | —                                           | 3 并发连接 / 10min | 是（只读流） |
+| 35  | `POST /api/v1/reports/{id}/regenerate` | 🔑 + 归属 💎            | `MEMBERSHIP_ACTIVE`                         | 3/24h              | **是**       |
+| 36  | `POST /api/v1/reports/{id}/export-pdf` | 🔑 + 归属 💎            | `MEMBERSHIP_ACTIVE` 或 `PDF_EXPORT`         | 5/24h              | **是**       |
+| 37  | `POST /api/v1/reports/{id}/share-card` | 🔑 + 归属               | —                                           | 10/60min           | **是**       |
 
 ### A.6 关系 relationship（8）+ 匹配报告（3）
 

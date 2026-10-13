@@ -22,7 +22,12 @@
  */
 
 import { PROMPT_TEMPLATES } from './prompt-templates';
-import { buildReportContext, type ReportContextInput } from '../../../src/modules/ai/context/report-context.builder';
+import { PromptType } from '@prisma/client';
+import {
+  BIG_FIVE_LABELS,
+  buildReportContext,
+  type ReportContextInput,
+} from '../../../src/modules/ai/context/report-context.builder';
 import {
   buildRelationshipReportContext,
   type RelationshipReportContextInput,
@@ -31,7 +36,7 @@ import {
 import { assembleChatContext, type ChatContextAssembly } from '../../../src/modules/ai/chat/chat-context.util';
 import { buildPromptVariables, templateKeyCandidatesOf } from '../../../src/modules/ai/chat/chat-prompt';
 import { extractPlaceholders, renderPromptVersion } from '../../../src/modules/ai/prompt/prompt-renderer';
-import { readExpectedSections } from '../../../src/modules/ai/report/report-section.parser';
+import { parseReportSections, readExpectedSections } from '../../../src/modules/ai/report/report-section.parser';
 
 /** 数据齐全的画像 */
 const fullProfile = (): ReportContextInput => ({
@@ -264,6 +269,15 @@ describe('Prompt 模板种子数据契约', () => {
     }
   });
 
+  it('模板类型必须是 Prisma `PromptType` 的合法取值（多一个取值就会写到不存在的枚举上）', () => {
+    // `PromptTemplate.type` 是 PG 枚举 `prompt_type`：写一个枚举里没有的值，
+    // 落库会被数据库直接拒绝，而失败发生在**整个种子脚本**层面（不是少一个模板）。
+    // 枚举值来自生成的 Prisma Client，不手抄清单。
+    for (const template of PROMPT_TEMPLATES) {
+      expect(Object.values(PromptType)).toContain(template.type);
+    }
+  });
+
   it('【关键】所有占位符都是上下文组装真实产出的变量（数据齐全时）', () => {
     for (const template of PROMPT_TEMPLATES) {
       const available = availableVariables(template.key, true);
@@ -419,6 +433,93 @@ describe('Prompt 模板种子数据契约', () => {
         expect(template.name.length).toBeGreaterThan(2);
         expect(template.description.length).toBeGreaterThan(10);
       }
+    });
+  });
+
+  /**
+   * 大五报告模板
+   *
+   * `BIG_FIVE_REPORT` 是 `report.dto.ts` 明示支持的请求类型，`report.service.ts` 的
+   * `TEMPLATE_KEY_BY_TYPE` 也把它指向 `report.bigfive` —— 模板一旦缺失，用户请求就会
+   * 在 `getTemplateMeta('report.bigfive')` 处报 `50011`。
+   *
+   * 上面那批通用断言只能证明"模板们彼此自洽"，证明不了**这个键真的存在**，
+   * 也证明不了它的内容真的是大五而不是 MBTI 文案换个标题，因此单独钉住。
+   */
+  describe('大五报告模板（BIG_FIVE_REPORT）', () => {
+    const bigFive = (): (typeof PROMPT_TEMPLATES)[number] | undefined =>
+      PROMPT_TEMPLATES.find((template) => template.key === 'report.bigfive');
+
+    it('【关键】键名与 report.service.ts 的 TEMPLATE_KEY_BY_TYPE 一致（否则该报告类型开箱即 50011）', () => {
+      // `TEMPLATE_KEY_BY_TYPE` 未导出，这里按它当前的字面值断言：改动任一侧都会让这条断红
+      expect(bigFive()?.key).toBe('report.bigfive');
+      // `PromptType` 枚举里没有 BIG_FIVE_REPORT（理由见模板内的 ⚠ 注释），因此 type 只能借 MBTI_REPORT
+      expect(bigFive()?.type).toBe('MBTI_REPORT');
+    });
+
+    it('【关键】能用真实上下文渲染成功（占位符全有值、无残留）', () => {
+      const template = bigFive();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: template.systemPrompt, userPromptTemplate: template.userPromptTemplate },
+        buildReportContext(fullProfile()).variables,
+      );
+
+      expect(rendered.user).not.toContain('{{');
+      expect(rendered.system).not.toContain('{{');
+      expect(rendered.usedVariables.length).toBeGreaterThan(3);
+      // 五项的真实分数与档位确实进了 Prompt（不是只写了一句"请解读大五"就完事）
+      expect(rendered.user).toContain('开放性 84（高）');
+    });
+
+    it('【关键】内容真的围绕大五五个特质（不能是 MBTI 文案换个标题）', () => {
+      const template = bigFive();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      // 中文名直接取自上下文组装代码：改名会顶红这条断言，逼模板同步
+      // （与"占位符必须真实存在"是同一种跨模块约束）
+      for (const label of Object.values(BIG_FIVE_LABELS)) {
+        expect(template.systemPrompt).toContain(label);
+      }
+
+      // 且不引用任何 MBTI 专属变量：一旦引用，就说明这份报告是 MBTI 版换了个标题
+      const placeholders = placeholdersOf(template);
+      for (const mbtiOnly of ['mbtiType', 'mbtiTypeName', 'mbtiGroup', 'mbtiTagline', 'dimensionEI', 'mbtiStrengths']) {
+        expect(placeholders).not.toContain(mbtiOnly);
+      }
+      // 大五数据必须真的被引用（拿 MBTI 变量充数会在这里失败）
+      expect(placeholders).toContain('bigFiveSummary');
+    });
+
+    it('首段免费预览（用户先看到五项档位再决定付费）', () => {
+      expect(bigFive()?.sections[0]?.freePreview).toBe(true);
+    });
+
+    it('【关键】按提示词要求的标题生成的正文，能被分段解析器切回声明的段落键', () => {
+      const template = bigFive();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      // 模拟"模型严格按提示词里给定的标题输出"：标题取自模板声明，
+      // 而那批标题正是提示词里要求逐字使用的（两者由 buildSectionFormatInstruction 派生，不可能分叉）
+      const modelOutput = [
+        '这五项特质共同勾勒出一个稳健而好奇的你。',
+        ...template.sections.map((section) => `## ${section.title}\n这是「${section.title}」的正文。`),
+      ].join('\n');
+
+      const parsed = parseReportSections(modelOutput, readExpectedSections({ sections: template.sections }));
+
+      // 段落键必须逐个对上：对不上就会被塞进 `extra-{n}` 兜底键、付费段位与权益随之错位
+      expect(parsed.sections.map((section) => section.sectionKey)).toEqual(
+        template.sections.map((section) => section.key),
+      );
+      expect(parsed.extraSectionKeys).toEqual([]);
+      expect(parsed.droppedSectionKeys).toEqual([]);
+      // 免费预览长度必须 > 0，否则打开报告就是空的免费段
+      expect(parsed.freePreviewLength).toBeGreaterThan(0);
     });
   });
 

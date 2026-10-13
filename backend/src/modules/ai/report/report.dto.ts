@@ -58,6 +58,30 @@ export class CreateReportDto {
   @IsString()
   @Length(1, 36)
   sessionId?: string;
+
+  /**
+   * 关系（匹配）解读报告的 relationshipId —— **`type=RELATIONSHIP_REPORT` 时必填**
+   *
+   * 这个字段此前**不存在**，后果是：DTO 对外宣称支持 `RELATIONSHIP_REPORT`
+   * （`@ApiProperty({ enum: REPORT_TYPES })` 会把它渲染进 Swagger），
+   * 而 `report.service.ts` 的 `createRelationshipReport` 一进来就检查
+   * `input.relationshipId === undefined` → 抛 `400/10001`。
+   * 也就是说**这条分支永远是死代码**，任何人按 Swagger 调用都必然失败。
+   *
+   * 服务层那条路径本身是完整的（校验关系归属、`status='ACTIVE'`、必须有已成功的
+   * 算分报告），因此这里只补"把参数送进去"这一环，不改任何业务规则。
+   *
+   * 与其它 ID 参数同一处理：只校验 UUID **形状**、不校验版本
+   * （本仓库主键是 UUIDv7，`@IsUUID()` 会误杀，理由见 `uuid.util.ts`）。
+   */
+  @ApiPropertyOptional({
+    description: '关系 ID；`type=RELATIONSHIP_REPORT` 时必填（其余类型忽略）',
+    example: '0195f3a2-b24e-7a86-abf1-7dae4b5c6f45',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(UUID_SHAPE_PATTERN, { message: 'relationshipId 不是合法的 UUID' })
+  relationshipId?: string;
 }
 
 /**

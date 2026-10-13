@@ -10,7 +10,9 @@ import { RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 
 import { IS_PUBLIC_KEY } from '../../../common/decorators/public.decorator';
+import type { EntitlementService } from '../../membership/entitlement.service';
 import { ReportController } from './report.controller';
+import type { ReportService } from './report.service';
 
 const pathOf = (method: keyof ReportController): unknown =>
   Reflect.getMetadata(PATH_METADATA, ReportController.prototype[method]);
@@ -76,5 +78,78 @@ describe('ReportController 路由契约（API_DESIGN §3.5）', () => {
     );
 
     expect(handlerNames.sort()).toEqual(['createReport', 'getProgress', 'getReport', 'listReports']);
+  });
+});
+
+/**
+ * 创建报告的**参数透传**（契约 §3.5.1）
+ *
+ * 为什么必须单独测这一层：`relationshipId` 曾经**根本没出现在 DTO 里**，
+ * 于是 Swagger 按 `@ApiProperty({ enum: REPORT_TYPES })` 宣称支持
+ * `RELATIONSHIP_REPORT`，而服务层 `createRelationshipReport` 一进来就因
+ * `relationshipId === undefined` 抛 `400/10001` —— 那条完整的业务路径
+ * 成了**永远走不到的死代码**。
+ *
+ * 这类"参数在中间某一层被悄悄丢掉"的缺陷，编译器、路由元数据测试、
+ * 甚至服务层自己的单测（直接传参、绕过控制器）**都发现不了**，
+ * 只有断言控制器真实传给 Service 的入参才能守住。
+ */
+describe('ReportController.createReport 参数透传', () => {
+  const RELATIONSHIP_ID = '0195f3a2-b24e-7a86-abf1-7dae4b5c6f45';
+
+  const buildController = (): { controller: ReportController; createReport: jest.Mock } => {
+    const createReport = jest.fn().mockResolvedValue({ reportId: 'report-1' });
+
+    return {
+      controller: new ReportController(
+        { createReport } as unknown as ReportService,
+        {} as unknown as EntitlementService,
+      ),
+      createReport,
+    };
+  };
+
+  it('【关键】关系报告：relationshipId 必须被透传给 Service', async () => {
+    const { controller, createReport } = buildController();
+
+    await controller.createReport('user-1', {
+      type: 'RELATIONSHIP_REPORT',
+      relationshipId: RELATIONSHIP_ID,
+    });
+
+    expect(createReport).toHaveBeenCalledWith({
+      userId: 'user-1',
+      type: 'RELATIONSHIP_REPORT',
+      relationshipId: RELATIONSHIP_ID,
+    });
+  });
+
+  it('sessionId 与 relationshipId 可同时透传（互不覆盖）', async () => {
+    const { controller, createReport } = buildController();
+
+    await controller.createReport('user-1', {
+      type: 'RELATIONSHIP_REPORT',
+      sessionId: '0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12',
+      relationshipId: RELATIONSHIP_ID,
+    });
+
+    expect(createReport).toHaveBeenCalledWith({
+      userId: 'user-1',
+      type: 'RELATIONSHIP_REPORT',
+      sessionId: '0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12',
+      relationshipId: RELATIONSHIP_ID,
+    });
+  });
+
+  it('未传可选字段时**不产生该键**（Service 用 `=== undefined` 判断"关系报告缺关系 ID"）', async () => {
+    const { controller, createReport } = buildController();
+
+    await controller.createReport('user-1', { type: 'MBTI_REPORT' });
+
+    const payload = createReport.mock.calls[0]?.[0] as Record<string, unknown>;
+
+    expect(payload).toEqual({ userId: 'user-1', type: 'MBTI_REPORT' });
+    expect('relationshipId' in payload).toBe(false);
+    expect('sessionId' in payload).toBe(false);
   });
 });

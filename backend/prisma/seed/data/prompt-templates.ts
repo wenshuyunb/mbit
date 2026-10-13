@@ -129,6 +129,27 @@ const MBTI_REPORT_SECTIONS: SeedPromptSection[] = [
 ];
 
 /**
+ * 大五人格报告的段落声明（首段免费预览）
+ *
+ * 段落键与 `report.mbti` 是**同一种**约定：解析后写入 `report_sections.section_key`
+ * （见 `schema.prisma` 的 `ReportSection`），`ai_reports` 本身只存整篇 `content` 与计数。
+ * 因此这里可以自由起键，只要满足 `[a-z][a-z0-9_]*` 且 ≤ 48 字符 ——
+ * `report.relationship` 那条「段落键必须是 `compatibility_reports` 的真实列」的约束
+ * 只适用于关系报告（它把三段直接映射到三个 JsonB 列），**不要照搬到个人报告上**。
+ *
+ * 为什么是四段而不是 MBTI 的三段：大五有五个特质要逐项交代，
+ * 「概览 + 优势 + 张力 + 建议」压进三段会让每段都被迫覆盖五项、反而写不具体。
+ *
+ * 首段免费预览：先让用户看到"我的五项特质分别在哪一档"，再决定是否付费看解读与建议。
+ */
+const BIG_FIVE_REPORT_SECTIONS: SeedPromptSection[] = [
+  { key: 'trait_overview', title: '五维特质概览', freePreview: true },
+  { key: 'trait_strengths', title: '特质优势', freePreview: false },
+  { key: 'trait_tensions', title: '需要留意的张力', freePreview: false },
+  { key: 'growth_advice', title: '成长建议', freePreview: false },
+];
+
+/**
  * 关系（匹配）报告的段落声明
  *
  * 段落键与 `compatibility_reports` 表的列**一一对应**
@@ -185,6 +206,105 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     temperature: 0.6,
     maxTokens: 2048,
     changeNote: '首个版本：3 段式个人报告，首段免费预览',
+  },
+  {
+    /**
+     * ⚠ **键名必须是 `report.bigfive`**：`report.service.ts` 的 `TEMPLATE_KEY_BY_TYPE`
+     * 把 `BIG_FIVE_REPORT` 指向它（`report.bigfive`），而 `BIG_FIVE_REPORT` 是
+     * `report.dto.ts` 里明示支持的枚举值 —— 模板缺失时用户请求大五报告必然
+     * 在 `getTemplateMeta('report.bigfive')` 处报 `50011 AI_PROMPT_TEMPLATE_NOT_FOUND`。
+     */
+    key: 'report.bigfive',
+    name: '大五人格深度报告',
+    /**
+     * ⚠ `type` 只能取 Prisma `PromptType` 枚举里**已有**的取值 —— 枚举里没有 `BIG_FIVE_REPORT`：
+     *   · `schema.prisma` 的 `PromptType` 与迁移 `20260214000000_init` 的 `prompt_type`
+     *     都只有 MBTI_REPORT / RELATIONSHIP_REPORT / AI_COMPANION / EMOTION_ANALYSIS / SYSTEM_SAFETY；
+     *   · 写 `'BIG_FIVE_REPORT'` 是**两处硬失败**：TS 上不属于 `PromptType`，
+     *     落库时 Postgres 也会以"枚举无此取值"拒绝 —— 那会让**整个种子脚本**中断，
+     *     而不只是少种一个模板（比现状更糟）。
+     *
+     * 好在它**不影响报告生成**：模板只按 `key` 查找（`prompt.service.ts` 的 `loadTemplate`
+     * 条件为 `{ key, isActive: true, deletedAt: null }`），`type` 只用于后台列表的筛选与展示
+     * （`admin/prompt/prompt.service.ts` 的 `PROMPT_TYPE_NAMES`）。
+     * 因此这里暂借语义最近的 `MBTI_REPORT`（后台"个人报告"那一档），
+     * 代价是后台按类型筛选时它会和 MBTI 模板混在一起 ——
+     * 要彻底修掉需要给 `prompt_type` 增加枚举值并配迁移（超出本次改动范围，见交付说明）。
+     */
+    type: 'MBTI_REPORT',
+    description:
+      '基于大五（Big Five / OCEAN）五维特质分数生成个人深度解读报告（4 段：五维特质概览 / 特质优势 / 需要留意的张力 / 成长建议）',
+    version: 1,
+    /**
+     * 与 MBTI 报告共用 `REPORT_SYSTEM_GUARDRAILS`（不得重新算分 / 禁止临床用语 / 不用绝对化断言），
+     * 再补五条大五专属要求。其中第 9 条（数值方向）**必须写**：
+     * 上下文里那一项的中文名是「情绪稳定性」（`BIG_FIVE_LABELS` 把 `neuroticism` 标成它），
+     * 但数值是量表上 **NEUROTICISM（神经质）** 的原始得分、引擎不翻转方向
+     * （`personality-engine.service.spec.ts`：「反向题选 5 → 情绪稳定性高 → 神经质得分为 0」）。
+     * 不写清方向，模型会把高分写成"情绪更稳定"，正好把结论说反。
+     */
+    systemPrompt: [
+      REPORT_SYSTEM_GUARDRAILS,
+      '',
+      '本次任务补充要求：',
+      '7. 本次解读的唯一人格框架是**大五（Big Five / OCEAN）**：开放性、尽责性、外向性、宜人性、情绪稳定性。',
+      '   不要引入 MBTI 四字母类型、九型、星座等任何其他框架来解释用户 —— 本次数据里没有它们，混用会让同一份报告里出现互相矛盾的结论。',
+      '8. 五个特质是**连续的频谱**，不是类型标签：不要写「你是 XX 型」，也不要把五项二分成「高分组 / 低分组」；',
+      '   一律用「在某项上偏高分 / 偏低分」这类连续表述。',
+      '9. **数值方向**：数据里「情绪稳定性」一项的数值取自量表上**神经质**维度的原始计分 ——',
+      '   数值越高表示情绪反应越强烈、越容易紧张，数值越低表示情绪越平稳；不要把它当成「越高越稳定」来解读。其余四项数值越高即该特质越明显。',
+      '10. 特质本身没有好坏：每一项都要写清「在什么情境下是资源、在什么情境下会付出代价」，不要只写好处，也不要只拿低分项说问题。',
+      '11. 若「大五特质」一栏是「（本次测评未包含此项）」，说明本次没有可解读的大五数据：',
+      '    直接说明该项无法解读，不要编造任何特质分数、档位或行为表现。',
+    ].join('\n'),
+    /**
+     * 变量只允许取自 `report-context.builder.ts` 的 `buildReportContext()`（与 `report.mbti` 同族）：
+     * `{{bigFiveSummary}}`（五项中文名 + 分数 + 档位，本次报告的**唯一分数来源**）、
+     * `{{consistencyScore}}` `{{completionRate}}` `{{avgResponseSeconds}}` `{{answeredRatio}}`
+     * `{{testDefinitionCode}}`（数据质量与来源）、
+     * `{{attachmentStyle}}` `{{loveLanguages}}` `{{conflictStyle}}`（由大五经
+     * `resolveRelationshipStyle()` 派生的关系风格，只作旁证）。
+     *
+     * 刻意**不引用任何 MBTI 变量**（`{{mbtiType}}` / `{{dimensionEI}}` / `{{mbtiStrengths}}` …）：
+     * 大五报告只从大五分派生的关系风格取旁证，把 MBTI 类型喂进来就会写成"MBTI 文案换个标题"。
+     * 注意上下文里**没有**逐维度的开放/尽责/外向/宜人/神经质变量，五项只能经 `{{bigFiveSummary}}` 一次性给出，
+     * 因此模板改为要求模型"按 `{{bigFiveSummary}}` 里逐项列出的档位解读"，而不是自己发明变量名。
+     */
+    userPromptTemplate: [
+      '请为下面这位用户撰写**大五人格（Big Five / OCEAN）**深度解读报告。',
+      '',
+      '## 用户的大五特质数据（本次报告的分数来源，共五项）',
+      '{{bigFiveSummary}}',
+      '',
+      '## 数据质量（影响你解读时的确信程度）',
+      '- 作答一致性：{{consistencyScore}}',
+      '- 完成率：{{completionRate}}%',
+      '- 平均作答耗时：{{avgResponseSeconds}} 秒/题',
+      '- 作答题数：{{answeredRatio}}',
+      '- 用户最近一次测评使用的量表：{{testDefinitionCode}}（可能不是大五量表，仅作背景，不要据此展开别的框架）',
+      '',
+      '## 由大五分派生的关系风格（只作旁证，不要展开成报告主线）',
+      '- 依恋风格：{{attachmentStyle}}',
+      '- 偏好的爱的语言：{{loveLanguages}}',
+      '- 冲突处理风格：{{conflictStyle}}',
+      '',
+      buildSectionFormatInstruction(BIG_FIVE_REPORT_SECTIONS),
+      '',
+      '「五维特质概览」：把五个特质各自的档位（高／偏高／中等／偏低／低）逐项点出来，再给一句整体印象；五项一个都不能漏，也不要只挑高分项写。',
+      '「特质优势」：选分数较高的两三特质，写它们在具体情境里带来的便利（用行为举例，不要堆形容词）。',
+      '「需要留意的张力」：写分数偏低的特质，以及两项方向相反时产生的内在拉扯（例如高开放性同时低尽责性意味着什么）；只描述现象与代价，不评判好坏。',
+      '「成长建议」：针对上面提到的每一处张力各给一条可执行的小行动，并说明这条行动为什么对这个分数组合有效。',
+      '',
+      '（本报告的段落数与标题都是固定的，不要自行增删段落或改动标题措辞。）',
+    ].join('\n'),
+    sections: BIG_FIVE_REPORT_SECTIONS,
+    // 与 MBTI 报告同为个人解读：0.6 保留措辞上的自然变化，同时贴着给定的分数与档位；
+    // 再高就会滑向"星座式"的空泛套话（那是大五解读最容易掉进去的坑）
+    temperature: 0.6,
+    // 四段 × 150–300 字，与关系报告同档；低于此值容易把最后一段截断
+    maxTokens: 2560,
+    changeNote:
+      '首个版本：4 段式大五特质报告，首段免费预览（补上 BIG_FIVE_REPORT 此前缺失的模板，该报告类型此前一请求即报 50011）',
   },
   {
     key: 'report.relationship',
