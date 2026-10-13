@@ -43,8 +43,20 @@ export const generateOrderNo = (now: Date): string => {
 /** 订单号是否合法（用于按订单号查询时的边界校验） */
 export const isValidOrderNo = (orderNo: string): boolean => /^SM\d{18}$/.test(orderNo);
 
-/** 订单有效期（分钟）—— 契约 §3.7：15 分钟内未支付则关单 */
-export const ORDER_TTL_MINUTES = 15;
+/**
+ * 订单有效期（分钟）—— **兜底值**，契约 §3.9.2 规则 5 与 `/system/config` 都是 30
+ *
+ * ⚠ 这里原先是 **15**，且注释引用的是不存在的「契约 §3.7」（§3.7 是 AI 助手章）——
+ * 于是出现三方不一致：契约三处（§3.9.2 规则 5、§3.9 时序图、下单接口说明）都写
+ * `expiredAt = createdAt + 30min`，`/system/config` 的
+ * `featuresExplain.FEATURE_PAYMENT.orderExpireMinutes` 也按 30 下发，
+ * 只有真正的关单行为按 15 分钟执行 —— 运营在后台看到 30、实际 15。
+ *
+ * **后续改进（未做）**：彻底的做法是让这里读 `payment.orderExpireMinutes` 配置
+ * （与 `/system/config` 同源），否则运营把配置改成 45 分钟时行为仍停在常量上，
+ * 同类不一致会再次出现。当前先对齐数值。
+ */
+export const ORDER_TTL_MINUTES = 30;
 
 /** 计算订单过期时间 */
 export const orderExpiresAt = (now: Date, ttlMinutes = ORDER_TTL_MINUTES): Date =>

@@ -53,7 +53,7 @@ export class PaymentController {
       '返回的 `payment` 可直接交给 `wx.requestPayment`。若为 `null`，说明**预支付失败**',
       '（订单已创建，可稍后重试拉起支付）—— 微信侧抖动不该让用户「什么都没发生」。',
       '',
-      '订单 15 分钟未支付将关单。',
+      '订单 30 分钟未支付将关单。',
     ].join('\n'),
   })
   @ApiResponse({ status: 201, description: '订单已创建，返回订单号、金额与支付参数' })

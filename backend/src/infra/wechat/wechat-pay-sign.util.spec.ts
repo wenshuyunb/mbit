@@ -134,9 +134,11 @@ describe('generateOrderNo', () => {
 });
 
 describe('orderExpiresAt', () => {
-  it('默认 15 分钟', () => {
-    expect(ORDER_TTL_MINUTES).toBe(15);
-    expect(orderExpiresAt(NOW).toISOString()).toBe('2026-10-10T12:15:00.000Z');
+  it('默认 30 分钟（契约 §3.9.2 规则 5 与 /system/config 下发值一致）', () => {
+    // 这条断言原先写 15，记录的是实现与契约/配置不一致的状态；
+    // 现在三方对齐为 30，断言同步收紧
+    expect(ORDER_TTL_MINUTES).toBe(30);
+    expect(orderExpiresAt(NOW).toISOString()).toBe('2026-10-10T12:30:00.000Z');
   });
 });
 

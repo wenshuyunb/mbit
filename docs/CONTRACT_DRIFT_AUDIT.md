@@ -38,11 +38,20 @@
 ## 1. 实现内部自相矛盾（**建议优先修，需改代码**）
 
 1. **订单过期时间：配置说 30 分钟，实现按 15 分钟关单**。
-   `backend/src/modules/payment/order.util.ts` 的 `ORDER_TTL_MINUTES = 15`，
-   而 `/system/config` 下发的 `featuresExplain.FEATURE_PAYMENT.orderExpireMinutes` 是 **30**
-   （`system-config.catalog.ts` / `configuration.ts`），契约 §3.9.2 规则 5 也写 30 分钟。
-   **危害**：前端文案告诉用户"还有 30 分钟"，而用户在第 15–30 分钟支付会撞上已关单 ——
-   这是**能收到投诉**的那一类缺陷（付了钱但订单已关）。二选一：把 TTL 改成 30，或把配置改回 15 并同步契约。
+   ✅ **已修（2026-10-13）**：`ORDER_TTL_MINUTES` 原为 **15**，且注释引用的是不存在的
+   「契约 §3.7」（§3.7 是 AI 助手章）；而契约**三处**（§3.9.2 规则 5、§3.9 时序图、
+   下单接口说明）都写 `expiredAt = createdAt + 30min`，`/system/config` 的
+   `FEATURE_PAYMENT.orderExpireMinutes` 也按 **30** 下发 —— 运营在后台看到 30，实际按 15 关单。
+   已对齐为 30，并同步修正 3 处引用（Swagger 描述、`order-query.service.ts` 注释、
+   `wechat-pay-sign.util.spec.ts` 里把 15 固定下来的那条断言）。
+
+   > ⚠ **严重度更正**：我最初写成"用户看到 30 分钟、第 20 分钟支付被拒"的投诉级缺陷，
+   > **复核后判定说重了** —— 小程序并不消费 `orderExpireMinutes`，用的是下单响应里的真实
+   > `expiresAt`（`api/order.ts`），倒计时是准的。真实危害是**配置/文档与实际行为不一致**
+   > （会误导运营与后续客户端），而非"用户被坑"。
+   >
+   > **仍未做的更彻底修法**：让 `orderExpiresAt` 直接读 `payment.orderExpireMinutes`
+   > （与 `/system/config` 同源）。否则运营把配置改成 45 分钟后行为仍停在常量上，同类不一致会再次出现。
 
 2. **错误码 `50008` 一码两义**。契约 §3.7.5 用它表示"危险内容拦截（HTTP 200 + 关怀文案）"，
    而 `error-code.ts` 的 `50008 = AI_CONVERSATION_NOT_FOUND`（会话不存在，404）。
