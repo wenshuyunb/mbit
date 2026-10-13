@@ -165,38 +165,71 @@ export class PaymentService {
 
     const orderNo = await this.createUniqueOrderNo(now);
 
-    const order = await this.prisma.order.create({
-      data: {
-        orderNo,
-        userId: input.userId,
-        productId: product.id,
-        productType: product.type,
-        productSnapshot: buildProductSnapshot(
-          {
-            productId: product.id,
-            code: product.code,
-            name: product.name,
-            priceAmount: product.priceAmount,
-            productType: product.type,
-            durationDays: product.durationDays,
-          },
-          now,
-        ) as never,
-        totalAmount: product.priceAmount,
-        currency: 'CNY',
-        status: 'CREATED',
-        expiredAt: orderExpiresAt(now),
-        clientIp: normalizeClientIp(input.clientIp),
-        idempotencyKey: generateOrderIdempotencyKey(),
-        ...(input.reportId !== undefined ? { relatedReportId: input.reportId } : {}),
-        ...(input.relationshipId !== undefined ? { relatedRelationshipId: input.relationshipId } : {}),
-      },
-      select: { id: true, orderNo: true, totalAmount: true, currency: true, expiredAt: true },
+    /**
+     * 订单与支付单**必须在同一事务内创建**
+     *
+     * 支付单（`status = INIT`）是这条资金链路的锚点：`refunds.payment_id` 是**非空外键**，
+     * 没有支付单行就根本建不出退款记录；对账任务也需要靠它把微信侧的 `out_trade_no`
+     * 与本地订单对上。此前下单只拿到 `prepayId` 就结束，**没有任何代码写入 `payments`**，
+     * 于是退款只能靠 `ensurePayment` 事后补建（见 `syncPaymentRow` 的注释）。
+     *
+     * 放在同一事务里而不是"订单建完再补一行"：后者在中间失败时会留下
+     * **一个没有支付单的订单**，而它恰恰是退款建不出来的那种订单 ——
+     * 这正是本改动要消灭的状态。
+     */
+    const order = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.order.create({
+        data: {
+          orderNo,
+          userId: input.userId,
+          productId: product.id,
+          productType: product.type,
+          productSnapshot: buildProductSnapshot(
+            {
+              productId: product.id,
+              code: product.code,
+              name: product.name,
+              priceAmount: product.priceAmount,
+              productType: product.type,
+              durationDays: product.durationDays,
+            },
+            now,
+          ) as never,
+          totalAmount: product.priceAmount,
+          currency: 'CNY',
+          status: 'CREATED',
+          expiredAt: orderExpiresAt(now),
+          clientIp: normalizeClientIp(input.clientIp),
+          idempotencyKey: generateOrderIdempotencyKey(),
+          ...(input.reportId !== undefined ? { relatedReportId: input.reportId } : {}),
+          ...(input.relationshipId !== undefined ? { relatedRelationshipId: input.relationshipId } : {}),
+        },
+        select: { id: true, orderNo: true, totalAmount: true, currency: true, expiredAt: true },
+      });
+
+      await tx.payment.create({
+        data: {
+          orderId: created.id,
+          userId: input.userId,
+          // 微信侧的 `out_trade_no` 就是它，天然唯一 —— 对账与退款都按它关联
+          outTradeNo: created.orderNo,
+          channel: 'WECHAT_JSAPI',
+          status: 'INIT',
+          amount: created.totalAmount,
+          currency: created.currency,
+        },
+        select: { id: true },
+      });
+
+      return created;
     });
 
     this.logger.log(`订单已创建 orderNo=${order.orderNo} amount=${order.totalAmount} userId=${input.userId}`);
 
     const payment = await this.tryPrepay(order.orderNo, order.totalAmount);
+
+    // 预支付单号回填：出问题时运维能拿它直接去微信侧查这笔单，而不是只能凭 out_trade_no 猜
+    await this.attachPrepayId(order.orderNo, payment.prepayId);
 
     return {
       orderId: order.id,
@@ -234,22 +267,46 @@ export class PaymentService {
    * 尝试获取预支付单
    *
    * 失败**不抛错**：订单已经落库，微信侧抖动不该让用户"什么都没发生"。
+   * 同时把 `prepayId` 一并返回：它要回填到支付单上，供运维直接去微信侧查这笔单。
    */
   private async tryPrepay(
     orderNo: string,
     amount: number,
-  ): Promise<{ params: OrderCreatedView['payment']; reason?: string }> {
+  ): Promise<{ params: OrderCreatedView['payment']; reason?: string; prepayId?: string }> {
     try {
       const prepay = await this.wechatPay.createJsapiPrepay({ orderNo, amount, description: 'SoulMap AI' });
 
       // 签名需要商户私钥，而私钥只存在于 WechatPayService 内部 ——
       // 因此由它构造支付参数，本服务只负责编排
-      return { params: this.wechatPay.buildMiniAppPayParams(prepay.prepayId) };
+      return { params: this.wechatPay.buildMiniAppPayParams(prepay.prepayId), prepayId: prepay.prepayId };
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知错误';
       this.logger.warn(`预支付失败（订单已创建，可稍后重试拉起支付）orderNo=${orderNo}: ${message}`);
 
       return { params: null, reason: '预支付暂时不可用，请稍后重试' };
+    }
+  }
+
+  /**
+   * 把预支付单号回填到支付单
+   *
+   * 失败**只记日志**：订单与支付单都已落库，回填一个诊断字段不该让下单失败。
+   * 没有 `prepayId` 时（预支付失败）直接跳过 —— 支付单保持 `INIT`，
+   * 与"用户尚未拉起支付"的事实一致。
+   */
+  private async attachPrepayId(orderNo: string, prepayId: string | undefined): Promise<void> {
+    if (prepayId === undefined) return;
+
+    try {
+      await this.prisma.payment.update({
+        where: { outTradeNo: orderNo },
+        data: { prepayId },
+        select: { id: true },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `回填 prepayId 失败 orderNo=${orderNo}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -467,16 +524,18 @@ export class PaymentService {
   /**
    * 同步支付单行（回调与补偿共用）
    *
-   * ## 为什么要在这里"补建"支付单
+   * ## 正常情况下这里是**更新**，不是补建
    *
-   * 当前仓库里**没有任何代码写入 `payments` 表**（下单只拿到 `prepayId` 就结束）。
-   * 而 `refunds.payment_id` 是非空外键，没有支付单行就**无法创建退款记录** ——
-   * 于是「用户付了钱要退款」会直接失败。
+   * 下单时已在同一事务里创建了 `status = INIT` 的支付单（见 `createOrder`），
+   * 因此回调走到这里时行已经存在，本方法把它推进到 `SUCCESS` 并记下
+   * `transactionId` / `successTime` / `notifyReceivedAt`。
    *
-   * 这里采取「有则更新、无则补建」：补建行的 `outTradeNo = orderNo`（微信侧的
-   * `out_trade_no` 就是它，天然唯一），金额取本地订单的实付额。
-   * 这是**兜底**，不是设计意图；正确做法是下单时创建 `INIT` 支付单、回调时更新它
-   * （已列入交付简报的待接线清单）。
+   * ## 那"补建"分支为什么还留着
+   *
+   * 它服务于**历史数据与异常路径**：在 INIT 行落地之前创建的订单没有支付单，
+   * 而回调仍可能到来（微信会重投）；另外 `outTradeNo` 唯一约束之外没有别的锚点，
+   * 补建行（`outTradeNo = orderNo`，微信侧的 `out_trade_no` 就是它）能让这些订单
+   * 也能退款。**不要**因为它看起来多余而删掉：删掉等于让改动前创建的订单永久无法退款。
    */
   private async syncPaymentRow(
     client: Pick<PrismaService, 'payment'>,

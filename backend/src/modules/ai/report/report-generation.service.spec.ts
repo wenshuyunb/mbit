@@ -78,7 +78,7 @@ interface Harness {
   service: ReportGenerationService;
   prisma: {
     aiReport: { findUnique: jest.Mock; update: jest.Mock };
-    personalityProfile: { findFirst: jest.Mock };
+    personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock };
     testSession: { findFirst: jest.Mock };
     reportSection: { deleteMany: jest.Mock; createMany: jest.Mock };
     aiUsageLog: { create: jest.Mock };
@@ -123,7 +123,11 @@ const createHarness = (): Harness => {
       }),
       update: jest.fn().mockResolvedValue({ id: REPORT_ID }),
     },
-    personalityProfile: { findFirst: jest.fn().mockResolvedValue(profile()) },
+    personalityProfile: {
+      findFirst: jest.fn().mockResolvedValue(profile()),
+      // 成长回顾报告用：默认给两版（够用），各用例按需覆盖
+      findMany: jest.fn().mockResolvedValue([profile()]),
+    },
     testSession: {
       findFirst: jest.fn().mockResolvedValue({
         definitionCode: 'MBTI_LITE',
@@ -283,6 +287,84 @@ describe('ReportGenerationService.runGeneration', () => {
         const title = String(lastReportUpdate(harness).title);
         expect(title).toBe('人格深度报告');
         expect(title).not.toContain('本次测评未包含此项');
+      });
+    });
+
+    /**
+     * 成长回顾报告走**版本序列**路径
+     *
+     * 它与个人报告的关键差别就是"读几版画像"：`ai_reports` 存不下版本列表，
+     * 因此序列由锚定画像的版本号**确定性推导**（锚定版本及其之前的最近 N 版）。
+     * 这里既断言取数条件，也断言**真的把跨版本变量喂给了模型** ——
+     * 成长报告的价值全在对比，只用最新一版等于换个标题的个人报告。
+     */
+    describe('成长回顾报告（GROWTH_SUMMARY）', () => {
+      /** 三版画像：开放性 62 → 70 → 78，类型在第 3 版发生变化 */
+      const versions = [
+        { ...profile(), id: 'profile-v1', version: 1, createdAt: new Date('2026-01-05T02:00:00.000Z'), openness: 62 },
+        { ...profile(), id: 'profile-v2', version: 2, createdAt: new Date('2026-03-18T02:00:00.000Z'), openness: 70 },
+        { ...profile(), id: PROFILE_ID, version: 3, createdAt: new Date('2026-06-20T02:00:00.000Z'), openness: 78 },
+      ];
+
+      const setUp = async (harness: Harness): Promise<void> => {
+        const base = (await harness.prisma.aiReport.findUnique()) as Record<string, unknown>;
+        harness.prisma.aiReport.findUnique.mockResolvedValue({
+          ...base,
+          type: 'GROWTH_SUMMARY',
+          promptTemplateKey: 'report.growth',
+        });
+        // 锚定画像 = 最新一版（实现只取它的 version 作为序列上界）
+        harness.prisma.personalityProfile.findFirst.mockResolvedValue({ id: PROFILE_ID, version: 3 });
+        // 序列查询按版本**降序**返回（与实现的 orderBy 一致），实现再反转成升序
+        harness.prisma.personalityProfile.findMany.mockResolvedValue([...versions].reverse());
+      };
+
+      it('【关键】按"锚定版本及之前"取序列（降序取最近 12 版，再由实现反转成升序）', async () => {
+        const harness = createHarness();
+        await setUp(harness);
+
+        await harness.service.runGeneration(REPORT_ID);
+
+        expect(harness.prisma.personalityProfile.findMany).toHaveBeenCalledWith({
+          where: { userId: USER_ID, deletedAt: null, version: { lte: 3 } },
+          orderBy: { version: 'desc' },
+          take: 12,
+          // `createdAt` 是成长报告排时间线必需的字段，漏了它只能写"未知日期"
+          select: expect.objectContaining({ id: true, version: true, createdAt: true }),
+        });
+      });
+
+      it('【关键】喂给模型的是跨版本变量（只用最新一版就等于换了标题的个人报告）', async () => {
+        const harness = createHarness();
+        await setUp(harness);
+
+        await harness.service.runGeneration(REPORT_ID);
+
+        const variables = harness.prompts.getPrompt.mock.calls[0]?.[1] as Record<string, string>;
+
+        expect(variables['profileCount']).toBe('3');
+        // v1 的 62 到 v3 的 78
+        expect(variables['growthTimeline']).toContain('v1');
+        expect(variables['scoreDeltas']).toContain('+16');
+      });
+
+      it('标题带上版本数（列表页一眼看出这份报告基于几次测评）', async () => {
+        const harness = createHarness();
+        await setUp(harness);
+
+        await harness.service.runGeneration(REPORT_ID);
+
+        expect(lastReportUpdate(harness).title).toBe('成长回顾报告（近 3 次测评）');
+      });
+
+      it('锚定画像不存在时明确报错（不静默退回"用户的某一份画像"）', async () => {
+        const harness = createHarness();
+        await setUp(harness);
+        harness.prisma.personalityProfile.findFirst.mockResolvedValue(null);
+
+        await expect(harness.service.runGeneration(REPORT_ID)).rejects.toMatchObject({
+          code: ErrorCode.PERSONALITY_PROFILE_NOT_FOUND,
+        });
       });
     });
 

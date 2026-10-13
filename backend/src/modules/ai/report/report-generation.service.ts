@@ -25,6 +25,7 @@ import { Prisma } from '@prisma/client';
 import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
+import { buildGrowthReportContext, type GrowthProfileSnapshot } from '../context/growth-report-context.builder';
 import {
   buildReportContext,
   UNAVAILABLE_PLACEHOLDER,
@@ -47,7 +48,7 @@ import type { LlmCompletionResult } from '../provider/llm-provider.types';
 import { PromptService, type ResolvedPrompt } from '../prompt/prompt.service';
 import { ReportGenerationOptionsService, type ReportGenerationOptions } from './report-generation-options.service';
 import { ReportLiveProgressService } from './report-live-progress.service';
-import { reportTypeName } from './report-list.util';
+import { reportTypeName, GROWTH_MAX_PROFILES } from './report-list.util';
 import { STAGE_PROGRESS } from './report-stream.util';
 import { parseReportSections, readExpectedSections } from './report-section.parser';
 
@@ -75,6 +76,8 @@ const PROFILE_SELECT = {
   id: true,
   version: true,
   engineVersion: true,
+  /** 成长回顾报告要按版本排时间线，缺它就只能写"未知日期" */
+  createdAt: true,
   mbtiType: true,
   mbtiConfidence: true,
   eiPercent: true,
@@ -156,6 +159,18 @@ export class ReportGenerationService {
      */
     const isRelationshipReport = typeof report.relationshipId === 'string';
 
+    /**
+     * 是否为成长回顾报告
+     *
+     * 它的上下文是**画像版本序列**（锚定画像及其之前的各版），与个人报告的
+     * "单份画像"不同源，因此必须走单独的组装路径。
+     * `ai_reports` 只存得下**一个** `profileId`（没有版本列表列），所以序列
+     * 由"锚定画像的 version 及其之前"在生成时**确定性推导**出来 ——
+     * 历史画像行是不可变的，锚定画像的版本号又是固定的上界，
+     * 因此同一份报告无论生成几次、隔多久生成，取到的序列都一样。
+     */
+    const isGrowthReport = report.type === 'GROWTH_SUMMARY';
+
     if (!isRelationshipReport && report.profileId === null) {
       throw new BusinessException(ErrorCode.PERSONALITY_PROFILE_NOT_FOUND, '报告缺少关联画像');
     }
@@ -188,6 +203,10 @@ export class ReportGenerationService {
 
     // 重新推导上下文与 Prompt：3c 的确定性让"重新推导"必然等于首次推导，
     // 因此无需把变量快照落库（少一份可能与画像脱节的数据）
+    //
+    // 三条取数路径**刻意分开写**而不是塞进一个函数：关系报告读"关系 + 双方画像 +
+    // 算分报告"，成长报告读"画像版本序列"，个人报告读"单份画像 + 最近会话"——
+    // 合成一个函数后"这次到底读了哪些表"就会埋在条件里，读代码时看不出来。
     const prepared = isRelationshipReport
       ? await this.prepareForRelationship(
           report.userId,
@@ -195,13 +214,20 @@ export class ReportGenerationService {
           report.promptTemplateKey,
           options ?? {},
         )
-      : await this.prepare(
-          report.userId,
-          report.profileId as string,
-          report.promptTemplateKey,
-          report.type,
-          options ?? {},
-        );
+      : isGrowthReport
+        ? await this.prepareForGrowth(
+            report.userId,
+            report.profileId as string,
+            report.promptTemplateKey,
+            options ?? {},
+          )
+        : await this.prepare(
+            report.userId,
+            report.profileId as string,
+            report.promptTemplateKey,
+            report.type,
+            options ?? {},
+          );
 
     // 阶段②：Prompt 已渲染完成（`prepare*` 内部已调用模板渲染）
     await this.publishLiveProgress(reportId, report.userId, {
@@ -393,6 +419,57 @@ export class ReportGenerationService {
     const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
 
     return { prompt, title: buildPersonalReportTitle(reportType, variables).slice(0, 128) };
+  }
+
+  /**
+   * 读取画像**版本序列**并渲染 Prompt（成长回顾报告）
+   *
+   * ## 序列是怎么定出来的（`ai_reports` 存不下版本列表）
+   *
+   * 表上只有一个 `profileId`，没有"这次报告用了哪几版"的列。因此序列由**锚定画像**
+   * 确定性推导：**锚定版本及其之前的最近 N 版**（升序）。
+   * 之所以可靠：① 历史画像行是不可变的（每版一行，`version` 单调递增）；
+   * ② 锚定画像的版本号是固定的上界，之后新增的版本都 > 它，不会被卷进来。
+   * 于是同一份报告无论何时重算，取到的序列都一样（ADR-005 的可复现要求）。
+   *
+   * ## 为什么不改成"再用一次最新画像"
+   *
+   * 那会让报告内容随用户后续测评而变 —— 同一份报告读两次不同，
+   * 而"重新生成"路径正是靠"重新推导必然等于首次推导"才敢不落变量快照。
+   */
+  private async prepareForGrowth(
+    userId: string,
+    anchorProfileId: string,
+    templateKey: string,
+    options: ReportGenerationOptions = {},
+  ): Promise<{ prompt: ResolvedPrompt; title: string }> {
+    const anchor = await this.prisma.personalityProfile.findFirst({
+      where: { id: anchorProfileId, userId, deletedAt: null },
+      select: { version: true },
+    });
+
+    if (anchor === null) {
+      throw new BusinessException(ErrorCode.PERSONALITY_PROFILE_NOT_FOUND, '报告绑定的画像已不存在');
+    }
+
+    // `desc + take` 取"锚定版本及之前"的最近 N 版，再反转成升序交给 builder
+    // （builder 明确要求升序并取最后一版为"最新"，排序职责不分散到两处）
+    const rows = await this.prisma.personalityProfile.findMany({
+      where: { userId, deletedAt: null, version: { lte: anchor.version } },
+      orderBy: { version: 'desc' },
+      take: GROWTH_MAX_PROFILES,
+      select: PROFILE_SELECT,
+    });
+
+    const profiles = [...rows].reverse().map(toGrowthSnapshot);
+    const { variables } = buildGrowthReportContext({ profiles });
+    const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
+
+    return {
+      prompt,
+      // 带上版本数：用户在列表页一眼能看出"这份报告基于几次测评"
+      title: `${reportTypeName('GROWTH_SUMMARY')}（近 ${profiles.length} 次测评）`.slice(0, 128),
+    };
   }
 
   /**
@@ -641,6 +718,46 @@ const mergeGenerationOptions = (
   ...variables,
   ...(options.tone !== undefined ? { tone: options.tone } : {}),
   ...(options.focus !== undefined ? { focus: options.focus } : {}),
+});
+
+/**
+ * 画像行 → 成长报告的一版快照
+ *
+ * `testDefinitionCode` / `answeredCount` / `questionCount` 逐版**取不到**：
+ * 它们属于该版画像对应的那次测评会话，而 `personality_profiles` 与 `test_sessions`
+ * 之间没有能按版本 join 的外键（现有单画像路径取的是"最近一次会话"，把它复用到每一版
+ * 会让所有版本都显示同一个量表 —— 那是**编造**）。
+ * 因此这里逐版传 `null`：builder 会把它记成字段级缺项、`dataQualityText` 相应变短，
+ * 提示词里也明确告诉模型"这项本次没有"，而不是让它看见一个假的量表名。
+ */
+const toGrowthSnapshot = (row: {
+  version: number;
+  createdAt: Date;
+  mbtiType: string | null;
+  openness: number | null;
+  conscientiousness: number | null;
+  extraversion: number | null;
+  agreeableness: number | null;
+  neuroticism: number | null;
+  consistencyScore: number | null;
+  completionRate: number | null;
+  avgResponseMs: number | null;
+}): GrowthProfileSnapshot => ({
+  version: row.version,
+  // builder 只做字符串切片取日期，不做时区换算（见其文件头），因此这里给 UTC ISO
+  createdAt: row.createdAt.toISOString(),
+  mbtiType: row.mbtiType,
+  openness: row.openness,
+  conscientiousness: row.conscientiousness,
+  extraversion: row.extraversion,
+  agreeableness: row.agreeableness,
+  neuroticism: row.neuroticism,
+  consistencyScore: row.consistencyScore,
+  completionRate: row.completionRate,
+  avgResponseMs: row.avgResponseMs,
+  answeredCount: null,
+  questionCount: null,
+  testDefinitionCode: null,
 });
 
 /**

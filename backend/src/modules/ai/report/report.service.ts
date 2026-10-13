@@ -25,6 +25,8 @@ import { assertHasReadableSection, buildSectionViews, summarizeVisibility } from
 import {
   ACTIVE_REPORT_STATUSES,
   DEFAULT_PAGE_SIZE,
+  GROWTH_MAX_PROFILES,
+  GROWTH_MIN_PROFILES,
   buildListSummary,
   buildPreviewText,
   computeFreePreviewRatio,
@@ -209,11 +211,32 @@ export class ReportService {
     // 只取模板版本与模型元信息（不渲染，因此无需变量）—— 二者都是 cacheKey 的组成部分
     const meta = await this.prompts.getTemplateMeta(templateKey);
 
+    /**
+     * 成长回顾报告的上下文是**画像版本序列**，不是单份画像
+     *
+     * 取一次序列有两个用途：① 校验"至少两版" —— 一版没有"变化"可言，
+     * 契约给的下限也是 2，与其让模型对着一版画像编出成长轨迹，不如明确报错；
+     * ② 把**整个序列**纳入 `cacheKey` —— 只哈希锚定画像的话，两个不同的序列
+     * 会算出同一个 key，于是"输入变了却复用旧报告"，幂等复用反而变成错误复用。
+     */
+    const growthSequenceIds =
+      input.type === 'GROWTH_SUMMARY' ? await this.loadGrowthSequenceIds(input.userId, profile.version) : null;
+
+    if (growthSequenceIds !== null && growthSequenceIds.length < GROWTH_MIN_PROFILES) {
+      throw BusinessException.badRequest(
+        ErrorCode.PARAM_INVALID,
+        `成长回顾报告需要至少 ${GROWTH_MIN_PROFILES} 次测评记录，当前只有 ${growthSequenceIds.length} 次`,
+      );
+    }
+
     const cacheKey = this.crypto.sha256(
       [
         input.userId,
-        profile.id,
-        String(profile.version),
+        // 非成长报告的分段**逐字保持不变**：改动它会让已存在报告的 cacheKey 全部失效，
+        // 那些用户会凭空多出一份"新"报告（并且要再扣一次配额）
+        ...(growthSequenceIds === null
+          ? [profile.id, String(profile.version)]
+          : [`growth:${growthSequenceIds.join(',')}`]),
         templateKey,
         meta.versionId,
         meta.provider ?? '',
@@ -268,6 +291,26 @@ export class ReportService {
       isReused: false,
       pollUrl: `/api/v1/reports/${report.id}/progress`,
     };
+  }
+
+  /**
+   * 成长回顾报告的画像序列（锚定版本及其之前的最近 N 版，按版本升序）
+   *
+   * `ai_reports` 只存得下**一个** `profileId`（没有版本列表列），因此序列由锚定画像
+   * **确定性推导**而不是存下来：历史画像行不可变，锚定版本号又是固定上界，
+   * 所以创建时算 `cacheKey` 用的序列与生成时喂给模型的序列必然一致 ——
+   * 两边都调用本方法的同一套条件，不另写一份查询。
+   */
+  private async loadGrowthSequenceIds(userId: string, anchorVersion: number): Promise<string[]> {
+    const rows = await this.prisma.personalityProfile.findMany({
+      where: { userId, deletedAt: null, version: { lte: anchorVersion } },
+      // 先按降序取"最近的 N 版"，再反转成升序
+      orderBy: { version: 'desc' },
+      take: GROWTH_MAX_PROFILES,
+      select: { id: true },
+    });
+
+    return rows.map((row) => row.id).reverse();
   }
 
   /**

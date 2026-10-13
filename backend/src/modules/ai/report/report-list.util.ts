@@ -48,6 +48,19 @@ const TYPE_NAMES: Readonly<Record<string, string>> = {
 /** 类型中文名；未知类型回落到原始值而非空串（便于发现新增类型未登记） */
 export const reportTypeName = (type: string): string => TYPE_NAMES[type] ?? type;
 
+/**
+ * 成长回顾报告最多纳入几版画像（契约 §3.5.1 给 `profileIds` 定的上限就是 12）
+ *
+ * 放在这个文件里是因为**创建与生成两侧都要用它**：`report.service.ts` 用它算
+ * `cacheKey`（序列不同 → key 必须不同），`report-generation.service.ts` 用它取数。
+ * 两处各写一个 `12` 的后果是：改了上限之后 cacheKey 覆盖的序列与实际喂给模型的
+ * 序列**不再一致**，于是"同一次测评的报告可复现"这条承诺静默失效。
+ */
+export const GROWTH_MAX_PROFILES = 12;
+
+/** 成长回顾报告至少需要几版画像（一版没有"变化"可言，契约下限同样是 2） */
+export const GROWTH_MIN_PROFILES = 2;
+
 /** 分页上限（契约 §3.5.2：`pageSize ≤ 100`，超出 → `10005`） */
 export const MAX_PAGE_SIZE = 100;
 

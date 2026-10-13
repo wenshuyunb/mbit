@@ -4218,12 +4218,12 @@ Accept-Language: zh-CN
 
 **报告类型**
 
-| `type`                | 名称             | 上下文来源                             | Prompt 模板键         |
-| --------------------- | ---------------- | -------------------------------------- | --------------------- |
-| `MBTI_REPORT`         | 人格深度报告     | 当前人格画像（`isCurrent = true`）     | `report.mbti`         |
-| `BIG_FIVE_REPORT`     | 大五特质报告     | 同上                                   | `report.bigfive`      |
-| `RELATIONSHIP_REPORT` | 关系（匹配）解读 | 关系双方画像 + 该关系的算分报告        | `report.relationship` |
-| `GROWTH_SUMMARY`      | 成长回顾报告     | 历史画像序列（**未交付**，见 ADR-035） | `report.growth`       |
+| `type`                | 名称             | 上下文来源                                           | Prompt 模板键         |
+| --------------------- | ---------------- | ---------------------------------------------------- | --------------------- |
+| `MBTI_REPORT`         | 人格深度报告     | 当前人格画像（`isCurrent = true`）                   | `report.mbti`         |
+| `BIG_FIVE_REPORT`     | 大五特质报告     | 同上                                                 | `report.bigfive`      |
+| `RELATIONSHIP_REPORT` | 关系（匹配）解读 | 关系双方画像 + 该关系的算分报告                      | `report.relationship` |
+| `GROWTH_SUMMARY`      | 成长回顾报告     | 历史画像序列（**服务端按锚定画像推导**，见 ADR-035） | `report.growth`       |
 
 > 上表与数据库枚举 `ai_report_type` **逐字一致**（ADR-034）。`type` 只能取这四个值：
 > 不存在 `GROWTH_REPORT` 之类的简写，客户端按旧文档传简写只会拿到 `400/10001`。
@@ -4413,14 +4413,23 @@ curl -X POST 'https://api.soulmap.cn/api/v1/reports' \
 会**直接 `400/10001`**（`property xxx should not exist`）。需要它们时按**功能**立项，
 不要只改回文档（只改文档等于让客户端在第一个请求上失败）：
 
-| 字段              | 需要的前置工作                                                           |
-| ----------------- | ------------------------------------------------------------------------ |
-| `profileId`       | 按指定画像版本生成（当前固定取该用户 `isCurrent = true` 的画像）         |
-| `profileIds`      | 成长回顾报告的多画像上下文组装（见 ADR-035）                             |
-| `forceRegenerate` | 跳过 `cacheKey` 复用并计费；等价能力已在 `POST /reports/{id}/regenerate` |
-| `language`        | 多语言模板与占位符体系配套                                               |
-| `tone`            | 语气注入的模板占位符；等价能力已在 `POST /reports/{id}/regenerate`       |
-| `focus`           | 内容侧重的模板占位符；等价能力已在 `POST /reports/{id}/regenerate`       |
+| 字段              | 需要的前置工作                                                                         |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| `profileId`       | 按指定画像版本生成（当前固定取该用户 `isCurrent = true` 的画像）                       |
+| `profileIds`      | **不采用**：成长报告的序列改由服务端按锚定画像推导（见 ADR-035），客户端无需也无法指定 |
+| `forceRegenerate` | 跳过 `cacheKey` 复用并计费；等价能力已在 `POST /reports/{id}/regenerate`               |
+| `language`        | 多语言模板与占位符体系配套                                                             |
+| `tone`            | 语气注入的模板占位符；等价能力已在 `POST /reports/{id}/regenerate`                     |
+| `focus`           | 内容侧重的模板占位符；等价能力已在 `POST /reports/{id}/regenerate`                     |
+
+**成长回顾报告（`GROWTH_SUMMARY`）的取数规则（ADR-035）**
+
+| 规则       | 说明                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------ |
+| 序列来源   | 服务端按**锚定画像**（该用户 `isCurrent = true` 的一版）推导：`version <= 锚定版本` 的最近 12 版，升序 |
+| 最少版本数 | **2 版**；不足时返回 `400` / `10001`（一版没有"变化"可言，不给模型编造轨迹的机会）                     |
+| `cacheKey` | 覆盖**整个序列**（序列不同 → key 不同），因此"输入变了却复用旧报告"不会发生                            |
+| 可复现性   | 历史画像行不可变、锚定版本号是固定上界，因此同一份报告无论何时重算，序列都一样（ADR-005）              |
 
 #### 3.5.2 `GET /api/v1/reports` — 报告列表 🔑
 

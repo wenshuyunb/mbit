@@ -28,7 +28,7 @@ const createInput = (overrides: Partial<CreateReportInput> = {}): CreateReportIn
 interface Harness {
   service: ReportService;
   prisma: {
-    personalityProfile: { findFirst: jest.Mock };
+    personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock };
     aiReport: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; findFirst: jest.Mock };
     reportSection: { findMany: jest.Mock };
   };
@@ -40,6 +40,8 @@ const createHarness = (): Harness => {
   const prisma = {
     personalityProfile: {
       findFirst: jest.fn().mockResolvedValue({ id: PROFILE_ID, version: 3, engineVersion: '1.0.0' }),
+      // 成长报告用：默认给两版（够创建），各用例按需覆盖
+      findMany: jest.fn().mockResolvedValue([{ id: 'profile-v2' }, { id: PROFILE_ID }]),
     },
     aiReport: {
       findUnique: jest.fn().mockResolvedValue(null),
@@ -210,6 +212,77 @@ describe('ReportService.createReport', () => {
         data: expect.objectContaining({ status: 'FAILED', errorCode: String(ErrorCode.QUEUE_ERROR) }),
       }),
     );
+  });
+
+  /**
+   * 成长回顾报告（`GROWTH_SUMMARY`）
+   *
+   * 它的上下文是**画像版本序列**，因此创建侧有两条额外责任：
+   *   ① 没有两次以上测评时明确报错 —— 一版画像没有"变化"可言，
+   *      让模型对着一版编出成长轨迹是最糟的产物；
+   *   ② `cacheKey` 必须覆盖**整个序列** —— 只哈希锚定画像的话，
+   *      两个不同的序列会算出同一个 key，于是"输入变了却复用旧报告"。
+   */
+  describe('成长回顾报告', () => {
+    /** 三版画像（按版本升序，与 `loadGrowthSequenceIds` 的返回一致） */
+    const sequence = [{ id: 'profile-v1' }, { id: 'profile-v2' }, { id: PROFILE_ID }];
+
+    it('【关键】至少两版画像才允许创建（一版没有变化可言）', async () => {
+      const harness = createHarness();
+      harness.prisma.personalityProfile.findMany.mockResolvedValue([{ id: PROFILE_ID }]);
+
+      await expect(harness.service.createReport(createInput({ type: 'GROWTH_SUMMARY' }))).rejects.toMatchObject({
+        code: ErrorCode.PARAM_INVALID,
+      });
+      expect(harness.prisma.aiReport.create).not.toHaveBeenCalled();
+    });
+
+    it('【关键】cacheKey 覆盖整个序列（序列不同 → key 不同，不会错误复用）', async () => {
+      const first = createHarness();
+      first.prisma.personalityProfile.findMany.mockResolvedValue(sequence);
+      await first.service.createReport(createInput({ type: 'GROWTH_SUMMARY' }));
+      const keyOfThreeVersions = lastCreateData(first).cacheKey;
+
+      const second = createHarness();
+      second.prisma.personalityProfile.findMany.mockResolvedValue([sequence[1], sequence[2]]);
+      await second.service.createReport(createInput({ type: 'GROWTH_SUMMARY' }));
+      const keyOfTwoVersions = lastCreateData(second).cacheKey;
+
+      expect(keyOfThreeVersions).not.toBe(keyOfTwoVersions);
+    });
+
+    it('按"锚定版本及之前"取序列，最多 12 版、按版本降序取再反转', async () => {
+      const harness = createHarness();
+
+      await harness.service.createReport(createInput({ type: 'GROWTH_SUMMARY' }));
+
+      expect(harness.prisma.personalityProfile.findMany).toHaveBeenCalledWith({
+        where: { userId: USER_ID, deletedAt: null, version: { lte: 3 } },
+        orderBy: { version: 'desc' },
+        take: 12,
+        select: { id: true },
+      });
+    });
+
+    it('成长报告绑定**锚定画像**（生成时靠它的版本号推导同一个序列）', async () => {
+      const harness = createHarness();
+
+      await harness.service.createReport(createInput({ type: 'GROWTH_SUMMARY' }));
+
+      expect(lastCreateData(harness)).toMatchObject({
+        type: 'GROWTH_SUMMARY',
+        profileId: PROFILE_ID,
+        promptTemplateKey: 'report.growth',
+      });
+    });
+
+    it('非成长报告不查序列（避免给每条创建路径多加一次查询）', async () => {
+      const harness = createHarness();
+
+      await harness.service.createReport(createInput());
+
+      expect(harness.prisma.personalityProfile.findMany).not.toHaveBeenCalled();
+    });
   });
 });
 

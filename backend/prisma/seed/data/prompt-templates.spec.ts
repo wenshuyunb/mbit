@@ -8,16 +8,18 @@
  * 而会在运行时表现为「50012 缺少必需变量」—— 那时用户已经消耗了一次生成请求，
  * 且错误出现在 AI 链路深处，排查成本高。因此这里逐个模板提取占位符并比对。
  *
- * ## 两套变量族（按模板路由，不合并成一个大集合）
+ * ## 变量族（按模板路由，不合并成一个大集合）
  *
  * | 模板族 | 变量来源 |
  * | --- | --- |
  * | `report.*`（报告） | `buildReportContext` / `buildRelationshipReportContext` |
+ * | `report.growth`（成长回顾：**多画像时间序列**） | `buildGrowthReportContext` |
  * | `ai.companion`（AI 情感助手对话） | `buildPromptVariables`（`chat-prompt.ts`） |
  *
- * 两个族的变量集合**没有交集**，因此必须按模板键路由到对应的生产函数：
- * 统一用报告变量校验会让对话模板的 `{{myPersona}}` 被判为"不存在的变量"；
- * 反过来把两族并集成一个大集合，笔误就再也测不出来了 ——
+ * 各族之间的变量集合**没有交集**，因此必须按模板键路由到对应的生产函数：
+ * 统一用单画像报告变量校验会让对话模板的 `{{myPersona}}`、关系模板的 `{{partnerMbtiType}}`、
+ * 成长模板的 `{{growthTimeline}}` 被判为"不存在的变量"；
+ * 反过来把三族并集成一个大集合，笔误就再也测不出来了 ——
  * 那正是这个契约测试存在的意义。
  */
 
@@ -28,6 +30,11 @@ import {
   buildReportContext,
   type ReportContextInput,
 } from '../../../src/modules/ai/context/report-context.builder';
+import {
+  buildGrowthReportContext,
+  type GrowthProfileSnapshot,
+  type GrowthReportContextInput,
+} from '../../../src/modules/ai/context/growth-report-context.builder';
 import {
   buildRelationshipReportContext,
   type RelationshipReportContextInput,
@@ -112,6 +119,14 @@ const placeholdersOf = (template: (typeof PROMPT_TEMPLATES)[number]): string[] =
 const isRelationshipTemplate = (key: string): boolean => key.startsWith('report.relationship');
 
 /**
+ * 成长回顾模板的近似判定
+ *
+ * 成长报告的取数路径与前两者都不同：喂给模型的是**同一用户多个历史画像的时间序列**。
+ * 用前缀判定（与 `report.relationship` 同一写法），日后新增同类模板会自然落进这一族。
+ */
+const isGrowthTemplate = (key: string): boolean => key.startsWith('report.growth');
+
+/**
  * 对话模板的近似判定
  *
  * 用前缀而不是白名单常量：`ai.companion` 是 `chat-prompt.ts` 候选链里的**库内键名**
@@ -182,6 +197,95 @@ const relationshipSide = (mbtiType: string | null, allMissing = false): Relation
 });
 
 // ---------------------------------------------------------------------------
+// 成长回顾报告上下文（多画像时间序列）
+// ---------------------------------------------------------------------------
+
+/** 构造一版画像；默认全字段缺失，只写测试关心的字段 */
+const growthSnapshot = (
+  overrides: Partial<GrowthProfileSnapshot> & { readonly version: number },
+): GrowthProfileSnapshot => ({
+  createdAt: '2026-01-05T09:12:00.000Z',
+  mbtiType: null,
+  openness: null,
+  conscientiousness: null,
+  extraversion: null,
+  agreeableness: null,
+  neuroticism: null,
+  consistencyScore: null,
+  completionRate: null,
+  answeredCount: null,
+  questionCount: null,
+  avgResponseMs: null,
+  testDefinitionCode: null,
+  ...overrides,
+});
+
+/**
+ * 数据齐全的三版序列
+ *
+ * 刻意包含一类"变了"和一类"没变"：开放性 +16、神经质 -15（明显变化），
+ * 尽责性 +1、外向性 +2、宜人性 +1（基本稳定），类型从 INFJ 变为 ENFP ——
+ * 这样模板若只引用最新一版，就必然漏掉"轨迹"与"变化量"这两块。
+ */
+const fullGrowthContext = (): GrowthReportContextInput => ({
+  profiles: [
+    growthSnapshot({
+      version: 1,
+      createdAt: '2026-01-05T09:12:00.000Z',
+      mbtiType: 'INFJ',
+      openness: 62,
+      conscientiousness: 70,
+      extraversion: 30,
+      agreeableness: 65,
+      neuroticism: 55,
+      consistencyScore: 82,
+      completionRate: 95,
+      answeredCount: 30,
+      questionCount: 32,
+      avgResponseMs: 12_000,
+      testDefinitionCode: 'MBTI_LITE',
+    }),
+    growthSnapshot({
+      version: 2,
+      createdAt: '2026-03-18T21:40:00.000Z',
+      mbtiType: 'INFJ',
+      openness: 70,
+      conscientiousness: 72,
+      extraversion: 31,
+      agreeableness: 66,
+      neuroticism: 50,
+      consistencyScore: 88,
+      completionRate: 100,
+      answeredCount: 32,
+      questionCount: 32,
+      avgResponseMs: 11_000,
+      testDefinitionCode: 'MBTI_LITE',
+    }),
+    growthSnapshot({
+      version: 3,
+      createdAt: '2026-06-20T11:05:00.000Z',
+      mbtiType: 'ENFP',
+      openness: 78,
+      conscientiousness: 71,
+      extraversion: 32,
+      agreeableness: 66,
+      neuroticism: 40,
+      consistencyScore: 95,
+      completionRate: 100,
+      answeredCount: 32,
+      questionCount: 32,
+      avgResponseMs: 10_000,
+      testDefinitionCode: 'MBTI_LITE',
+    }),
+  ],
+});
+
+/** 数据全缺的两版序列（模板在数据残缺时同样必须可渲染） */
+const emptyGrowthContext = (): GrowthReportContextInput => ({
+  profiles: [growthSnapshot({ version: 1, createdAt: '' }), growthSnapshot({ version: 2, createdAt: '' })],
+});
+
+// ---------------------------------------------------------------------------
 // 对话上下文（AI 情感助手）
 // ---------------------------------------------------------------------------
 
@@ -246,6 +350,12 @@ const availableVariables = (templateKey: string, dataComplete: boolean): Set<str
   if (isRelationshipTemplate(templateKey)) {
     const context = dataComplete ? fullRelationshipContext() : emptyRelationshipContext();
     return new Set(Object.keys(buildRelationshipReportContext(context).variables));
+  }
+
+  // 成长回顾：**多画像序列**，必须走自己的组装器（用单画像变量校验会把它判成引用了不存在的变量）
+  if (isGrowthTemplate(templateKey)) {
+    const context = dataComplete ? fullGrowthContext() : emptyGrowthContext();
+    return new Set(Object.keys(buildGrowthReportContext(context).variables));
   }
 
   if (isCompanionTemplate(templateKey)) {
@@ -519,6 +629,173 @@ describe('Prompt 模板种子数据契约', () => {
       expect(parsed.extraSectionKeys).toEqual([]);
       expect(parsed.droppedSectionKeys).toEqual([]);
       // 免费预览长度必须 > 0，否则打开报告就是空的免费段
+      expect(parsed.freePreviewLength).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * 成长回顾报告模板
+   *
+   * `GROWTH_SUMMARY` 是 `report.dto.ts` 明示支持的类型，`report.service.ts` 的
+   * `TEMPLATE_KEY_BY_TYPE` 把它指向 `report.growth` —— 模板一旦缺失，用户请求就会
+   * 在 `getTemplateMeta('report.growth')` 处报 `50011`。
+   *
+   * 但"模板存在"还不够。这个类型最危险的失败形态是：**拿单画像上下文渲染出一份
+   * 标题写着"成长回顾"的报告** —— 内容读起来毫无破绽，实际与"成长"毫无关系
+   * （用户会付费，且察觉不到任何异常，比明确报错更伤用户）。
+   * 因此这一组除了键名，还专门钉住"真的用到了多版本对比变量"。
+   */
+  describe('成长回顾报告模板（GROWTH_SUMMARY）', () => {
+    const growth = (): (typeof PROMPT_TEMPLATES)[number] | undefined =>
+      PROMPT_TEMPLATES.find((template) => template.key === 'report.growth');
+
+    const growthVariables = (dataComplete: boolean): Readonly<Record<string, string>> =>
+      buildGrowthReportContext(dataComplete ? fullGrowthContext() : emptyGrowthContext()).variables;
+
+    it('【关键】键名与 report.service.ts 的 TEMPLATE_KEY_BY_TYPE 一致（否则该报告类型开箱即 50011）', () => {
+      // `TEMPLATE_KEY_BY_TYPE` 未导出，这里按它当前的字面值断言：改动任一侧都会让这条断红
+      expect(growth()?.key).toBe('report.growth');
+      // `PromptType` 枚举里没有 GROWTH_SUMMARY（它是 `AiReportType` 的取值，理由见模板内的 ⚠ 注释），
+      // 写别的值会让 tsc 失败 + 整个种子脚本落库被拒，因此只能借 MBTI_REPORT
+      expect(growth()?.type).toBe('MBTI_REPORT');
+      expect(Object.values(PromptType)).not.toContain('GROWTH_SUMMARY');
+    });
+
+    it('【关键】能用真实的多画像上下文渲染成功（占位符全有值、无残留）', () => {
+      const template = growth();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: template.systemPrompt, userPromptTemplate: template.userPromptTemplate },
+        growthVariables(true),
+      );
+
+      expect(rendered.user).not.toContain('{{');
+      expect(rendered.system).not.toContain('{{');
+      expect(rendered.usedVariables.length).toBeGreaterThan(3);
+    });
+
+    it('【关键】数据全缺时同样能渲染成功（占位文案保证模板不会因缺数据而 50012）', () => {
+      const template = growth();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: template.systemPrompt, userPromptTemplate: template.userPromptTemplate },
+        growthVariables(false),
+      );
+
+      expect(rendered.user).not.toContain('{{');
+      expect(rendered.system).not.toContain('{{');
+      expect(rendered.user).toContain('（本次测评未包含此项）');
+    });
+
+    it('【关键】真的用到了"跨版本"变量，而不是只用最新一版（否则就是个人报告换个标题）', () => {
+      const template = growth();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const placeholders = placeholdersOf(template);
+
+      // 时间线 / 变化量 / 变了什么 / 没变什么 —— 这四条是"成长报告"与"个人报告"的分界线
+      for (const name of [
+        'profileCount',
+        'periodText',
+        'growthTimeline',
+        'scoreDeltas',
+        'changedTraits',
+        'stableTraits',
+      ]) {
+        expect(placeholders).toContain(name);
+      }
+
+      // 渲染后必须真的出现**两版以上**的轨迹，以及基于同维度真实数值的变化量
+      const rendered = renderPromptVersion(
+        { systemPrompt: '', userPromptTemplate: template.userPromptTemplate },
+        growthVariables(true),
+      );
+
+      expect(rendered.user).toContain('2026-01-05');
+      expect(rendered.user).toContain('2026-03-18');
+      expect(rendered.user).toContain('2026-06-20');
+      expect(rendered.user).toContain('开放性 62 → 78（+16）');
+      expect(rendered.user).toContain('神经质 55 → 40（-15）');
+      // 最新一版的信息也在（"现在是什么样"是轨迹的终点，不是全部）
+      expect(rendered.user).toContain('ENFP');
+      expect(rendered.user).toContain('竞选者');
+    });
+
+    it('【关键】不引用单画像专属变量（引用它就意味着这份报告已经退化成个人报告）', () => {
+      const template = growth();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const placeholders = placeholdersOf(template);
+
+      for (const singleProfileOnly of [
+        'mbtiType',
+        'mbtiTypeName',
+        'mbtiGroup',
+        'dimensionEI',
+        'mbtiStrengths',
+        'bigFiveSummary',
+        'attachmentStyle',
+      ]) {
+        expect(placeholders).not.toContain(singleProfileOnly);
+      }
+      // 变体变量必须来自成长族（`latest*` 前缀）
+      expect(placeholders).toContain('latestBigFiveSummary');
+      expect(placeholders).toContain('latestMbtiType');
+    });
+
+    it('【关键】写清了"变化量方向"的含义：大五没有好坏、上升不等于成长', () => {
+      const template = growth();
+
+      expect(template?.systemPrompt).toContain('没有好坏');
+      // 神经质的方向必须写死（否则模型会把"数值越高"读成"越稳定"）
+      expect(template?.systemPrompt).toContain('神经质');
+      expect(template?.systemPrompt).toContain('越高');
+      // 只依据给出的时间线，不得编造未提供的版本/数据
+      expect(template?.systemPrompt).toContain('编造');
+      expect(template?.systemPrompt).toContain('时间线');
+      // ADR-005 底线（与其它报告模板同源，但再钉一次）
+      expect(template?.systemPrompt).toContain('绝不重新计算');
+      expect(template?.systemPrompt).toContain('不得重新计算');
+    });
+
+    it('首段免费预览（用户先看到自己的轨迹再决定付费）', () => {
+      const template = growth();
+
+      expect(template?.sections[0]?.key).toBe('growth_timeline');
+      expect(template?.sections[0]?.freePreview).toBe(true);
+      // 段落键是自由标识符（落 `report_sections.section_key`），不是 compatibility_reports 的列
+      expect(template?.sections).toHaveLength(4);
+      expect(template?.sections.map((section) => section.key)).toEqual([
+        'growth_timeline',
+        'trait_changes',
+        'stable_patterns',
+        'next_steps',
+      ]);
+    });
+
+    it('【关键】按提示词要求的标题生成的正文，能被分段解析器切回声明的段落键', () => {
+      const template = growth();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const modelOutput = [
+        '这半年你在开放性上明显打开，神经质则明显回落。',
+        ...template.sections.map((section) => `## ${section.title}\n这是「${section.title}」的正文。`),
+      ].join('\n');
+
+      const parsed = parseReportSections(modelOutput, readExpectedSections({ sections: template.sections }));
+
+      expect(parsed.sections.map((section) => section.sectionKey)).toEqual(
+        template.sections.map((section) => section.key),
+      );
+      expect(parsed.extraSectionKeys).toEqual([]);
+      expect(parsed.droppedSectionKeys).toEqual([]);
       expect(parsed.freePreviewLength).toBeGreaterThan(0);
     });
   });

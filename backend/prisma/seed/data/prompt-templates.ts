@@ -169,6 +169,27 @@ const RELATIONSHIP_REPORT_SECTIONS: SeedPromptSection[] = [
   { key: 'suggestions', title: '相处建议', freePreview: false },
 ];
 
+/**
+ * 成长回顾报告的段落声明（首段免费预览）
+ *
+ * 段落键与 `report.mbti` / `report.bigfive` 是**同一种**约定：解析后写入
+ * `report_sections.section_key`（见 `schema.prisma` 的 `ReportSection`），
+ * `ai_reports` 本身只存整篇 `content` 与计数。
+ * `report.relationship` 那条「段落键必须是 `compatibility_reports` 的真实列」的约束
+ * **不适用于**个人报告与成长回顾报告 —— 后两者没有专属的 JsonB 列，键可以自由起，
+ * 只要满足 `[a-z][a-z0-9_]*` 且 ≤ 48 字符。
+ *
+ * 为什么首段是「成长轨迹回顾」：成长报告的付费动机与单画像报告不同 ——
+ * 用户要先看到**自己的轨迹确实被算出来了**（哪几版、什么时间、五维各是多少、变了多少），
+ * 才会相信后面的解读值钱。因此首段给的是**数据与轨迹本身**，不是泛泛的"整体印象"。
+ */
+const GROWTH_REPORT_SECTIONS: SeedPromptSection[] = [
+  { key: 'growth_timeline', title: '成长轨迹回顾', freePreview: true },
+  { key: 'trait_changes', title: '特质变化解析', freePreview: false },
+  { key: 'stable_patterns', title: '稳定特质与延续性', freePreview: false },
+  { key: 'next_steps', title: '下一阶段建议', freePreview: false },
+];
+
 export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
   {
     key: 'report.mbti',
@@ -371,6 +392,136 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     temperature: 0.5,
     maxTokens: 2560,
     changeNote: '首个版本：4 段式关系解读，首段免费预览',
+  },
+  {
+    /**
+     * ⚠ **键名必须是 `report.growth`**：`report.service.ts` 的 `TEMPLATE_KEY_BY_TYPE`
+     * 把 `GROWTH_SUMMARY` 指向它（`GROWTH_SUMMARY` 同时出现在 `report.dto.ts` 的
+     * `REPORT_TYPES` 与 `AiReportType` 枚举里，即请求侧与落库侧都真的支持这个类型）。
+     * 模板缺失时，用户请求成长回顾报告必然在 `getTemplateMeta('report.growth')` 处
+     * 报 `50011 AI_PROMPT_TEMPLATE_NOT_FOUND` —— 这正是本模板补上的缺口。
+     *
+     * 与其它报告模板最大的不同：它的**输入是多个画像的序列**（`profileIds`，2–12 版），
+     * 而不是一份画像。变量全部来自 `buildGrowthReportContext()`，因此模板绝不允许
+     * 引用单画像变量（`{{mbtiType}}` / `{{bigFiveSummary}}` …）充数 ——
+     * 那样写出来的会是一份"个人报告换个标题"，与"成长"毫无关系，
+     * 而用户会为它付费且读不出任何异常（比明确报错更伤用户）。
+     */
+    key: 'report.growth',
+    name: '成长回顾报告',
+    /**
+     * ⚠ `type` 只能写 `'MBTI_REPORT'` —— `PromptType` 枚举里**没有** `GROWTH_SUMMARY`，
+     * 也没有 `BIG_FIVE_REPORT`：`schema.prisma` 的 `PromptType` 与迁移 `20260214000000_init`
+     * 的 `prompt_type` 都只有 MBTI_REPORT / RELATIONSHIP_REPORT / AI_COMPANION /
+     * EMOTION_ANALYSIS / SYSTEM_SAFETY 五个值（`GROWTH_SUMMARY` 是
+     * **`AiReportType`** 枚举的取值，两者不是同一个枚举）。
+     *
+     * 写 `'GROWTH_SUMMARY'` 是**两处硬失败**：TS 上不属于 `PromptType`，
+     * 落库时 Postgres 也会以"枚举无此取值"拒绝 —— 那会让**整个种子脚本**中断，
+     * 而不只是少种一个模板（比现状更糟）。
+     *
+     * 好在它**不影响报告生成**：模板只按 `key` 查找（`prompt.service.ts` 的 `loadTemplate`
+     * 条件为 `{ key, isActive: true, deletedAt: null }`），`type` 只用于后台列表的筛选与展示
+     * （`admin/prompt/prompt.service.ts` 的 `PROMPT_TYPE_NAMES`）。
+     * 因此这里暂借语义最近的 `MBTI_REPORT`（后台"个人报告"那一档），
+     * 代价是后台按类型筛选时它会和 MBTI / 大五模板混在一起 ——
+     * 要彻底修掉需要给 `prompt_type` 增加枚举值并配迁移（超出本次改动范围，见交付说明）。
+     */
+    type: 'MBTI_REPORT',
+    description:
+      '基于同一用户多个历史画像的时间序列（2–12 版）生成成长回顾报告（4 段：成长轨迹回顾 / 特质变化解析 / 稳定特质与延续性 / 下一阶段建议）',
+    version: 1,
+    /**
+     * 与其它报告共用 `REPORT_SYSTEM_GUARDRAILS`（不得重新算分 / 禁止临床用语 /
+     * 不用绝对化断言 / 缺失项不凭空推测），再补六条成长报告专属要求。
+     *
+     * 第 9 条（变化量方向）是这一族里**最容易写错**的一条：大五的五项本身没有好坏，
+     * 而"成长报告"这个题材天然诱导模型把「上升」写成进步、把「下降」写成退步。
+     * 一旦那样写，同一份数据会被解读成"你变得越来越好"，而真实含义可能只是
+     * 「神经质」升高（情绪更容易波动）。因此方向语义必须由提示词硬性钉住，
+     * 并且要与 `BIG_FIVE_LABELS` 的「神经质」命名保持一致（不叫「情绪稳定性」，
+     * 理由见 `report-context.builder.ts` 的 `BIG_FIVE_LABELS` 注释）。
+     *
+     * 第 10 条区分「未变化」与「未测量」，与上下文组装器的实现是同一条约定：
+     * 占位文案（`（本次测评未包含此项）`）表示**没有这项数据**，
+     * 而"没有达到变化阈值"是**有结论的稳定**，两者混淆会让模型拒绝对一个
+     * 其实很确定的序列下结论（"这半年五项都很稳定"本身就有价值）。
+     */
+    systemPrompt: [
+      REPORT_SYSTEM_GUARDRAILS,
+      '',
+      '本次任务补充要求：',
+      '7. **只依据给出的时间线解读**：不得编造时间线里没有的版本、日期、分数或测评次数，',
+      '   也不要"补全"一段看起来更连贯的成长故事 —— 数据里没有的版本一律不存在。',
+      '8. 分数与变化量都是**既定结果**：不得重新计算、四舍五入改写或质疑它们，你只解释"这些变化可能意味着什么"。',
+      '9. **变化量方向必须中性表述**：大五五个维度本身**没有好坏** ——「上升」不等于成长，「下降」不等于退步；',
+      '   一律写成"在该维度上变得更强/更弱"这类中性描述。其中「神经质」的数值越高，表示情绪反应越强烈、越容易紧张',
+      '   （数值越低越平稳）：不要把「神经质上升」写成"变得更糟"，也不要把「神经质下降」写成"被治好了"。',
+      '10. 「未变化」与「未测量」不是一回事：某处写着「（本次测评未包含此项）」时，说明那一版缺这项数据，',
+      '    不要把它写成"没有变化"，也不要据此推断稳定或成长；反过来，明确写着"没有达到变化阈值"的项，是**真的没变**，',
+      '    请照实解读，不要改口说成"数据不足"。',
+      '11. 各版若使用不同量表（见数据质量一栏），分数之间不宜直接比较：只描述数值差异，不要把它当作人格变化。',
+      '12. 不做趋势外推与预测：不写"你以后会……"，也不要把两三个版本之间的起伏说成长期规律。',
+    ].join('\n'),
+    /**
+     * 变量**只允许**取自 `growth-report-context.builder.ts` 的 `buildGrowthReportContext()`：
+     * `{{profileCount}}` `{{periodText}}`（参与对比的版本数与时间跨度）、
+     * `{{growthTimeline}}`（逐版一行）、`{{scoreDeltas}}`（五维变化量）、
+     * `{{changedTraits}}` `{{stableTraits}}`（哪些变了 / 哪些没变）、
+     * `{{latestMbtiType}}` `{{latestMbtiTypeName}}` `{{mbtiShifted}}` `{{latestBigFiveSummary}}`
+     * （最新一版）、`{{dataQualityText}}`（各版数据质量）。
+     *
+     * 刻意**不引用任何单画像变量**（`{{mbtiType}}` / `{{bigFiveSummary}}` / `{{dimensionEI}}` …）：
+     * 那些变量描述的是"某一版长什么样"，成长报告要的是"版本之间怎么变"。
+     * 引用了它们就等于把这份报告降级成个人报告 —— 而"成长"的全部价值就在对比。
+     */
+    userPromptTemplate: [
+      '请基于下面这位用户的**多次测评画像序列**，撰写成长回顾报告。',
+      '这份报告的解读对象不是某一版画像，而是**跨版本的变化轨迹**：用户想知道"我这段时间变了什么"，而不是"我现在是什么样"。',
+      '',
+      '## 参与对比的画像版本',
+      '- 版本数量：{{profileCount}}',
+      '- 时间跨度：{{periodText}}',
+      '',
+      '## 逐版数据时间线（按时间升序，一行一版，`｜` 依次分隔 版本号｜日期｜类型｜五维分数）',
+      '{{growthTimeline}}',
+      '',
+      '## 五维变化量（同一维度上的数值前后对比，`→` 左侧为最早可用的那一版、右侧为最晚可用的那一版）',
+      '{{scoreDeltas}}',
+      '',
+      '## 变化达到阈值的维度（按幅度从大到小）',
+      '{{changedTraits}}',
+      '',
+      '## 基本保持稳定的维度（没变同样是重要信息）',
+      '{{stableTraits}}',
+      '',
+      '## 最新一版（时间线最后一版）',
+      '- MBTI 类型：{{latestMbtiType}}（{{latestMbtiTypeName}}）',
+      '- 序列中类型是否变过：{{mbtiShifted}}',
+      '- 五维特质：{{latestBigFiveSummary}}',
+      '',
+      '## 数据质量（影响你解读时的确信程度）',
+      '{{dataQualityText}}',
+      '',
+      buildSectionFormatInstruction(GROWTH_REPORT_SECTIONS),
+      '',
+      '「成长轨迹回顾」：按时间顺序复述这条轨迹 —— 哪几项在往哪个方向走、走到什么程度、大致从哪一版开始变化；',
+      '用数据里的日期与分数说话，不要用"最近""前段时间"这类模糊说法，也不要写数据里没有的版本。',
+      '「特质变化解析」：只解读上面列出的**变化达到阈值的维度**，逐项说明这种变化在日常生活里可能表现为哪些具体现象（用行为举例，不要堆形容词）；',
+      '变化幅度小的维度放到下一段写，不要在这里凑数。',
+      '「稳定特质与延续性」：写那些基本没有变化的维度 —— 稳定本身也是信息（例如"无论哪一版，外向性都稳定在偏低区间"），不要把它写成"缺乏成长"。',
+      '「下一阶段建议」：围绕上面提到的每一处变化各给一条可执行的小行动，并说明这条行动为什么对这个变化方向有效。',
+      '',
+      '（本报告的段落数与标题都是固定的，不要自行增删段落或改动标题措辞。）',
+    ].join('\n'),
+    sections: GROWTH_REPORT_SECTIONS,
+    // 比个人报告略低：成长报告是"两串数字之间讲故事"，最容易滑向"你一定成长了很多"这类
+    // 与数据无关的自我感动式套话，降低随机性可以让输出贴着给定的变化量
+    temperature: 0.5,
+    // 四段 × 150–300 字，与关系报告同档；低于此值容易把最后一段截断
+    maxTokens: 2560,
+    changeNote:
+      '首个版本：4 段式成长回顾报告（多画像时间序列对比），首段免费预览（补上 GROWTH_SUMMARY 此前缺失的模板，该报告类型此前一请求即报 50011）',
   },
   {
     /**

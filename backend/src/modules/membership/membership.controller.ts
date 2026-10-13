@@ -19,6 +19,14 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { ListEntitlementsQueryDto } from './dto/entitlement.dto';
 import { EntitlementService, type EntitlementListView, type MembershipView } from './entitlement.service';
 
+/** 会员权益项（契约 §3.8.1：`key` / `label` / `value` / `highlight`） */
+export interface ProductBenefit {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+  readonly highlight: boolean;
+}
+
 /** 商品视图（只暴露前端需要的字段） */
 export interface ProductView {
   readonly productId: string;
@@ -37,7 +45,54 @@ export interface ProductView {
   readonly credits: number | null;
   readonly tags: readonly string[];
   readonly isRecommended: boolean;
+  /**
+   * 会员权益矩阵（契约 §3.8.1 的 `benefits`）
+   *
+   * 数据来源是 `membership_plans.benefits`（JsonB，已随种子灌入，形状与契约示例逐字一致）。
+   * **只对挂了套餐的会员类商品有值**；次数包等一次性商品返回**空数组**而不是省略字段 ——
+   * 省略会让前端每次渲染前都要判 `undefined`，而契约里这个字段是必有的。
+   *
+   * 这是 ADR-033 记录的那处缺口的补齐：契约的权益对照表此前拿不到，
+   * 会员页只能展示 `tags`，用户看不到「这一档到底多了什么」。
+   */
+  readonly benefits: readonly ProductBenefit[];
 }
+
+/**
+ * 解析 `membership_plans.benefits` 的 JsonB
+ *
+ * 库里是**自由 JSON**：种子脚本、后台、历史数据都可能写进形状不对的内容。
+ * 因此逐项校验结构并**丢弃**不合格项，而不是原样下发 ——
+ * 权益矩阵是**付费决策依据**，少一个字段就会在页面上显示成空白或 `undefined`。
+ * 取舍是刻意的：**宁缺勿错**，宁可少展示一项权益，也不能展示半条。
+ */
+const parsePlanBenefits = (raw: unknown): ProductBenefit[] => {
+  if (!Array.isArray(raw)) return [];
+
+  const parsed: ProductBenefit[] = [];
+
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+
+    const record = item as Record<string, unknown>;
+    const { key, label, value, highlight } = record;
+
+    // `key` 缺失会让前端无法做稳定的列表 diff（React/vue 的 key、埋点维度都依赖它）
+    if (typeof key !== 'string' || key.length === 0) continue;
+    if (typeof label !== 'string' || label.length === 0) continue;
+    if (typeof value !== 'string' || value.length === 0) continue;
+
+    parsed.push({
+      key,
+      label,
+      value,
+      // 契约里 `highlight` 是布尔；缺失时按"不强调"处理，而不是当成 `undefined` 下发
+      highlight: highlight === true,
+    });
+  }
+
+  return parsed;
+};
 
 /** 商品列表视图 */
 export interface ProductListView {
@@ -168,6 +223,8 @@ export class MembershipController {
           credits: true,
           tags: true,
           isRecommended: true,
+          // 权益矩阵挂在套餐上（`products.membershipPlanId`），商品行本身没有这一列
+          membershipPlan: { select: { benefits: true } },
         },
       }),
       this.entitlements.getMembership(userId),
@@ -187,6 +244,8 @@ export class MembershipController {
         credits: product.credits,
         tags: product.tags,
         isRecommended: product.isRecommended,
+        // 没挂套餐（次数包等一次性商品）→ 空数组，字段始终存在
+        benefits: parsePlanBenefits(product.membershipPlan?.benefits),
       })),
       membership,
     };
