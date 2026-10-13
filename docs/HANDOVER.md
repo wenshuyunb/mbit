@@ -719,8 +719,10 @@ node .runlogs\endpoint-inventory.cjs     # 契约 vs 实际注册路由的差集
 - **活体验证**：管理端 27/27 通过；支付链路 11/11 通过；
   四个新域 68/78 通过（2 缺陷 / 8 环境限制，明细见 §3.5）。
 - **最近提交**：
+  - `85c9d57` feat(backend): 交付成长回顾报告（ADR-035）+ 会员权益矩阵 + 下单 INIT 支付单
+  - `e8d4712` fix(ai): 修正 neuroticism 中文标签说反含义的缺陷，并让报告标题按类型分派
+  - `343a8a9` fix(report): 打通 RELATIONSHIP_REPORT 与 BIG_FIVE_REPORT，并按实现校正契约 §3.5.1（ADR-034）
   - `e1f62ea` fix(backend): 退款审计留痕 + 报告 ID 入参校验 + 配置目录补录（含 AI 助手 seed）
-    —— **本轮的交付**（16 个文件，+1735/−74），五道门禁在最终代码上复跑全过
   - `03f7c79` docs(handover): 补齐五道门禁、四域实测结论、已接线证据与刻意未完成项
   - `dc13e2e` feat(backend): 四域 28 接口 + 交接文档
   - `f1d2152` docs: ADR-033 五处路径分歧以实现为准 + 契约同步修订
