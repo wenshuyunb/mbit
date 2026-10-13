@@ -346,6 +346,18 @@ export class ChatController {
     description: 'Prompt 模板不可用（`AI_PROMPT_TEMPLATE_NOT_FOUND`）或变量缺失（`AI_PROMPT_VARIABLE_MISSING`）',
     status: 500,
   })
+  /**
+   * ⚠ `@RawResponse()` **必需**：本方法已经自己构造了完整包络（`envelope(...)` /
+   * 危险拦截分支的手写信封），若不加该装饰器，`TransformInterceptor` 会**再包一层**，
+   * 响应变成 `data.data.assistantMessage`：
+   *   · 小程序 `request.ts` 只解一层包络（`return result.body.data`），
+   *     拿到的会是**内层信封**而不是真正的 `userMessage`/`assistantMessage`；
+   *   · 更严重的是危险内容拦截路径要求**顶层 `code = 50008`**，
+   *     被重新包成顶层 `code = 0` 后，前端会当成功响应处理，
+   *     "渲染关怀文案与资源卡、禁止弹错误 Toast"这条契约**整体失效**。
+   * 该缺陷由 `probe-ai-live.cjs` 活体验证发现（实测响应为 `data.data.assistantMessage`）。
+   */
+  @RawResponse()
   async sendMessage(
     @CurrentUser('userId') userId: string,
     @Param() params: ConversationIdParamDto,
@@ -376,8 +388,12 @@ export class ChatController {
      * 危险内容拦截：**必须绕过统一包络**才能返回 `code = 50008`。
      *
      * 统一包络把 `code` 固定为 0（`TransformInterceptor`），而契约要求这里
-     * `code = 50008` + HTTP 200。因此本方法返回带 `@Res()` 的原始响应 ——
+     * `code = 50008` + HTTP 200。因此本方法标了 `@RawResponse()` ——
      * 这与 `DocumentedRawResponse` 的取舍同理：契约优先于统一的便利性。
+     *
+     * ⚠ 注意：光"自己返回一个信封形状的对象"是**不够**的。此前本方法漏了
+     * `@RawResponse()`，于是拦截器把它又包了一层，`50008` 被降级成内层字段，
+     * 前端只看到顶层 `code = 0` —— 契约在此静默失效了很久，直到活体验证才发现。
      *
      * `data` 的字段与控制器的 `envelope` 一致（`requestId` / `timestamp` 由框架层
      * 统一生成时也这样），此处手工补齐以保证前端只解析一种结构。
