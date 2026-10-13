@@ -5851,7 +5851,7 @@ PENDING_A_CONFIRM ──────────► PENDING_A_CONFIRM ───�
     "status": "PENDING",
     "qrCodeUrl": "https://cdn.soulmap.cn/invite/qr/K7M2XQ9V.png",
     "qrCodeScene": "K7M2XQ9V",
-    "sharePath": "pages/match/scan?scene=K7M2XQ9V",
+    "sharePath": "pkgMatch/pages/invite?scene=K7M2XQ9V",
     "expiresAt": "2026-02-21T14:35:00.000Z",
     "remainingSeconds": 604800
   },
@@ -5864,8 +5864,11 @@ PENDING_A_CONFIRM ──────────► PENDING_A_CONFIRM ───�
 > 契约原示例里的 `inviter` / `inviteeName` / `message` / `suggestedTestCode` / `wideQrCodeUrl` /
 > `shareText` / `shareTitle` / `createdAt` / `dailyQuota` **实现一律不返回**（前端读到 `undefined`）；
 > 其中 `message` 只**入库**不回传，`inviter` 需额外的用户联查与配额计数表（`controller.ts:35` 注明未实现）。
-> `sharePath` 目前指向**不存在的小程序页面** `pages/match/scan`（真实页面是 `pkgMatch/pages/invite`）——
-> 属实现缺陷，见交付报告「需改实现」。
+> ✅ `sharePath` 已于 2026-10-13 修正为**真实存在的页面** `pkgMatch/pages/invite?scene=…`：
+> 原值 `pages/match/scan` 在小程序里**从来没有这个页面**（邀请页在分包 `pkgMatch` 下），
+> 而字段照常返回、不会报错，属"等你真去用它才炸"的形态。
+> 现在它与**小程序码的落地页**（`INVITE_PAGE_PATH`）以及小程序自身的 `onShareAppMessage`
+> 指向同一个页面 —— "扫出来的码"和"转发出去的路径"行为一致。
 
 **错误码**
 

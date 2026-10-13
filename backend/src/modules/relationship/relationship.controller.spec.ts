@@ -359,7 +359,7 @@ describe('createInvite 响应成形', () => {
 
     const view = await controller.createInvite('user-1', { relationType: 'COUPLE' });
 
-    expect(view.sharePath).toBe('pages/match/scan?scene=K7M2XQ9V');
+    expect(view.sharePath).toBe('pkgMatch/pages/invite?scene=K7M2XQ9V');
     expect(view.qrCodeScene).toBe('K7M2XQ9V');
   });
 

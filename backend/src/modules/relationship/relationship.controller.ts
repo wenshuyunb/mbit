@@ -106,8 +106,25 @@ export interface InviteCreatedView extends InviteView {
   readonly remainingSeconds: number;
 }
 
-/** 契约 §3.6.1 约定的分享路径模板 */
-const buildSharePath = (code: string): string => `pages/match/scan?scene=${code}`;
+/**
+ * 分享路径（契约 §3.6.1）
+ *
+ * ⚠ 这里必须是**小程序里真实存在的页面**。原先返回的是 `pages/match/scan`，
+ * 而那个页面**从来没有存在过**（主包只有 `pages/index/index`、`pages/report/list`、
+ * `pages/profile/index`、`pages/test/intro`；邀请页在分包 `pkgMatch` 下）。
+ * 坑在于它不会报错：字段照常返回、前端也只是把它当字符串收下，
+ * 直到真的有人拿它去 `navigateTo` / 配分享路径时才炸，而那时排查会指向错误的方向。
+ *
+ * 现在统一为 `pkgMatch/pages/invite`，理由有两条：
+ *   ① 它就是**小程序码的落地页**（`relationship.service.ts` 的 `INVITE_PAGE_PATH`），
+ *      "扫出来的码"与"转发出去的路径"指向同一页，两条入口行为才一致；
+ *   ② 与小程序自己的 `onShareAppMessage` 用的是同一个页面
+ *      （`frontend/miniapp/src/pkgMatch/pages/invite.vue`）。
+ *
+ * 不加前导斜杠：微信 `wxacode` 的 `page` 参数与 `onShareAppMessage` 的 `path` 都用这种形式
+ *（小程序内部那个分享路径带了 `/`，微信同样接受，但契约示例与本字段一直是无斜杠形式）。
+ */
+const buildSharePath = (code: string): string => `pkgMatch/pages/invite?scene=${code}`;
 
 /** 剩余有效秒数（契约字段；已过期为 0，不返回负数） */
 const remainingSecondsOf = (expiresAt: string, now: number): number => {
