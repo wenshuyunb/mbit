@@ -55,13 +55,31 @@ export const LOVE_LANGUAGE_LABELS: Readonly<Record<string, string>> = {
   PHYSICAL_TOUCH: '身体的接触',
 };
 
-/** 大五特质中文名 */
+/**
+ * 大五特质中文名（**提示词里唯一的中文名来源**）
+ *
+ * ⚠ `neuroticism` 必须叫「神经质」，**不能**叫「情绪稳定性」：
+ * 引擎存的是**神经质原始分**（分数越高 = 情绪越容易波动），
+ * `personality-engine.service.spec.ts` 写得很直白 ——
+ * 「反向题选 5 → 情绪稳定性高 → **神经质得分为 0**」，
+ * 关系风格规则也用 `neuroticism >= 90` 判**焦虑型**依恋。
+ * 若把它标成「情绪稳定性」，`神经质 90（高）` 这行数据在提示词里就变成
+ * 「情绪稳定性 90（高）」，模型会把**最容易焦虑的用户解读成最稳的人** ——
+ * 结论正好说反，而且报告读起来毫无破绽（这正是它危险的地方）。
+ *
+ * 与产品术语一致：小程序 `config/constants.ts` 用的是
+ * 「神经质｜情绪波动的敏感程度（分数越低越稳定）」，
+ * 后端若另叫一个名字，AI 解读与用户看到的雷达图就会各说各话。
+ *
+ * **不要**改用「反转过数值」来迁就旧标签：关系风格规则、匹配权重矩阵都按
+ * 原始分做阈值比较（`gte/lte`），反转数值会让这些规则静默失效。
+ */
 export const BIG_FIVE_LABELS: Readonly<Record<string, string>> = {
   openness: '开放性',
   conscientiousness: '尽责性',
   extraversion: '外向性',
   agreeableness: '宜人性',
-  neuroticism: '情绪稳定性',
+  neuroticism: '神经质',
 };
 
 /** 上下文输入（只声明用到的字段，便于上层按需投影） */

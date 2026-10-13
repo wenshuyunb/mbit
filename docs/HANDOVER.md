@@ -336,27 +336,33 @@ worker 没跑时这些任务会**停在排队态**，表现为"接口 202 了但
 `ADMIN_REPORT_TYPES` 是**刻意的对外词汇表**，有显式映射
 （`admin-report.util.ts` 的 `RELATIONSHIP_REPORT → COMPATIBILITY_REPORT`），与 `AiReportType` 不同源。
 
-### 3.7 本轮新确认的缺陷（**未修，按优先级排**）
+### 3.7 缺陷清单（✅ 表示本轮已修）
 
-1. **🔴 `neuroticism` 的中文标签把含义说反了**（正确性缺陷，影响 AI 解读方向）。
-   `report-context.builder.ts` 的 `BIG_FIVE_LABELS` 把 `neuroticism` 标为「情绪稳定性」，
+1. ✅ **`neuroticism` 的中文标签会把含义说反**（**已修**）。
+   `report-context.builder.ts` 的 `BIG_FIVE_LABELS` 原先把 `neuroticism` 标为「情绪稳定性」，
    而引擎存的是**神经质原始分** —— `personality-engine.service.spec.ts` 写得很清楚：
    「反向题选 5 → 情绪稳定性高 → **神经质得分为 0**」，关系规则也用
-   `neuroticism >= 90` 判**焦虑型**依恋。于是「情绪稳定性 90（高）」实际含义是
-   **情绪很不稳定**，模型会把最容易焦虑的用户解读成最稳的人。
-   `chat-persona.util.ts` 有同一份标签。**修法要点**：改标签为「神经质」并说明方向
-   （**不要**去反转数值 —— 关系规则、权重矩阵都按原始分比较，改了会连带失效），
-   同时要同步 `report.bigfive` 模板里那段"方向说明"与相关断言。
-2. **`report-generation.service.ts` 的报告标题按 MBTI 变量拼**：纯大五画像会得到标题
-   `（本次测评未包含此项） （本次测评未包含此项） 深度解读`；做过 MBTI 的用户做大五报告
-   则得到 `INFJ 提倡者 深度解读`。应按 `reportType` 选择标题。
-3. **`PromptType` 枚举没有 `BIG_FIVE_REPORT`**（`schema.prisma` + init 迁移 + 生成客户端都只有 5 个值：
+   `neuroticism >= 90` 判**焦虑型**依恋。于是「情绪稳定性 90（高）」的真实含义是
+   **情绪很不稳定**，模型会把最容易焦虑的用户解读成最稳的人（而报告读起来毫无破绽）。
+   小程序端 `config/constants.ts` 一直用的是「神经质｜分数越低越稳定」，**前后端原本各说各话**。
+   修法：统一为「**神经质**」（`BIG_FIVE_LABELS` 与 `chat-persona.util.ts` 的 `BIG_FIVE_ITEMS`），
+   并同步 `report.bigfive` 模板的第 7/9 条；新增断言 `BIG_FIVE_LABELS['neuroticism'] === '神经质'`
+   且**不得含「稳定」**，防止将来被改回去。**数值方向没有反转**（关系规则与权重矩阵都按原始分比较）。
+2. ✅ **报告标题按 MBTI 变量拼**（**已修**）。原实现判断 `mbtiType === undefined`，而
+   `buildReportContext` 保证变量永远存在（缺数据时是占位文案），因此兜底分支从不命中：
+   纯大五画像会得到标题 `（本次测评未包含此项） （本次测评未包含此项） 深度解读`；
+   做过 MBTI 的用户做大五报告则得到 `INFJ 提倡者 深度解读`。
+   修法：新增 `buildPersonalReportTitle`（按 `reportType` 分派 + 按**值**判可用）
+   与 `buildRelationshipReportTitle`（关系路径有**同一个坑**：
+   `（本次测评未包含此项） × （本次测评未包含此项） 匹配解读（72 分）`）。
+   三个新用例都是「修复前必然失败」的，见 `report-generation.service.spec.ts`。
+3. ⏳ **`PromptType` 枚举没有 `BIG_FIVE_REPORT`**（`schema.prisma` + init 迁移 + 生成客户端都只有 5 个值：
    `MBTI_REPORT`/`RELATIONSHIP_REPORT`/`AI_COMPANION`/`EMOTION_ANALYSIS`/`SYSTEM_SAFETY`）。
    因此 `report.bigfive` 模板的 `type` 只能暂借 `'MBTI_REPORT'` —— **不影响生成**
    （模板只按 `key` 查找），代价是后台按类型筛选时它混在「MBTI 报告」里。
    彻底修法要动 schema + 迁移 + 后台中文名映射，且 `schema.prisma` 由
    `DATABASE_DESIGN.md` 生成，属独立一轮。
-4. 两个沿袭自 `report.mbti` 的小瑕疵：`{{conflictStyle}}` 渲染出的是原始枚举码
+4. ⏳ 两个沿袭自 `report.mbti` 的小瑕疵：`{{conflictStyle}}` 渲染出的是原始枚举码
    （如 `COLLABORATING`，缺中文标签映射）；数据全缺时渲染成「完成率：（本次测评未包含此项）%」。
 
 ### 3.8 `GROWTH_SUMMARY`（成长回顾）的现状与结论

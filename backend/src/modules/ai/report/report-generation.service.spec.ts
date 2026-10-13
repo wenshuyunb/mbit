@@ -233,6 +233,59 @@ describe('ReportGenerationService.runGeneration', () => {
       expect(lastReportUpdate(harness).title).toBe('INFJ 提倡者 深度解读');
     });
 
+    /**
+     * 标题必须**按报告类型**分派
+     *
+     * 原实现只看 `mbtiType` / `mbtiTypeName` 两个变量是否为 `undefined`，
+     * 而 `buildReportContext` 保证变量永远存在（缺数据时填占位文案），
+     * 于是兜底分支从不命中：纯大五画像会得到
+     * 「（本次测评未包含此项） （本次测评未包含此项） 深度解读」。
+     */
+    describe('【关键】标题按类型分派，不把 MBTI 拼进其它类型', () => {
+      /** 复用默认行只改差异字段，避免每个用例手抄一遍所有列 */
+      const overrideReportRow = async (harness: Harness, overrides: Record<string, unknown>): Promise<void> => {
+        const base = (await harness.prisma.aiReport.findUnique()) as Record<string, unknown>;
+        harness.prisma.aiReport.findUnique.mockResolvedValue({ ...base, ...overrides });
+      };
+
+      const overrideProfile = async (harness: Harness, overrides: Record<string, unknown>): Promise<void> => {
+        const base = (await harness.prisma.personalityProfile.findFirst()) as Record<string, unknown>;
+        harness.prisma.personalityProfile.findFirst.mockResolvedValue({ ...base, ...overrides });
+      };
+
+      it('大五报告即使用户做过 MBTI，标题也不写 MBTI 类型（否则标题与正文不符）', async () => {
+        const harness = createHarness();
+        await overrideReportRow(harness, { type: 'BIG_FIVE_REPORT', promptTemplateKey: 'report.bigfive' });
+
+        await harness.service.runGeneration(REPORT_ID);
+
+        expect(lastReportUpdate(harness).title).toBe('大五人格报告');
+      });
+
+      it('大五报告在画像没有 MBTI 时，标题不出现「（本次测评未包含此项）」', async () => {
+        const harness = createHarness();
+        await overrideReportRow(harness, { type: 'BIG_FIVE_REPORT', promptTemplateKey: 'report.bigfive' });
+        await overrideProfile(harness, { mbtiType: null });
+
+        await harness.service.runGeneration(REPORT_ID);
+
+        const title = String(lastReportUpdate(harness).title);
+        expect(title).toBe('大五人格报告');
+        expect(title).not.toContain('本次测评未包含此项');
+      });
+
+      it('MBTI 报告在画像没有 MBTI 类型时回落到类型中文名（而不是占位文案拼出来的标题）', async () => {
+        const harness = createHarness();
+        await overrideProfile(harness, { mbtiType: null });
+
+        await harness.service.runGeneration(REPORT_ID);
+
+        const title = String(lastReportUpdate(harness).title);
+        expect(title).toBe('人格深度报告');
+        expect(title).not.toContain('本次测评未包含此项');
+      });
+    });
+
     it('引言作为摘要下发', async () => {
       const harness = createHarness();
 

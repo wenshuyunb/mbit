@@ -25,7 +25,11 @@ import { Prisma } from '@prisma/client';
 import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
-import { buildReportContext, type ReportContextInput } from '../context/report-context.builder';
+import {
+  buildReportContext,
+  UNAVAILABLE_PLACEHOLDER,
+  type ReportContextInput,
+} from '../context/report-context.builder';
 import {
   buildRelationshipReportContext,
   counterpartLabelOf,
@@ -43,6 +47,7 @@ import type { LlmCompletionResult } from '../provider/llm-provider.types';
 import { PromptService, type ResolvedPrompt } from '../prompt/prompt.service';
 import { ReportGenerationOptionsService, type ReportGenerationOptions } from './report-generation-options.service';
 import { ReportLiveProgressService } from './report-live-progress.service';
+import { reportTypeName } from './report-list.util';
 import { STAGE_PROGRESS } from './report-stream.util';
 import { parseReportSections, readExpectedSections } from './report-section.parser';
 
@@ -190,7 +195,13 @@ export class ReportGenerationService {
           report.promptTemplateKey,
           options ?? {},
         )
-      : await this.prepare(report.userId, report.profileId as string, report.promptTemplateKey, options ?? {});
+      : await this.prepare(
+          report.userId,
+          report.profileId as string,
+          report.promptTemplateKey,
+          report.type,
+          options ?? {},
+        );
 
     // 阶段②：Prompt 已渲染完成（`prepare*` 内部已调用模板渲染）
     await this.publishLiveProgress(reportId, report.userId, {
@@ -353,6 +364,7 @@ export class ReportGenerationService {
     userId: string,
     profileId: string,
     templateKey: string,
+    reportType: string,
     options: ReportGenerationOptions = {},
   ): Promise<{ prompt: ResolvedPrompt; title: string }> {
     const profile = await this.prisma.personalityProfile.findFirst({
@@ -380,12 +392,7 @@ export class ReportGenerationService {
     const { variables } = buildReportContext(input);
     const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
 
-    const title =
-      variables['mbtiType'] === undefined || variables['mbtiTypeName'] === undefined
-        ? `${templateKey} 报告`
-        : `${variables['mbtiType']} ${variables['mbtiTypeName']} 深度解读`;
-
-    return { prompt, title: title.slice(0, 128) };
+    return { prompt, title: buildPersonalReportTitle(reportType, variables).slice(0, 128) };
   }
 
   /**
@@ -493,12 +500,7 @@ export class ReportGenerationService {
     const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
 
     // 标题用双方类型 + 分数：用户一眼能认出是哪段关系的哪一份报告
-    const title =
-      variables['myMbtiType'] === undefined || variables['partnerMbtiType'] === undefined
-        ? '关系匹配解读'
-        : `${variables['myMbtiType']} × ${variables['partnerMbtiType']} 匹配解读（${variables['totalScore']} 分）`;
-
-    return { prompt, title: title.slice(0, 128) };
+    return { prompt, title: buildRelationshipReportTitle(variables).slice(0, 128) };
   }
 
   /** 事务内落库：正文 + 分段 + 报告状态 */
@@ -640,6 +642,60 @@ const mergeGenerationOptions = (
   ...(options.tone !== undefined ? { tone: options.tone } : {}),
   ...(options.focus !== undefined ? { focus: options.focus } : {}),
 });
+
+/**
+ * 变量值是否**真的可用**
+ *
+ * `buildReportContext` / `buildRelationshipReportContext` 保证变量**永远存在**：
+ * 数据缺失时填 `UNAVAILABLE_PLACEHOLDER`（两个 builder 的硬性约束③，目的是让模板
+ * 永远能渲染成功）。因此判断"这项数据有没有"**必须看值**，不能看 key 在不在 ——
+ * 按 key 判空的写法会永远走不出兜底分支。
+ */
+const isVariableUsable = (value: string | undefined): value is string =>
+  value !== undefined && value.length > 0 && value !== UNAVAILABLE_PLACEHOLDER;
+
+/**
+ * 个人报告的标题（按**报告类型**分派）
+ *
+ * 原实现只判断 `mbtiType` / `mbtiTypeName` 两个变量"存不存在"，而它们永远存在，
+ * 于是兜底分支从不命中，实测会产出两种荒谬标题：
+ *   · 纯大五画像（引擎因维度无有效作答而返回 `mbtiType = null`）：
+ *     「（本次测评未包含此项） （本次测评未包含此项） 深度解读」
+ *   · 做过 MBTI 的用户去生成大五报告：「INFJ 提倡者 深度解读」（内容却全是大五）
+ * 所以这里既按类型分派，又按**值**判断 MBTI 是否真的可用。
+ */
+const buildPersonalReportTitle = (reportType: string, variables: Readonly<Record<string, string>>): string => {
+  if (reportType === 'MBTI_REPORT') {
+    const mbtiType = variables['mbtiType'];
+    const mbtiTypeName = variables['mbtiTypeName'];
+
+    if (isVariableUsable(mbtiType) && isVariableUsable(mbtiTypeName)) {
+      return `${mbtiType} ${mbtiTypeName} 深度解读`;
+    }
+  }
+
+  // 其余类型（大五 / 成长回顾）用类型中文名：它们的变量里没有 MBTI 类型，
+  // 拼上 MBTI 只会得到与正文不符的标题
+  return reportTypeName(reportType);
+};
+
+/**
+ * 关系报告的标题（双方类型 + 分数）
+ *
+ * 与个人报告同一个坑：`myMbtiType` / `partnerMbtiType` 缺失时是占位文案而非
+ * `undefined`，按 key 判空会拼出
+ * 「（本次测评未包含此项） × （本次测评未包含此项） 匹配解读（72 分）」。
+ * 分数同理（虽然关系报告要求已有成功的算分报告，但读不到分数时宁可不写）。
+ */
+const buildRelationshipReportTitle = (variables: Readonly<Record<string, string>>): string => {
+  const myType = variables['myMbtiType'];
+  const partnerType = variables['partnerMbtiType'];
+  const totalScore = variables['totalScore'];
+
+  if (!isVariableUsable(myType) || !isVariableUsable(partnerType)) return '关系匹配解读';
+
+  return `${myType} × ${partnerType} 匹配解读${isVariableUsable(totalScore) ? `（${totalScore} 分）` : ''}`;
+};
 
 /**
  * 从任意异常中取出可用的错误码（取不到则回退「AI 服务不可用」）

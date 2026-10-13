@@ -80,7 +80,7 @@ const BIG_FIVE_ITEMS: ReadonlyArray<{ key: keyof BigFiveScores; label: string }>
   { key: 'conscientiousness', label: '尽责性' },
   { key: 'extraversion', label: '外向性' },
   { key: 'agreeableness', label: '宜人性' },
-  { key: 'neuroticism', label: '情绪稳定性' },
+  { key: 'neuroticism', label: '神经质' },
 ];
 
 /** 大五分数键 */
@@ -117,7 +117,7 @@ const bigFiveLevel = (value: number): string => {
  *                    而不是靠位置猜。带关系时对方是"我的伴侣"，无关系时是"对方"。
  * @param nickname    对方昵称（无昵称为 null 时不输出昵称行）
  * @param maxItems    大五最多列几项（默认 3）—— 列全 5 项在 400 token 预算里太奢侈，
- *                    优先列"与关系冲突最相关"的三项（情绪稳定性/宜人性/外向性）
+ *                    优先列"与关系冲突最相关"的三项（神经质/宜人性/外向性）
  */
 export const buildPersonaText = (
   label: string,
@@ -143,8 +143,8 @@ export const buildPersonaText = (
   lines.push(`${nameText}：MBTI ${profile.mbtiType}${dimensionText.length > 0 ? `（${dimensionText}）` : ''}`);
 
   /**
-   * 大五的选取顺序刻意不是 schema 的列顺序：`neuroticism`（情绪稳定性）与
-   * `agreeableness` 直接决定"冲突时会不会炸/会不会退让"，是关系对话里最有用的一项；
+   * 大五的选取顺序刻意不是 schema 的列顺序：`neuroticism`（神经质，分越高情绪越易波动）
+   * 与 `agreeableness` 直接决定"冲突时会不会炸/会不会退让"，是关系对话里最有用的一项；
    * `openness` 排最后，它对"沟通方式"的解释力最弱。
    */
   const bigFiveOrder = ['neuroticism', 'agreeableness', 'extraversion', 'conscientiousness', 'openness'] as const;

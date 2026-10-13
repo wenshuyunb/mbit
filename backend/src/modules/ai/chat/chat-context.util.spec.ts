@@ -84,7 +84,7 @@ describe('trimToBudget', () => {
 });
 
 describe('assembleChatContext — 预算优先级 Recent > Persona > Memory', () => {
-  const persona = 'MBTI INTJ（内向 78%、直觉 65%）\n特质：情绪稳定性 40（偏低）';
+  const persona = 'MBTI INTJ（内向 78%、直觉 65%）\n特质：神经质 40（偏低）';
 
   it('全部装得下时不做裁剪', () => {
     const assembly = assembleChatContext({

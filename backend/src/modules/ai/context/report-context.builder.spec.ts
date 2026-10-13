@@ -8,7 +8,12 @@
  */
 
 import { renderPromptVersion } from '../prompt/prompt-renderer';
-import { buildReportContext, UNAVAILABLE_PLACEHOLDER, type ReportContextInput } from './report-context.builder';
+import {
+  BIG_FIVE_LABELS,
+  buildReportContext,
+  UNAVAILABLE_PLACEHOLDER,
+  type ReportContextInput,
+} from './report-context.builder';
 
 const fullInput = (): ReportContextInput => ({
   profile: {
@@ -92,10 +97,21 @@ describe('buildReportContext', () => {
 
       expect(summary).toContain('开放性 84（高）');
       expect(summary).toContain('外向性 32（偏低）');
-      // 顺序必须是「开放 → 尽责 → 外向 → 宜人 → 情绪稳定」
-      const order = ['开放性', '尽责性', '外向性', '宜人性', '情绪稳定性'];
+      // 顺序必须是「开放 → 尽责 → 外向 → 宜人 → 神经质」
+      const order = ['开放性', '尽责性', '外向性', '宜人性', '神经质'];
       const positions = order.map((label) => summary.indexOf(label));
       expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    });
+
+    it('【关键】neuroticism 的中文名必须是「神经质」而不是「情绪稳定性」', () => {
+      // 这条断言守的是一个**会静默把结论说反**的缺陷：
+      // 数值语义是"神经质原始分（越高 = 情绪越容易波动）"，若标签写成「情绪稳定性」，
+      // 提示词里那行 `… 90（高）` 就会被模型读成"情绪很稳定" —— 结论正好相反，
+      // 而且报告读起来毫无破绽（这正是它危险的地方）。
+      // 小程序端（`config/constants.ts`）用的也是「神经质」，两端必须同名同向。
+      expect(BIG_FIVE_LABELS['neuroticism']).toBe('神经质');
+      // 防"换个近义词改回去"：任何带"稳定"的叫法都意味着方向被读反
+      expect(BIG_FIVE_LABELS['neuroticism']).not.toContain('稳定');
     });
 
     it('依恋风格与爱的语言转为中文标签', () => {
