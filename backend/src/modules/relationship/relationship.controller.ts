@@ -64,6 +64,7 @@ import {
   AcceptInviteDto,
   ConfirmRelationshipDto,
   CreateInviteDto,
+  GenerateCompatibilityBodyDto,
   InviteCodeParamDto,
   ListRelationshipsQueryDto,
   RelationshipIdParamDto,
@@ -305,6 +306,7 @@ export class RelationshipController {
   async generateCompatibility(
     @CurrentUser('userId') userId: string,
     @Param() params: RelationshipIdParamDto,
+    @Body() _dto: GenerateCompatibilityBodyDto,
   ): Promise<CompatibilityRequestView> {
     return this.compatibilityService.requestCompatibility(userId, params.relationshipId);
   }

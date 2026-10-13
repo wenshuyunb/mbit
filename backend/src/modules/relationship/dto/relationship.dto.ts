@@ -15,6 +15,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Length, Max, Min } from 'class-validator';
 
+import { parseQueryBoolean } from '../../../common/utils/query-boolean.util';
+
 /** 关系类型（与 Prisma `RelationshipType` 一致） */
 export const RELATIONSHIP_TYPES = ['COUPLE', 'FRIEND', 'FAMILY'] as const;
 
@@ -121,6 +123,32 @@ export class CreateInviteDto {
 export class AcceptInviteDto {}
 
 // ============================================================================
+// POST /relationships/{id}/compatibility
+// ============================================================================
+
+/**
+ * 触发匹配算分的请求体
+ *
+ * **刻意留空**，理由与 `AcceptInviteDto` 相同但更硬：
+ * 契约 §3.6.8 定义 `forceRecalculate` / `focus` / `tone` / `includeAdviceFor` 四个字段，
+ * 而实现**一个都没有**（`requestCompatibility` 只收 `userId` 与 `relationshipId`）。
+ * 此前这个端点**根本没有绑定 `@Body()`**，于是传什么都没人看 —— 那不是"参数被忽略"
+ * 那么轻：契约对 `forceRecalculate` 明确写着「忽略算法幂等键强制重算（**会消耗会员额度**）」，
+ * 客户端传 `true` 后拿到 202，会以为已经强制重算并准备好再付一次配额，
+ * 实际服务端**复用了缓存报告**且什么都没消耗 —— 一个关于计费的静默谎言。
+ *
+ * 三个未交付项的各自前置工作（供后续立项）：
+ *   · `forceRecalculate`：`compatibility_reports.cacheKey` 有唯一约束，
+ *     "强制重算"要先定义清楚语义（新 key 覆盖旧报告？保留多份？谁付配额？）；
+ *   · `focus` / `tone`：需要关系解读的 Prompt 占位符体系配套（模板目前没有这些变量）；
+ *   · `includeAdviceFor`：建议面向对象，属 AI 解读的产出维度，随上一条一起做。
+ *
+ * 空 DTO + 全局 `forbidNonWhitelisted` ⇒ 这几个字段一旦出现即 `400/10001`，
+ * 比"收下再假装支持"诚实。待真正实现时在此处加回字段即可。
+ */
+export class GenerateCompatibilityBodyDto {}
+
+// ============================================================================
 // POST /relationships/{id}/confirm
 // ============================================================================
 
@@ -156,6 +184,10 @@ export class RemoveRelationshipQueryDto {
     default: true,
   })
   @IsOptional()
+  // ⚠ 这个 `@Transform` 不是装饰：查询串天生是字符串，而没有它时
+  // `?keepHistory=false` 会被隐式转换变成 `true` —— 隐私开关将完全失效
+  // （这里直接用共享实现，不用下方那个别名：别名声明在本类之后）
+  @Transform(parseQueryBoolean)
   @IsBoolean()
   keepHistory?: boolean;
 }
@@ -217,14 +249,15 @@ export class CompatibilityReportIdParamDto {
  * 反而会强制进入预览模式，用户付了钱却只看到前 20%。
  *
  * `@IsBoolean()` 仍然保留：无法识别的值（如 `maybe`）会原样透出并被它拒绝。
+ *
+ * ⚠ 这里原先有一份**局部副本**，而它（以及全仓另外 6 份同样的副本）**从未生效过**：
+ * 全局管道开了 `enableImplicitConversion`，隐式转换**先于** `@Transform` 执行，
+ * 回调拿到的 `value` 已经是 `Boolean('false') === true`，"判字符串"的分支永远走不到。
+ * 实测 `?includeScoreBreakdown=false` → `true`。
+ * 现统一改用共享实现（从 `obj[key]` 读原始字符串），详见
+ * `common/utils/query-boolean.util.ts` 的文件头。
  */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true' || value === '1' || value === 1) return true;
-  if (value === 'false' || value === '0' || value === 0) return false;
-
-  return value;
-};
+const toBoolean = parseQueryBoolean;
 
 export class GetCompatibilityReportQueryDto {
   @ApiPropertyOptional({

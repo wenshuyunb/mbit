@@ -67,6 +67,49 @@
    而契约明确要求 `200 + hasReport: false`。按文档写 `if (!res.data.hasReport)` 的前端会 `TypeError`。
    `compatibility.service.ts` 里 `if (report === null) return null;` —— 需确认小程序是否已按 `null` 处理。
 
+## 1.5 🔴 全局发现（2026-10-13 新增，**已部分修复**）：查询串布尔值全部被静默取反
+
+**现象**：`?flag=false` 与 `?flag=true` **都会变成 `true`**。
+
+**根因**：`main.ts` 的全局管道开了 `transformOptions: { enableImplicitConversion: true }`，
+class-transformer 会**先**按属性的反射类型做隐式转换 —— `boolean` 属性走 `Boolean(value)`，
+而查询串里的值**天生是字符串**，`Boolean('false') === true`。
+更坑的是 `@Transform` 的回调拿到的 `value` **已经是转换后的布尔值**，因此全仓
+**7 份** `toBoolean({ value })` 副本（判 `value === 'false'`）**一次都没生效过**
+—— 它们看起来在防这个问题，实际永远走不到字符串分支。
+
+**实测**（临时诊断 spec，跑完已删）：
+
+| 写法                           | `'false'` | `'true'` | `'0'`     |
+| ------------------------------ | --------- | -------- | --------- |
+| 只有 `@IsBoolean()`            | `true` ✗  | `true` ✓ | `true` ✗  |
+| `@Transform(({ value }) => …)` | `true` ✗  | `true` ✓ | `true` ✗  |
+| **读 `obj[key]` 原值**         | `false` ✓ | `true` ✓ | `false` ✓ |
+
+**影响**：每一个查询串布尔筛选都在**静默**给出相反结果，例如
+`?keepHistory=false`（隐私开关）被当成 `true`、`?hasRefund=false` 只返回**有**退款的订单、
+`?includeContent=false` 仍下发正文、`?includeUsage=false` 仍返回用量。
+不报错、不写日志 —— 与"绿着但不生效"是同一类，也是最难排查的一类。
+
+**已修**：
+
+1. 新增唯一实现 `backend/src/common/utils/query-boolean.util.ts`
+   （从 `obj[key]` 读**原始字符串**，绕开隐式转换；无法识别的值原样透出交给 `@IsBoolean()` 拒绝）。
+2. `relationship/dto/relationship.dto.ts`：改用共享实现，并给 `keepHistory`
+   **补上 `@Transform`** —— 没有它，上一轮做的隐私开关修复在线上**根本不会生效**。
+3. `ai/report/report-engagement.dto.ts`（10 处 usages）：改用共享实现。
+4. 新增 `query-boolean.util.spec.ts`：既有直接单测，也有**走与 `main.ts` 同配置的真实
+   ValidationPipe** 的用例（这个缺陷恰恰是"函数写对了但接线不对"，只测函数会漏）。
+
+**仍待收敛（下一轮）**：另有 **5 份**同样的 `toBoolean` 副本未改：
+`ai/chat/chat.dto.ts`、`payment/refund.dto.ts`、`admin/{user,config,prompt,test-definition}/dto/*.ts`，
+以及 `admin/question/dto/admin-question.dto.ts`（它已经收 `{value, obj, key}`，可能部分可用，需逐个验证）。
+**判定方法**：跑一次真实管道、传 `'false'` 看是否得到 `false`。
+
+**同类但危害较小的已知项**：**请求体**里的字符串布尔同样被隐式转换
+（`{"autoGenerateReport":"false"}` → `true`）。JSON 客户端本来会发真布尔，故危害小得多；
+若将来要收紧，给字段加 `@Transform(parseQueryBoolean)` 即可（`'yes'` 会 400）。
+
 ## 2. 被接收却静默失效的字段（**建议优先修，需改代码或从 DTO 移除**）
 
 **通则**：一个参数被 DTO 收下、却没有任何读取方，比"直接 400"更糟 ——

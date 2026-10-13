@@ -21,6 +21,7 @@ import {
   Min,
 } from 'class-validator';
 
+import { parseQueryBoolean } from '../../../common/utils/query-boolean.util';
 import { UUID_SHAPE_PATTERN } from '../../../common/utils/uuid.util';
 import { PDF_EXPORT_TEMPLATES, type PdfExportTemplate } from './report-export.util';
 import {
@@ -45,25 +46,15 @@ import { STREAM_DEFAULT_HEARTBEAT_MS, STREAM_MAX_HEARTBEAT_MS, STREAM_MIN_HEARTB
 /**
  * 查询参数布尔值解析
  *
- * 全局 `ValidationPipe` 开了 `enableImplicitConversion`，而 class-transformer 对
- * `boolean` 目标类型用的是 `Boolean(value)` —— `Boolean('false') === true`，
- * 于是 `?includeContent=false` 会被解析成 `true`。这类"参数看起来生效、实际反了"
- * 的缺陷很难从日志发现，因此所有布尔查询参数一律显式解析（与 `order-query.dto.ts` 同一策略）。
+ * ⚠ 这里原先有一份**局部副本**，而它（以及全仓另外 6 份同样的副本）**从未生效过**：
+ * 全局 `ValidationPipe` 开了 `enableImplicitConversion`，class-transformer 会
+ * **先**按属性的反射类型做隐式转换 —— `Boolean('false') === true`，
+ * 于是 `@Transform` 回调拿到的 `value` 已经是 `true`，"判字符串"的分支永远走不到。
+ * 实测 `?includeContent=false` → `true`（详见 `common/utils/query-boolean.util.ts` 的文件头）。
  *
- * 只认 `true/false/1/0`；其余值原样透出，交给 `@IsBoolean` 报 400 ——
- * 把 `'yes'` 猜成布尔会让调用方在毫不知情的情况下改变行为。
+ * 现统一改用共享实现：它从 `obj[key]` 读**原始字符串**，因此不受隐式转换影响。
  */
-const toBooleanParam = ({ value }: { value: unknown }): unknown => {
-  if (typeof value === 'boolean') return value;
-
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'true' || normalized === '1') return true;
-    if (normalized === 'false' || normalized === '0') return false;
-  }
-
-  return value;
-};
+const toBooleanParam = parseQueryBoolean;
 
 /**
  * 报告 ID（UUID 形状校验）
