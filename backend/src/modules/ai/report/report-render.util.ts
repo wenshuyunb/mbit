@@ -161,6 +161,13 @@ export const renderShareCardImage = (_input: ShareCardRenderInput): Promise<Rend
  * `outbox_event` 重试。因此本函数的契约是「失败返回 `null`」而不是抛错；
  * 当前未接入微信接口，**恒返回 `null`**，调用方便按契约走降级分支
  * （`showQrCode` 置 `false` + 写重试事件）。
+ *
+ * ⚠ **不要再实现一遍微信调用**：`WechatService.getMiniAppCode()` 已经实现了
+ * `wxacode.getUnlimited`（含按 `Content-Type` 分流二进制与 JSON 错误、
+ * 未配置凭证时降级为 `null`），并且邀请二维码已经在用它。
+ * 接入分享卡时应当**注入 `WechatService`** 并删掉本桩，
+ * 而不是在这里重写一份 —— 同一接口两份实现必然漂移
+ * （本项目已在 `maskNickname` 上吃过一次这个亏）。
  */
 export const generateMiniAppCode = (_params: {
   readonly scene: string;
