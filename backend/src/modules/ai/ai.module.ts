@@ -21,6 +21,7 @@ import { ReportStreamService } from './report/report-stream.service';
 import { MembershipModule } from '../membership/membership.module';
 import { StorageModule } from '../storage/storage.module';
 import { SystemModule } from '../system/system.module';
+import { WechatModule } from '../../infra/wechat/wechat.module';
 import { ChatModule } from './chat/chat.module';
 
 /**
@@ -70,6 +71,10 @@ import { ChatModule } from './chat/chat.module';
     MembershipModule,
     StorageModule,
     SystemModule,
+    // 分享卡的小程序码复用 `WechatService.getMiniAppCode()`（`wxacode.getUnlimited`）。
+    // WechatModule 不是 @Global 的（与 RedisModule 不同），必须在用它的模块里显式导入，
+    // 否则启动时才报 "Nest can't resolve dependencies of ReportShareCardService (..., ?)"。
+    WechatModule,
     BullModule.registerQueue({ name: REPORT_EXPORT_QUEUE_NAME }),
     // 双向依赖：两侧都要 forwardRef（见文件头说明）
     forwardRef(() => ChatModule),

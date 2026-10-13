@@ -411,16 +411,17 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     label: 'PDF 导出',
     valueType: ConfigValueType.BOOLEAN,
     /**
-     * 默认 **false**：渲染器尚未接入（`report-render.util.ts` 恒抛 `90008`），
-     * 而"关闭后报告导出入口隐藏"正是这个开关存在的意义。
-     * 原先默认 `true` 会让客户端**展示一个点了必然失败的入口** ——
-     * 这类"宣称可用但交付不了"的开关比没有开关更糟。
+     * 默认 **true**：渲染器已于 2026-10-13 接入
+     * （`report-render.util.ts` 用 `pdf-lib` + 仓库自带的 OFL 中文字体产出真实 PDF）。
      *
-     * ⚠ 与会员权益文案的联动：`prisma/seed/data/catalog.ts` 的 `MEMBERSHIP_BENEFITS`
-     * 里「PDF 导出」一项也必须同步（否则等于把交不出来的能力写进付费权益表）。
-     * 渲染器接入后：先把这里改回 `true`，再恢复权益文案。
+     * 历史：接入前这里默认 `false`，因为"关闭后入口隐藏"正是该开关的意义 ——
+     * 让客户端展示一个点了必然失败的入口比没有入口更糟。
+     *
+     * ⚠ 与会员权益文案联动：`prisma/seed/data/catalog.ts` 的 `MEMBERSHIP_BENEFITS`
+     * 里「PDF 导出」已同步恢复为 `不限次`。两者必须同时改，否则会出现
+     * "权益表承诺了、开关却是关的"这种自相矛盾。
      */
-    defaultValue: 'false',
+    defaultValue: 'true',
     description: '关闭后报告导出入口隐藏（服务端仍以权益为准）',
     requiresConfirmPassword: false,
     impactScope: 'MEMBERSHIP',
@@ -432,10 +433,10 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     label: '分享卡片',
     valueType: ConfigValueType.BOOLEAN,
     /**
-     * 默认 **false**：`renderShareCardImage` 与 PDF 渲染器同属未接入的渲染缺口
-     * （见 `report-render.util.ts` 文件头），没有落地就不该给用户入口。
+     * 默认 **true**：`renderShareCardImage` 已于 2026-10-13 用 `@napi-rs/canvas`
+     * 接入，产出 750×1334 的分享图（WebP，编码不可用时降级 PNG）。
      */
-    defaultValue: 'false',
+    defaultValue: 'true',
     description: '关闭后前端隐藏分享按钮，避免出现无落地的入口',
     requiresConfirmPassword: false,
     impactScope: 'GLOBAL',

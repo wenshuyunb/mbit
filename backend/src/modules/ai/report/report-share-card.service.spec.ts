@@ -1,12 +1,14 @@
-﻿/**
+/**
  * 分享卡服务测试（契约 §3.5.9）
  *
  * 最重要的是**防付费内容外泄**：`QUOTE_CARD` 的金句只允许来自免费预览段，
  * 且拒绝必须发生在"扣配额 / 渲染"之前 —— 否则一次被拒的请求也会消耗用户的额度。
  *
- * 渲染器同样被部分替换：需要链路成功时给一次模拟产物，需要验证缺口时保留真实实现。
+ * 渲染器被部分替换：验证链路成功时给一次模拟产物；
+ * 需要验证"渲染失败也要归还配额"时，让渲染 mock 抛一个真实的渲染错误。
  */
 
+import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import type { CryptoService } from '../../../infra/crypto/crypto.service';
 import type { PrismaService } from '../../../infra/prisma/prisma.service';
@@ -14,10 +16,11 @@ import type { RedisService } from '../../../infra/redis/redis.service';
 import type { EntitlementService } from '../../membership/entitlement.service';
 import type { StorageService } from '../../storage/storage.service';
 import type { SystemConfigService } from '../../system/system-config.service';
+import type { WechatService } from '../../../infra/wechat/wechat.service';
 import type { ReportQuotaService } from './report-quota.service';
 import { ReportShareCardService } from './report-share-card.service';
 import type * as renderModule from './report-render.util';
-import { generateMiniAppCode, renderShareCardImage } from './report-render.util';
+import { renderShareCardImage } from './report-render.util';
 
 jest.mock('./report-render.util', () => {
   const actual = jest.requireActual<typeof renderModule>('./report-render.util');
@@ -25,13 +28,10 @@ jest.mock('./report-render.util', () => {
   return {
     ...actual,
     renderShareCardImage: jest.fn(actual.renderShareCardImage),
-    generateMiniAppCode: jest.fn(actual.generateMiniAppCode),
   };
 });
 
-const actualRender = jest.requireActual<typeof renderModule>('./report-render.util');
 const renderMock = renderShareCardImage as jest.MockedFunction<typeof renderShareCardImage>;
-const qrMock = generateMiniAppCode as jest.MockedFunction<typeof generateMiniAppCode>;
 
 const USER_ID = 'user-1';
 const REPORT_ID = '0195f3a2-b24e-7a86-abf1-7dae4b5c6f45';
@@ -49,6 +49,7 @@ interface Harness {
   redis: { get: jest.Mock; set: jest.Mock; del: jest.Mock; key: jest.Mock; getJson: jest.Mock; setJson: jest.Mock };
   quota: { consumeWindowQuota: jest.Mock; refundWindowQuota: jest.Mock };
   storage: { uploadServerObject: jest.Mock; makeServerObjectPublic: jest.Mock; publicUrlOf: jest.Mock };
+  wechat: { getMiniAppCode: jest.Mock };
 }
 
 const createHarness = (options: { unlocked?: boolean; existingCard?: unknown } = {}): Harness => {
@@ -131,6 +132,12 @@ const createHarness = (options: { unlocked?: boolean; existingCard?: unknown } =
     }),
   };
 
+  /**
+   * 微信侧：小程序码改为**复用 `WechatService.getMiniAppCode()`**（原先 util 里那份桩已删除）。
+   * 默认返回一个假的 PNG 字节 = "微信返回了图"，需要降级分支的用例再单独覆盖为 `null`。
+   */
+  const wechat = { getMiniAppCode: jest.fn().mockResolvedValue(Buffer.from('mock-qr')) };
+
   return {
     service: new ReportShareCardService(
       prisma as unknown as PrismaService,
@@ -140,11 +147,13 @@ const createHarness = (options: { unlocked?: boolean; existingCard?: unknown } =
       entitlements as unknown as EntitlementService,
       quota as unknown as ReportQuotaService,
       systemConfigs as unknown as SystemConfigService,
+      wechat as unknown as WechatService,
     ),
     prisma,
     redis,
     quota,
     storage,
+    wechat,
   };
 };
 
@@ -164,12 +173,14 @@ const renderedArtifact = {
   width: 750,
   height: 1334,
   pageCount: null,
+  // 图片是光栅化的，没有字体概念
+  fontEmbedded: null,
+  fontSubsetted: null,
 };
 
 describe('ReportShareCardService.generateShareCard', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    qrMock.mockResolvedValue(Buffer.from('mock-qr'));
   });
 
   it('【关键】QUOTE_CARD 指向付费段落 → 10001，且发生在扣配额与渲染之前', async () => {
@@ -300,9 +311,11 @@ describe('ReportShareCardService.generateShareCard', () => {
     expect(harness.quota.consumeWindowQuota).toHaveBeenCalledTimes(1);
   });
 
-  it('【关键】渲染器未接入 → 90008 并归还配额（不返回占位图）', async () => {
+  it('【关键】渲染失败 → 归还配额、不上传任何产物（绝不返回占位图）', async () => {
     const harness = createHarness();
-    renderMock.mockImplementationOnce(actualRender.renderShareCardImage);
+    // 真实渲染失败的最典型原因是"部署缺字体"（90008）。这里模拟它：
+    // 关键不变量是**失败必须归还配额且不产生任何上传**，而不是"渲染器永远失败"。
+    renderMock.mockRejectedValueOnce(new BusinessException(ErrorCode.CONFIG_MISSING, '报告字体缺失'));
 
     await expect(harness.service.generateShareCard(request())).rejects.toMatchObject({
       code: ErrorCode.CONFIG_MISSING,
@@ -314,7 +327,7 @@ describe('ReportShareCardService.generateShareCard', () => {
 
   it('小程序码生成失败时降级：不阻断、showQrCode 置 false、附 warnings、写 outbox 重试', async () => {
     const harness = createHarness();
-    qrMock.mockResolvedValueOnce(null);
+    harness.wechat.getMiniAppCode.mockResolvedValueOnce(null);
     renderMock.mockResolvedValueOnce(renderedArtifact);
 
     const view = await harness.service.generateShareCard(request({ showQrCode: true }));

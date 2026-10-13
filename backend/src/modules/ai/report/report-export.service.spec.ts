@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PDF 导出服务测试（契约 §3.5.8）
  *
  * 渲染函数被**部分替换**（`jest.fn(actual)`）：
@@ -12,6 +12,7 @@
 import type { Queue } from 'bullmq';
 import { createHash } from 'node:crypto';
 
+import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import type { CryptoService } from '../../../infra/crypto/crypto.service';
 import type { PrismaService } from '../../../infra/prisma/prisma.service';
@@ -392,14 +393,22 @@ describe('ReportExportService.requestExport', () => {
   });
 });
 
-describe('ReportExportService.runExportTask（渲染器缺口）', () => {
+describe('ReportExportService.runExportTask（渲染失败的处理）', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('【关键】渲染器未接入 → 任务 FAILED（90008），并且归还配额，不产生任何假文件', async () => {
+  it('【关键】渲染失败 → 任务 FAILED（90008），并且归还配额，不产生任何假文件', async () => {
     const harness = createHarness();
-    renderMock.mockImplementationOnce(actualRender.renderReportPdf);
+    /**
+     * 渲染失败的最典型原因是**部署缺中文字体**（`report-render.util.ts` 的 `loadFontBytes`）。
+     * 这里直接制造该错误：真实渲染成功路径已有独立用例覆盖
+     *（`report-export.util.spec.ts` 的"渲染器真实产出"）。
+     *
+     * 关键不变量：**渲染失败必须让任务 FAILED + 归还配额 + 不上传**，
+     * 绝不能"降级产出一份空 PDF"—— 用户会把空白报告当真实报告保存和转发。
+     */
+    renderMock.mockRejectedValueOnce(new BusinessException(ErrorCode.CONFIG_MISSING, '报告字体缺失'));
 
     const task: ReportExportTaskState = {
       taskId: 'task-1',
@@ -435,7 +444,7 @@ describe('ReportExportService.runExportTask（渲染器缺口）', () => {
     expect(final.status).toBe('FAILED');
     expect(final.stage).toBe('ERROR');
     expect(final.errorCode).toBe(ErrorCode.CONFIG_MISSING);
-    expect(final.errorMessage).toContain('渲染器');
+    expect(final.errorMessage).toContain('字体');
 
     // 没有上传、没有签名、没有回写 pdfUrl
     expect(harness.storage.uploadServerObject).not.toHaveBeenCalled();
@@ -499,6 +508,8 @@ describe('ReportExportService.runExportTask（渲染器缺口）', () => {
       width: null,
       height: null,
       pageCount: 14,
+      fontEmbedded: true,
+      fontSubsetted: true,
     });
 
     const task: ReportExportTaskState = {

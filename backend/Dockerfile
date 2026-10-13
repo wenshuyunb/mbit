@@ -60,6 +60,11 @@ COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/prisma ./prisma
 COPY --from=builder --chown=node:node /app/package.json ./package.json
+# 报告中文字体（Noto Sans SC，SIL OFL 1.1）
+# ⚠ 必须随镜像分发：alpine 基础镜像**不含任何中文字体**，缺失会让 PDF 渲染抛
+# `90008 CONFIG_MISSING`（任务失败并归还配额）——这是有意为之的显式失败，
+# 绝不能退回"产出一份全是方块/空白的报告"。
+COPY --from=builder --chown=node:node /app/assets ./assets
 
 EXPOSE 3000
 

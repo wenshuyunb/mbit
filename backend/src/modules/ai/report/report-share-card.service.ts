@@ -31,6 +31,10 @@ import { ErrorCode } from '../../../common/errors/error-code';
 import { CryptoService } from '../../../infra/crypto/crypto.service';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
 import { RedisService } from '../../../infra/redis/redis.service';
+// ⚠ 普通 import（非 `import type`）：Nest 的构造参数注入依赖 `design:paramtypes` 里的
+// **运行时类引用**，`import type` 会被编译期擦除，导致启动时报
+// "Nest can't resolve dependencies of the ReportShareCardService (..., ?)"
+import { WechatService } from '../../../infra/wechat/wechat.service';
 import { EntitlementService } from '../../membership/entitlement.service';
 import { StorageService } from '../../storage/storage.service';
 import { SystemConfigService } from '../../system/system-config.service';
@@ -58,7 +62,6 @@ import {
   SHARE_CARD_COMPLIANCE_TEXT,
   SHARE_CARD_HEIGHT,
   SHARE_CARD_WIDTH,
-  generateMiniAppCode,
   renderShareCardImage,
 } from './report-render.util';
 import { buildSectionViews } from './report-visibility';
@@ -117,6 +120,7 @@ export class ReportShareCardService {
     private readonly entitlements: EntitlementService,
     private readonly quota: ReportQuotaService,
     private readonly systemConfigs: SystemConfigService,
+    private readonly wechat: WechatService,
   ) {}
 
   async generateShareCard(input: ShareCardRequestInput): Promise<ShareCardView> {
@@ -187,8 +191,22 @@ export class ReportShareCardService {
       // ---- 小程序码（失败降级，契约规则 6） ----
       let qrCodeImage: Buffer | null = null;
       let effectiveShowQrCode = showQrCode;
+      /**
+       * 小程序码复用 `WechatService.getMiniAppCode()`（`wxacode.getUnlimited`）
+       *
+       * 这里**不再自带一份实现**：邀请二维码已经走同一个方法，两份实现必然漂移
+       * （本项目在 `maskNickname` 上已经吃过一次这个亏）。
+       * 该方法未配置微信凭证、或微信侧报错时**返回 `null` 而不抛错**，
+       * 与契约规则 6 的"降级为无码卡片"天然对齐。
+       *
+       * `width: 430` 与邀请码保持一致；分享卡画布 750 宽，190 的绘制尺寸下仍清晰。
+       */
       if (showQrCode) {
-        qrCodeImage = await generateMiniAppCode({ scene: qrCodeScene, pagePath: await this.sharePath() });
+        qrCodeImage = await this.wechat.getMiniAppCode({
+          scene: qrCodeScene,
+          page: await this.sharePath(),
+          width: 430,
+        });
         if (qrCodeImage === null) {
           warnings.push('小程序码生成失败，本次分享图不含小程序码');
           effectiveShowQrCode = false;
