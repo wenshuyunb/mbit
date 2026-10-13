@@ -54,7 +54,12 @@ const MEMBERSHIP_BENEFITS: SeedPlanBenefit[] = [
   { key: 'AI_DAILY_LIMIT', label: 'AI 助手每日对话', value: '50 次', highlight: true },
   { key: 'UNLIMITED_REPORTS', label: '人格报告', value: '不限份数', highlight: true },
   { key: 'REGENERATE', label: '报告重新生成', value: '每日 5 次', highlight: false },
-  { key: 'PDF_EXPORT', label: 'PDF 导出', value: '不限次', highlight: true },
+  // ⚠ 「PDF 导出」后端目前**交不出来**（`report-render.util.ts` 恒抛 `90008`），
+  // 因此这里如实写成"即将开放"而不是"不限次" —— 这是**付费权益表**，
+  // 写上去就是对用户的承诺（`FEATURE_PDF_EXPORT` 开关也已同步默认关闭）。
+  // 渲染器接入后：本项改回 `value: '不限次', highlight: true`，
+  // 并把 `system-config.catalog.ts` 的 `FEATURE_PDF_EXPORT` 默认值改回 `'true'`。
+  { key: 'PDF_EXPORT', label: 'PDF 导出', value: '即将开放', highlight: false },
   { key: 'COMPATIBILITY_REPORT', label: '情侣匹配深度报告', value: '包含', highlight: true },
   { key: 'HISTORY_ARCHIVE', label: '历史关系档案', value: '包含', highlight: false },
 ];
@@ -63,7 +68,7 @@ export const MEMBERSHIP_PLANS: SeedMembershipPlan[] = [
   {
     code: 'MEMBER_MONTHLY',
     name: '月度会员',
-    description: '解锁 AI 情感助手每日 50 次对话、报告无限重新生成、PDF 导出与匹配深度报告。',
+    description: '解锁 AI 情感助手每日 50 次对话、报告无限重新生成与匹配深度报告（PDF 导出即将开放）。',
     durationDays: 30,
     priceAmount: 3900,
     originalAmount: 6900,
@@ -138,7 +143,7 @@ export const PRODUCTS: SeedProduct[] = [
     code: 'MEMBERSHIP_MONTHLY',
     name: '月度会员',
     type: 'MEMBERSHIP',
-    description: '30 天会员权益：AI 助手每日 50 次对话、报告不限份数、PDF 导出。',
+    description: '30 天会员权益：AI 助手每日 50 次对话、报告不限份数（PDF 导出即将开放）。',
     priceAmount: 3900,
     originalAmount: 6900,
     durationDays: 30,

@@ -410,7 +410,17 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     group: 'FEATURE_FLAG',
     label: 'PDF 导出',
     valueType: ConfigValueType.BOOLEAN,
-    defaultValue: 'true',
+    /**
+     * 默认 **false**：渲染器尚未接入（`report-render.util.ts` 恒抛 `90008`），
+     * 而"关闭后报告导出入口隐藏"正是这个开关存在的意义。
+     * 原先默认 `true` 会让客户端**展示一个点了必然失败的入口** ——
+     * 这类"宣称可用但交付不了"的开关比没有开关更糟。
+     *
+     * ⚠ 与会员权益文案的联动：`prisma/seed/data/catalog.ts` 的 `MEMBERSHIP_BENEFITS`
+     * 里「PDF 导出」一项也必须同步（否则等于把交不出来的能力写进付费权益表）。
+     * 渲染器接入后：先把这里改回 `true`，再恢复权益文案。
+     */
+    defaultValue: 'false',
     description: '关闭后报告导出入口隐藏（服务端仍以权益为准）',
     requiresConfirmPassword: false,
     impactScope: 'MEMBERSHIP',
@@ -421,7 +431,11 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     group: 'FEATURE_FLAG',
     label: '分享卡片',
     valueType: ConfigValueType.BOOLEAN,
-    defaultValue: 'true',
+    /**
+     * 默认 **false**：`renderShareCardImage` 与 PDF 渲染器同属未接入的渲染缺口
+     * （见 `report-render.util.ts` 文件头），没有落地就不该给用户入口。
+     */
+    defaultValue: 'false',
     description: '关闭后前端隐藏分享按钮，避免出现无落地的入口',
     requiresConfirmPassword: false,
     impactScope: 'GLOBAL',
