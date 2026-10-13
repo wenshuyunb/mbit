@@ -23,7 +23,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import type { Dimension, QuestionType } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
-import type { TransformFnParams } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -46,6 +45,7 @@ import {
 import type { ValidationArguments, ValidationOptions } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../../common/dto/api-response.dto';
+import { parseQueryBoolean as toBoolean } from '../../../../common/utils/query-boolean.util';
 
 // ============================================================================
 // 取值域常量（契约 §3.14.3；与 Service 的语义校验共用，避免两处各写一份数字）
@@ -165,26 +165,33 @@ const DIMENSION_LIST_PATTERN = new RegExp(
 const TAG_LIST_PATTERN = /^(?:[^,]{1,16})(?:,[^,]{1,16})*$/;
 
 /**
- * query 字符串 → 布尔值
+ * query 字符串 → 布尔值（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
  *
  * ⚠ **只写 `@Transform` 是不够的**：`main.ts` 的全局 ValidationPipe 开了
  * `enableImplicitConversion`，class-transformer 会先按反射类型执行隐式转换
  * （`Boolean('false') === true`），**然后**才调用自定义 transform —— 也就是说自定义
- * transform 拿到的已经是 `true`，`?isActive=false` 会被静默解析成 `true`，筛出来的
- * 结果是**反的**（且不报错，是最难发现的那类缺陷）。
+ * transform 拿到的 `value` 已经是 `true`，只读 `value` 的写法会让 `?isActive=false`
+ * 被静默解析成 `true`，筛出来的结果是**反的**（且不报错，是最难发现的那类缺陷）。
  *
- * 因此这里从原始对象（`obj`）里取回未经转换的值再判断；非法取值原样返回，
- * 交给 `@IsBoolean` 产出 `10001`。
+ * 因此必须从原始对象（`obj`）里取回未经转换的值 —— 共享实现正是这么做的。
+ *
+ * ## 收敛说明（本文件此前是**唯一读对了 `obj[key]` 的一份**）
+ *
+ * 这里原先的局部副本也读了 `obj[key]`，因此它**是 7 份里唯一真正有效的**（另一份
+ * `refund.dto.ts` 是"侥幸有效"，见那里的说明）：实测（走与 `main.ts` 同配置的真实管道）
+ * `?isActive=false` → `false`，与共享实现一致，所以它不是缺陷的一部分。
+ * 但它比共享实现更严，边界行为不同 —— 收敛后**放宽**了如下取值（原先会被 400 拒绝）：
+ *
+ * | 输入 | 旧局部副本 | 共享实现 |
+ * | --- | --- | --- |
+ * | `'1'` | 400 | `true` |
+ * | `'0'` | 400 | `false` |
+ * | `' TRUE '` / `'False'` | 400 | `true` / `false` |
+ * | `'maybe'` | 400 | 400（原样透出交给 `@IsBoolean`） |
+ *
+ * 这次放宽是**有意**的：全仓只该有一套查询布尔语义，否则同一个 `?flag=1` 在不同
+ * 管理端接口上「一个能用一个 400」。若将来要收紧，应改共享实现而不是在这里留副本。
  */
-const toBoolean = ({ value, obj, key }: TransformFnParams): unknown => {
-  const source = obj as Record<string, unknown> | undefined;
-  const raw = source === undefined ? undefined : source[key];
-  const candidate: unknown = raw === undefined || raw === null ? value : raw;
-
-  if (candidate === 'true' || candidate === true) return true;
-  if (candidate === 'false' || candidate === false) return false;
-  return candidate;
-};
 
 /**
  * `scoreMap` 自定义校验

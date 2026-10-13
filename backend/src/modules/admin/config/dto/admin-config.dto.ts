@@ -25,18 +25,30 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { parseQueryBoolean as toBoolean } from '../../../../common/utils/query-boolean.util';
+
 /**
- * query 里的布尔值转换
+ * 布尔参数转换（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
  *
  * 全局管道开启了 `enableImplicitConversion`，而 JS 的 `Boolean('false')` 是 `true` ——
  * 直接用隐式转换会把 `?includeHistory=false` 解析成 `true`（静默的错误默认值）。
+ *
+ * ⚠ 这里原先有一份**局部副本**，它和全仓另外几份一样**从未生效过**：
+ * class-transformer 的隐式转换**先于** `@Transform` 执行，副本只读 `value`，
+ * 拿到的已经是 `Boolean('false') === true`，"判字符串"的分支永远走不到。
+ * 实测（收敛前，走与 `main.ts` 同配置的真实管道）：
+ *
+ * | 字段 | 位置 | `'false'` | 期望 |
+ * | --- | --- | --- | --- |
+ * | `AdminConfigListQueryDto.includeHistory` | 查询 | `true` ✗ | `false` |
+ * | `AdminUpdateConfigsDto.dryRun` | 请求体 | `true` ✗ | `false` |
+ *
+ * `dryRun` 的错误方向尤其危险：它本意是「只校验并返回 before/after，不写入」，
+ * 被取反后**一次都没生效过** —— 试运行会真的写库，而调用方以为只是预演。
+ *
+ * 共享实现从 `obj[key]` 读**原始字符串**（`obj` 是未被隐式转换过的原始输入对象），
+ * 因此不受隐式转换影响。
  */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (value === true || value === false) return value;
-  if (value === 'true' || value === '1') return true;
-  if (value === 'false' || value === '0') return false;
-  return value;
-};
 
 export class AdminConfigListQueryDto {
   @ApiPropertyOptional({

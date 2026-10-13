@@ -35,6 +35,7 @@ import {
   Min,
 } from 'class-validator';
 
+import { parseQueryBoolean as toBoolean } from '../../../common/utils/query-boolean.util';
 import {
   CONTEXT_HINTS,
   CONVERSATION_MODES,
@@ -73,14 +74,29 @@ const splitCommaSeparated = ({ value }: { value: unknown }): unknown => {
   return parts.length > 0 ? parts : undefined;
 };
 
-/** `'true'` / `'false'` → 布尔（查询串里布尔值是字符串） */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (typeof value === 'boolean') return value;
-  if (value === 'true' || value === '1') return true;
-  if (value === 'false' || value === '0') return false;
-
-  return value;
-};
+/**
+ * 查询串布尔解析（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
+ *
+ * 这里原先有一份**局部副本**，它和全仓另外几份一样**从未生效过**：全局
+ * `ValidationPipe` 开了 `enableImplicitConversion`，class-transformer 会**先**
+ * 按属性的反射类型做隐式转换（`Boolean('false') === true`），**然后**才调用
+ * `@Transform` —— 副本只读 `value`，拿到的已经是 `true`，"判字符串"的分支永远
+ * 走不到。实测（收敛前，走与 `main.ts` 同配置的真实管道）：
+ *
+ * | 字段 | `'false'` | 期望 |
+ * | --- | --- | --- |
+ * | `DeleteConversationQueryDto.hardDelete` | `true` ✗ | `false` |
+ * | `AiQuotaQueryDto.includeUsage` | `true` ✗ | `false` |
+ * | `CreateConversationDto.includePersona`（请求体） | `true` ✗ | `false` |
+ *
+ * 共享实现改从 `obj[key]` 读**原始字符串**（`obj` 是未被隐式转换过的原始输入对象），
+ * 因此不受隐式转换影响。
+ *
+ * 用 `import ... as toBoolean` 而不是 `const toBoolean = parseQueryBoolean;`：
+ * import 声明会被提升到模块顶部，不会踩 `relationship.dto.ts` 里那个
+ * "Block-scoped variable used before its declaration"（别名写在文件中段，
+ * 而装饰器在类定义时即求值）的 TDZ 坑。
+ */
 
 // ============================================================================
 // §3.7.1 POST /ai/conversations

@@ -19,6 +19,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Length, Max, Min } from 'class-validator';
 
+import { parseQueryBoolean as toBoolean } from '../../common/utils/query-boolean.util';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from './order-query.util';
 import { USER_REFUND_REASONS } from './refund.util';
 
@@ -49,18 +50,26 @@ const csvToArray = ({ value }: { value: unknown }): unknown => {
   return value;
 };
 
-/** 布尔解析（理由见 `order-query.dto.ts` 的文件头：隐式转换会把 `'false'` 变成 `true`） */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (typeof value === 'boolean') return value;
-
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'true' || normalized === '1') return true;
-    if (normalized === 'false' || normalized === '0') return false;
-  }
-
-  return value;
-};
+/**
+ * 布尔解析（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
+ *
+ * ⚠ **本文件是 7 份副本里唯一"侥幸仍然有效"的一份**，值得记下来，因为它是
+ * `boolean` 隐式转换陷阱的一个反例：
+ *
+ * 全局 `ValidationPipe` 开了 `enableImplicitConversion`，class-transformer 会**先**
+ * 按属性的反射类型做隐式转换，**然后**才调用 `@Transform` —— `Boolean('false') === true`，
+ * 于是"只读 `value`"的副本在别处（如 `chat.dto.ts`、`admin-user.dto.ts`）全部失效。
+ * 但本文件的三个布尔字段都声明为 `boolean | string`，联合类型的 `design:type` 是
+ * `Object`（实测），隐式转换不会做 `Boolean()` 转换，`value` 到 `@Transform` 时
+ * **仍是原字符串**，副本里的字符串分支因此真的跑到了。
+ *
+ * 副作用是语义完全依赖声明类型的写法：哪天有人把 `boolean | string` 收紧成 `boolean`
+ * （看起来只是清理类型），这三个字段会**立刻静默失效**（`?force=false` → `true`）。
+ * 现统一改用共享实现（从 `obj[key]` 读原始字符串），行为不再取决于字段的声明类型。
+ *
+ * 收敛后的可观测行为与本文件原先**完全一致**（实测 `'false'`/`'true'`/`'1'`/`'0'`/
+ * `' TRUE '`/`'maybe'` 逐一对照无差异），因此这次改动是纯粹的收敛、不改业务语义。
+ */
 
 // ============================================================================
 // GET /refunds

@@ -26,17 +26,38 @@ export class JwtAuthGuard extends AuthGuard(USER_JWT_STRATEGY) {
     super();
   }
 
-  override canActivate(context: ExecutionContext): boolean | Promise<boolean> {
+  override async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
 
-    if (isPublic) {
-      return true;
+    if (!isPublic) {
+      return (await super.canActivate(context)) as boolean;
     }
 
-    return super.canActivate(context) as boolean | Promise<boolean>;
+    /**
+     * 公开接口：**尝试**解析令牌，失败按匿名继续
+     *
+     * 原实现是 `if (isPublic) return true;` —— 直接跳过策略，于是
+     * **即使客户端带了合法令牌，`request.principal` 也不会被填上**。
+     * 后果是 `@OptionalUser()` 在公开接口上恒为 `undefined`：像
+     * `GET /membership/products` 这样"游客能看、登录用户还要看到自己的会员状态"
+     * 的接口，登录用户反而会拿到匿名的"非会员"视图 —— 会员页显示未开通。
+     *
+     * 这也不是新行为：`@OptionalUser` 此前在任何公开接口上都拿不到身份
+     * （装饰器注释写着"允许匿名接口使用"，但没人能真正用到它的"有身份"那一半）。
+     *
+     * 取舍：公开接口**不因令牌问题而 401**（过期/损坏/管理端 realm 的令牌都按匿名处理）。
+     * 这对"公开"语义是正确的 —— 公开就该是无条件可访问；需要严格鉴权的接口不该标 `@Public()`。
+     */
+    try {
+      await super.canActivate(context);
+    } catch {
+      // 匿名访问是公开接口的正常形态，不向上抛
+    }
+
+    return true;
   }
 
   /**

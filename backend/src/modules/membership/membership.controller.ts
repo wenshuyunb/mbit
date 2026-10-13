@@ -14,7 +14,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
-import { CurrentUser } from '../../common/decorators';
+import { CurrentUser, OptionalUser, Public } from '../../common/decorators';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { ListEntitlementsQueryDto } from './dto/entitlement.dto';
 import { EntitlementService, type EntitlementListView, type MembershipView } from './entitlement.service';
@@ -26,6 +26,15 @@ export interface ProductBenefit {
   readonly value: string;
   readonly highlight: boolean;
 }
+
+/**
+ * 游客的会员状态视图
+ *
+ * `GET /membership/products` 对游客开放（契约 §3.8.1 规则 2），而响应的
+ * `membership` 字段是**必有**的。游客显然不是会员，因此给出确定的"非会员"值 ——
+ * 比返回 `null` 或省略字段更好：客户端只需一条渲染分支。
+ */
+const ANONYMOUS_MEMBERSHIP: MembershipView = { isMember: false, expireAt: null, remainingDays: null };
 
 /** 商品视图（只暴露前端需要的字段） */
 export interface ProductView {
@@ -181,20 +190,28 @@ export class MembershipController {
   }
 
   @Get('products')
+  @Public()
   @Throttle({ global: { limit: 120, ttl: 60_000 } })
   @ApiOperation({
-    summary: '可售商品列表',
+    summary: '可售商品列表（**游客可访问**）',
     description: [
       '只返回 `ON_SALE` 且在有效期内的商品，按 `sortOrder` 升序（运营可置顶推荐位）。',
       '',
       '**价格一律以服务端为准**：前端只用它展示，下单时金额由服务端从商品表重读，',
       '客户端传什么价都不影响实际收款。',
       '',
+      '**`@Public()`：游客可浏览**（契约 §3.8.1 规则 2「转化漏斗需要」）。此前该端点挂在',
+      '全局默认拒绝的守卫下，匿名访问返回 `401` —— 尚未登录的新用户看不到任何价格，',
+      '而"先看到价格再决定注册"正是转化漏斗的第一步。',
+      '',
+      '未登录时 `membership` 返回**匿名视图**（`isMember: false`、其余为 `null`），',
+      '而不是报错或省略字段：客户端据此走同一条渲染分支，无需为游客写第二套逻辑。',
+      '',
       '响应里同时带上当前用户的会员状态，避免会员页出现两次请求的中间态。',
     ].join('\n'),
   })
-  @ApiResponse({ status: 200, description: '查询成功' })
-  async listProducts(@CurrentUser('userId') userId: string): Promise<ProductListView> {
+  @ApiResponse({ status: 200, description: '查询成功（游客返回匿名 `membership`）' })
+  async listProducts(@OptionalUser('userId') userId: string | undefined): Promise<ProductListView> {
     const now = new Date();
 
     const [products, membership] = await Promise.all([
@@ -227,7 +244,9 @@ export class MembershipController {
           membershipPlan: { select: { benefits: true } },
         },
       }),
-      this.entitlements.getMembership(userId),
+      // 游客没有会员可言，但**不能省略这个字段**：契约把它定为必有，
+      // 省略会让前端为游客写第二套渲染分支（并大概率漏掉空值判断）
+      userId === undefined ? ANONYMOUS_MEMBERSHIP : this.entitlements.getMembership(userId),
     ]);
 
     return {

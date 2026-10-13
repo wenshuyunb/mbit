@@ -37,6 +37,7 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../../common/dto/api-response.dto';
+import { parseQueryBoolean as toBoolean } from '../../../../common/utils/query-boolean.util';
 
 /** 契约侧测试大类（§3.14.4.1 Query `category`） */
 export const TEST_DEFINITION_CATEGORIES = ['PERSONALITY', 'RELATIONSHIP'] as const;
@@ -73,16 +74,20 @@ export const SCORING_DIMENSIONS = [
 export type ScoringDimension = (typeof SCORING_DIMENSIONS)[number];
 
 /**
- * query 字符串 → 布尔值
+ * query 字符串 → 布尔值（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
  *
  * ⚠ 不能用 `@Type(() => Boolean)`：`Boolean('false') === true`，于是
  * `?isActive=false` 会被解析成 `true`，筛出来的结果是**反的**（而且不报错，最难发现的那类 bug）。
+ *
+ * ⚠ 这里原先有一份**局部副本**，它和全仓另外几份一样**从未生效过**：全局
+ * `ValidationPipe` 开了 `enableImplicitConversion`，class-transformer 会**先**按属性的
+ * 反射类型做隐式转换，**然后**才调用 `@Transform` —— 副本只读 `value`，拿到的已经是
+ * `Boolean('false') === true`，"判字符串"的分支永远走不到。实测（收敛前，走与 `main.ts`
+ * 同配置的真实管道）：`?isActive=false` → `true`（本意「只看启用中的」变成了「只看停用的」）。
+ *
+ * 共享实现从 `obj[key]` 读**原始字符串**（`obj` 是未被隐式转换过的原始输入对象），
+ * 因此不受隐式转换影响；无法识别的值原样返回，交给 `@IsBoolean` 报错。
  */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (value === 'true' || value === true) return true;
-  if (value === 'false' || value === false) return false;
-  return value;
-};
 
 // ============================================================================
 // GET /api/v1/admin/test-definitions

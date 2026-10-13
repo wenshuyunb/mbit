@@ -19,6 +19,8 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
+import { parseQueryBoolean as toBoolean } from '../../../../common/utils/query-boolean.util';
+
 // ============================================================================
 // 常量（同时被 Service 与 Swagger 使用，集中在此避免多处漂移）
 // ============================================================================
@@ -130,18 +132,25 @@ export interface ResolvedInclude {
 }
 
 /**
- * 布尔查询参数转换
+ * 布尔参数转换（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
  *
  * 全局 `ValidationPipe` 开启了 `transformOptions.enableImplicitConversion`，
  * 而隐式转换会把字符串 `"false"` 变为 `true`（非空字符串恒为真）——
  * 这会让 `?isMember=false` 变成「筛选会员」，是典型的隐蔽 bug。
- * 因此所有布尔查询参数一律显式转换，无法识别的值原样返回交给 `@IsBoolean` 报错。
+ *
+ * ⚠ 这里原先有一份**局部副本**，它和全仓另外几份一样**从未生效过**：
+ * class-transformer 的隐式转换**先于** `@Transform` 执行，副本只读 `value`，
+ * 拿到的已经是 `Boolean('false') === true`，"判字符串"的分支永远走不到。
+ * 实测（收敛前，走与 `main.ts` 同配置的真实管道）：
+ *
+ * | 字段 | 位置 | `'false'` | 期望 |
+ * | --- | --- | --- | --- |
+ * | `AdminUserListQueryDto.isMember` | 查询 | `true` ✗ | `false` |
+ * | `BanUserDto.notifyUser` | 请求体 | `true` ✗ | `false` |
+ *
+ * 共享实现从 `obj[key]` 读**原始字符串**（`obj` 是未被隐式转换过的原始输入对象），
+ * 因此不受隐式转换影响；无法识别的值原样返回，交给 `@IsBoolean` 报错。
  */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (value === true || value === 'true') return true;
-  if (value === false || value === 'false') return false;
-  return value;
-};
 
 /** 逗号分隔字符串的清洗（保留原始字符串，语义校验交由 Service，以便给出专属错误码） */
 const trimString = ({ value }: { value: unknown }): unknown => (typeof value === 'string' ? value.trim() : value);

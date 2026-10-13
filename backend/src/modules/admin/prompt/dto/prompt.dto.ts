@@ -37,6 +37,7 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../../common/dto/api-response.dto';
+import { parseQueryBoolean as toBoolean } from '../../../../common/utils/query-boolean.util';
 
 /** 模板类型（与 Prisma `PromptType` 逐字对齐） */
 export const PROMPT_TYPES = [
@@ -82,12 +83,21 @@ const CHANGE_NOTE_MAX = 200;
  */
 const TEMPLATE_KEY_PATTERN = /^[A-Z][A-Z0-9_]+$/;
 
-/** query 字符串 → 布尔值（`@Type(() => Boolean)` 会把 `'false'` 变成 `true`） */
-const toBoolean = ({ value }: { value: unknown }): unknown => {
-  if (value === 'true' || value === true) return true;
-  if (value === 'false' || value === false) return false;
-  return value;
-};
+/**
+ * 布尔参数转换（共享实现，见 `common/utils/query-boolean.util.ts` 的文件头）
+ *
+ * 不能写 `@Type(() => Boolean)`，也不能只写 `@Transform(({ value }) => …)`：
+ * 全局管道开了 `enableImplicitConversion`，class-transformer 会**先**按属性的反射类型
+ * 做隐式转换（`Boolean('false') === true`），**然后**才调用 `@Transform` ——
+ * 回调拿到的 `value` 已经是 `true`，"判字符串"的分支永远走不到。
+ *
+ * ⚠ 这里原先有一份**局部副本**，它和全仓另外几份一样**从未生效过**。实测（收敛前，
+ * 走与 `main.ts` 同配置的真实管道）：`?hasAbTest=false` → `true`、
+ * `?includeContent=false` → `true`（管理员想看元数据，却拿到了 Prompt 全文）。
+ *
+ * 共享实现从 `obj[key]` 读**原始字符串**（`obj` 是未被隐式转换过的原始输入对象），
+ * 因此不受隐式转换影响；无法识别的值原样返回，交给 `@IsBoolean` 报错。
+ */
 
 /**
  * 逗号/空白分隔 → 字符串数组
