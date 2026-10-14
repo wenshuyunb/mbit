@@ -333,3 +333,95 @@ Redis 写失败只记日志、不同用户同键落到不同 Redis 键且客户�
 导出任务与分享卡会在**上传阶段**以 `80003 文件存储服务未配置` 收尾
 （实测任务状态 `stage=ERROR errorCode=80003`，说明**已越过渲染阶段**）。
 这是部署配置缺口，不是代码缺口；补齐凭证后即可端到端交付。
+
+## 9. 2026-10-14：报告段落键与契约白名单脱钩（已修）+ 新增测评类型的可行性核查
+
+### 9.1 🔴 已修：报告模板的段落键**不在契约白名单里**
+
+`report-section.util.ts:17-22` 的注释把设计意图写得很清楚：
+
+> 顺序即报告内的自然段序，**取值与生成模板（Prompt 输出 schema）的段落键一致**；
+> 让"模板加了新段落、接口忘了登记"变成**编译期问题**而不是线上 400
+
+**这个不变量此前是破的。** 模板产出的是 `overview` / `strengths` / `growth`（3 段、小写下划线），
+而白名单 `REPORT_SECTION_KEYS` 是契约 §3.5.4 的 6 个大写键
+（`CORE_PORTRAIT` / `DIMENSION_ANALYSIS` / `RELATIONSHIP_PATTERN` / `STRENGTHS_AND_SHADOWS` /
+`GROWTH_SUGGESTIONS` / `ACTION_PLAN`）。两者**只是没有被类型连起来**，所以那道安全网从未触发
+——更糟的是，`prompt-templates.spec.ts` 里有一条断言把**错误约定固化**了：
+它要求段落键必须匹配 `/^[a-z][a-z0-9_]*$/`（小写），于是谁改都不会有人质疑。
+
+可复现的后果有两个：
+
+1. **`quoteSectionKey` 永远取不到段落** —— 该字段由 `@IsIn(REPORT_SECTION_KEYS)` 校验
+   （`report-engagement.dto.ts:242`），客户端**只能**传那 6 个大写键；而
+   `report-share-card.service.ts:348` 按该键去 `report_sections.section_key` 里找 ——
+   真实报告存的是 `overview` 等。**分享卡的「金句卡」（QUOTE_CARD）在真实报告上必然返回
+   `10001 指向的段落不存在`，从上线起就没可能成功过**；
+2. **报告只有 3 段、实测 864 字**（契约 §3.5.3 给的是 6 段、`targetSectionCount: 6`、
+   目标篇幅约 3300 字），用户直接反馈"过于简陋、没有建设意见"。
+
+**修法**：把 `report.mbti` 的段落声明改成契约的 6 段（键名与标题逐字对齐）、
+每段字数上限从 150–300 放宽到 350–600、`maxTokens` 2048→4096、模板升到 **v2**（保留 v1 供历史报告对号）。
+
+**活体验证**（真实 DeepSeek）：
+
+| sectionKey              | 字数 |
+| ----------------------- | ---- |
+| `CORE_PORTRAIT`         | 419  |
+| `DIMENSION_ANALYSIS`    | 456  |
+| `RELATIONSHIP_PATTERN`  | 456  |
+| `STRENGTHS_AND_SHADOWS` | 384  |
+| `GROWTH_SUGGESTIONS`    | 406  |
+| `ACTION_PLAN`           | 350  |
+
+6 段全中契约键，**合计 2471 字（原 864 字，2.9 倍）**，前两段免费预览 `unlocked=2/6`，
+内容从泛泛而谈变成可执行步骤（`ACTION_PLAN` 给了按周的具体动作）。
+
+**并补上了缺失的安全网**：`prompt-templates.spec.ts` 新增一条断言 ——
+`report.mbti` 的段落键必须与 `REPORT_SECTION_KEYS` **逐字相等（含顺序）**；
+同时把那条固化错误约定的正则断言改为"格式合法即可（大小写均允许）"。
+
+### 9.2 ⚠ 同一问题的**其余报告类型尚未修**（需要一次契约决策）
+
+大五（`trait_overview` 等）、关系（`compatibility_reports` 的列名）、成长（`growth_timeline` 等）
+报告的段落键**也不在** `REPORT_SECTION_KEYS` 里 —— 也就是说这些报告类型上的 `quoteSectionKey`
+同样取不到段落。修它需要先定：**该白名单是"个人报告专用"还是"全类型共用"**？
+若要共用，就得为各自定义键集合并扩展枚举；若专用，则应让这些报告的分享卡模板不再暴露金句卡。
+**这是一次契约决策，未在本次改动里擅自决定。**
+
+### 9.3 📋 新增测评类型（亲密关系评测 / 情绪状态自评）的可行性核查结论
+
+用户希望新增两类测评（A 亲密关系、B 情绪状态）。经对全链路核查，**现状比预想的重得多**，
+三条关键事实（每条都有代码位置）：
+
+1. **算分链路不按 `category` / `definitionCode` 分派**，分派键是 `question.dimension`，
+   白名单硬编码在 `personality-engine.service.ts:65-66`；MBTI 与大五是**同一个 `compute()`
+   的两个固定输出字段**，不是两条分支。仓库里**没有 evaluator 注册表**。
+2. **新增一个非 MBTI / 非大五的 category，现状是硬失败**：题目被静默跳过（`:136-146`）→
+   `mbti.type === null` → `test.service.ts:716-730` 把会话置 `EXPIRED` 并抛 `40011`
+   （`BusinessException.internal` → **HTTP 500**），既不产 `TestResult` 也不产画像，
+   **且用户已答的数据再也提交不了**。
+   ⚠ 逃生口（题库里混一道 MBTI 题）**更危险**：提交会"成功"，写出大五全 50 的占位假画像
+   并把 `isCurrent` 翻转，**顶掉用户真实画像的当前版本**，而报告链路读的正是 `isCurrent`。
+3. **`PersonalityProfile` 的 MBTI / 大五列是 `NOT NULL`**（`schema.prisma:885-895`），
+   新类型要么污染这些列（画像列表/趋势/成长报告都会读到），要么加列或改可空 + 迁移。
+
+另外，用户想要的"情感分析"**能力位是空转的**：`PromptType.EMOTION_ANALYSIS` 只出现在
+白名单与中文显示名里（`prompt.dto.ts:47`、`prompt.service.ts:113`、`admin-ai-stats.util.ts:31/53`），
+**没有任何模板，也没有任何代码路径会用它**（运行期取模板一律按 `key`）。
+且 `AiReportType` 里**没有** `EMOTION_REPORT` → 请求在 DTO 层就被拒。
+**所以"只加一个模板"是完全无效的**，必须成对做：迁移 `AiReportType` + `REPORT_TYPES`
+
+- `TEMPLATE_KEY_BY_TYPE` + 新的上下文组装器 + 模板 + spec 路由。
+
+**工作量（诚实口径）**：关系类约 **15–20 个文件**（0 迁移，可复用 `RELATIONSHIP_STYLE` 大类）；
+情绪类约 **25–35 个文件**（含 3–4 个迁移）；两类合计净改动 **30–45 个源文件**，
+其中**约 55% 是真代码**（引擎、submit 分派与落库、结果与画像读取、上下文组装、管理端成对的白名单与映射、前端页面）。
+最容易被低估的三处：① 引擎输出契约改造（牵动全部存量画像与报告的可复现性承诺 ADR-005）；
+② `PersonalityProfile` 的 NOT NULL 列如何处置；③ 管理端**成对重复**的白名单（`ADMIN_REPORT_TYPES` ×2、
+类型映射 ×2 —— 漏一个就是静默不一致）。
+
+**建议顺序**：先定"新结果落在哪个模型"（改 `DATABASE_DESIGN.md` → `schema.prisma` → 迁移）→
+引擎重构（引入 evaluator 注册表，并用现有 spec 锁死 `MBTI_LITE`/`BIG_FIVE_50` 输出**逐字节不变**）→
+`submit()` 按 category 分派 + 加"禁止假画像覆盖 `isCurrent`"的护栏 → 关系类先跑通（0 迁移）→
+情绪类（含合规文案）→ 最后成对落地报告类型。

@@ -111,21 +111,47 @@ const AI_COMPANION_SECTIONS: SeedPromptSection[] = [{ key: 'reply', title: '回�
  * 而分段解析器按模板声明的键去对齐，于是内容被塞进 `extra-{n}` 兜底键。
  * 从 `sections` 派生后，两者在结构上不可能分叉。
  */
-const buildSectionFormatInstruction = (sections: readonly SeedPromptSection[]): string =>
+const buildSectionFormatInstruction = (sections: readonly SeedPromptSection[], wordRange = '150–300'): string =>
   [
     '输出格式要求：',
     '- 用 Markdown 的二级标题（`## 标题`）分隔段落。标题必须**严格使用**下面给定的标题，顺序也保持一致：',
     ...sections.map((section) => `  - ${section.title}`),
     '- 不要输出任何其他级别的标题，也不要在正文里再嵌套小标题。',
     '- 第一个标题之前先写一句 30 字以内的全文概括（不带头部标记）。',
-    '- 每个段落正文 150–300 字，分段清晰，不使用列表以外的复杂排版。',
+    `- 每个段落正文 ${wordRange} 字，分段清晰，不使用列表以外的复杂排版。`,
   ].join('\n');
 
-/** MBTI 报告的段落声明（首段免费预览） */
+/**
+ * MBTI 报告的段落声明（前两段免费预览，与契约 §3.5.3 一致）
+ *
+ * ## ⚠ 段落键是**契约白名单的一部分，不能自由起名**
+ *
+ * 这里原先写的是 `overview` / `strengths` / `growth`（3 段、小写下划线），
+ * 而 `backend/src/modules/ai/report/report-section.util.ts` 的 `REPORT_SECTION_KEYS`
+ * 明确定义了契约允许的 6 个键，并且那份文件的注释写着：
+ *
+ *   > 顺序即报告内的自然段序，**取值与生成模板（Prompt 输出 schema）的段落键一致**；
+ *   > 让"模板加了新段落、接口忘了登记"变成**编译期问题**而不是线上 400
+ *
+ * 这个不变量此前是**破的** —— 模板是种子数据、白名单是 TS 常量，两者没有被类型连起来，
+ * 所以那道"编译期安全网"从未触发，后果是真实可复现的：
+ *
+ *   · `quoteSectionKey` 由 `@IsIn(REPORT_SECTION_KEYS)` 校验（`report-engagement.dto.ts`），
+ *     客户端**只能**传那 6 个键；而 `report-share-card.service.ts` 按该键去
+ *     `report_sections.section_key` 里找段落 —— 真实报告里存的是 `overview` 等，
+ *     于是**「金句卡」（QUOTE_CARD）在真实报告上永远返回 10001「段落不存在」**；
+ *   · 契约 §3.5.3 规定报告为 6 段、并给出了各段标题与字数（`targetSectionCount: 6`），
+ *     而实现只有 3 段，一份"深度报告"实测仅约 800 字，用户反馈"过于简陋、没有建设意见"。
+ *
+ * 因此这里按契约逐字对齐键名与标题，并补上缺失的三段（关系模式 / 优势与盲点 / 30 天行动清单）。
+ */
 const MBTI_REPORT_SECTIONS: SeedPromptSection[] = [
-  { key: 'overview', title: '整体印象', freePreview: true },
-  { key: 'strengths', title: '核心优势', freePreview: false },
-  { key: 'growth', title: '成长建议', freePreview: false },
+  { key: 'CORE_PORTRAIT', title: '你的核心画像', freePreview: true },
+  { key: 'DIMENSION_ANALYSIS', title: '四维倾向深度解析', freePreview: true },
+  { key: 'RELATIONSHIP_PATTERN', title: '你的关系模式', freePreview: false },
+  { key: 'STRENGTHS_AND_SHADOWS', title: '优势与盲点', freePreview: false },
+  { key: 'GROWTH_SUGGESTIONS', title: '成长建议', freePreview: false },
+  { key: 'ACTION_PLAN', title: '30 天行动清单', freePreview: false },
 ];
 
 /**
@@ -195,8 +221,15 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     key: 'report.mbti',
     name: 'MBTI 人格深度报告',
     type: 'MBTI_REPORT',
-    description: '基于 MBTI 四维倾向与大五特质生成个人深度解读报告（3 段：整体印象 / 核心优势 / 成长建议）',
-    version: 1,
+    description:
+      '基于 MBTI 四维倾向与大五特质生成个人深度解读报告（6 段：核心画像 / 四维倾向深度解析 / 关系模式 / 优势与盲点 / 成长建议 / 30 天行动清单）',
+    /**
+     * ⚠ 升到 **2** 而不是原地改 v1 的内容
+     *
+     * 种子对版本是 `(templateId, version)` 幂等 upsert，原地改 v1 也能生效；
+     * 但段落结构与键名都变了，历史报告引用的是当时的 v1，保留它才对得上号。
+     */
+    version: 2,
     systemPrompt: REPORT_SYSTEM_GUARDRAILS,
     userPromptTemplate: [
       '请为下面这位用户撰写人格深度解读报告。',
@@ -221,12 +254,20 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
       '- 平均作答耗时：{{avgResponseSeconds}} 秒/题',
       '- 作答题数：{{answeredRatio}}',
       '',
-      buildSectionFormatInstruction(MBTI_REPORT_SECTIONS),
+      /**
+       * 段落更长（350–600 字/段）是有意的：6 段 × 300 字上限也不过 1800 字，
+       * 而契约给的目标篇幅是 6 段约 3300 字。用户对旧版的直接反馈是
+       * 「报告过于简陋、没有建设意见」——把每段写透是主要解法。
+       */
+      buildSectionFormatInstruction(MBTI_REPORT_SECTIONS, '350–600'),
     ].join('\n'),
     sections: MBTI_REPORT_SECTIONS,
     temperature: 0.6,
-    maxTokens: 2048,
-    changeNote: '首个版本：3 段式个人报告，首段免费预览',
+    // 6 段 × 600 字 ≈ 3600 字 ≈ 2100 token，2048 会被截断，故提高到 4096
+    maxTokens: 4096,
+    changeNote:
+      'v2：段落键对齐契约 §3.5.3 的 6 段白名单（原为 overview/strengths/growth，导致金句卡分享永远取不到段落），' +
+      '并补齐「关系模式 / 优势与盲点 / 30 天行动清单」三段、每段放宽到 350–600 字',
   },
   {
     /**

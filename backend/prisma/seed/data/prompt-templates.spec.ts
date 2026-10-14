@@ -44,6 +44,7 @@ import { assembleChatContext, type ChatContextAssembly } from '../../../src/modu
 import { buildPromptVariables, templateKeyCandidatesOf } from '../../../src/modules/ai/chat/chat-prompt';
 import { extractPlaceholders, renderPromptVersion } from '../../../src/modules/ai/prompt/prompt-renderer';
 import { parseReportSections, readExpectedSections } from '../../../src/modules/ai/report/report-section.parser';
+import { REPORT_SECTION_KEYS } from '../../../src/modules/ai/report/report-section.util';
 
 /** 数据齐全的画像 */
 const fullProfile = (): ReportContextInput => ({
@@ -419,15 +420,53 @@ describe('Prompt 模板种子数据契约', () => {
       }
     });
 
-    it('段落键唯一、非空且符合标识符形式', () => {
+    /**
+     * ⚠ 这条断言原先写的是 `key` 必须匹配 `/^[a-z][a-z0-9_]*$/`（小写下划线），
+     * 而**那个约定是错的、并且正是它把漂移固化了下来**：
+     *
+     *   · `report-section.util.ts` 的 `REPORT_SECTION_KEYS`（契约 §3.5.4 白名单）
+     *     用的是**大写下划线**（`CORE_PORTRAIT` / `ACTION_PLAN` …），且那份文件的注释
+     *     明确要求"取值与生成模板的段落键一致"；
+     *   · `quoteSectionKey` 由 `@IsIn(REPORT_SECTION_KEYS)` 校验，客户端只能传那 6 个键；
+     *   · 于是模板产出 `overview` / `strengths` / `growth` 时，
+     *     分享卡的「金句卡」在真实报告上**永远返回 10001「段落不存在」**。
+     *
+     * 现在改成断言"格式合法 + 不重复"（大小写都允许），
+     * 并把**"与 §3.5.4 白名单一致"**交给下面那条专门的用例去守。
+     */
+    it('段落键唯一、非空且符合标识符形式（大小写均可）', () => {
       for (const template of PROMPT_TEMPLATES) {
         const keys = template.sections.map((section) => section.key);
 
         expect(new Set(keys).size).toBe(keys.length);
         for (const key of keys) {
-          expect(key).toMatch(/^[a-z][a-z0-9_]*$/);
+          expect(key).toMatch(/^[A-Za-z][A-Za-z0-9_]*$/);
         }
       }
+    });
+
+    /**
+     * 【关键】契约白名单绑定 —— 这是此前**缺失**的那道安全网
+     *
+     * `report-section.util.ts` 的注释写得很清楚：「顺序即报告内的自然段序，
+     * **取值与生成模板（Prompt 输出 schema）的段落键一致**；让『模板加了新段落、
+     * 接口忘了登记』变成编译期问题而不是线上 400」。
+     *
+     * 但模板是种子数据、白名单是 TS 常量，两者**从未被连起来**，那道网也就从未触发 ——
+     * 直到 `quoteSectionKey` 在真实报告上取不到段落才暴露出来。
+     *
+     * ⚠ 这里只对 `report.mbti` 做「逐字相等（含顺序）」断言：契约 §3.5.4 的白名单
+     * 就是为**个人报告**定义的。大五 / 关系 / 成长报告用的是各自的小写键
+     *（`trait_overview` 等），**不在**该白名单里 —— 也就是说这些报告类型上的
+     * `quoteSectionKey` 目前同样取不到段落。修它需要一次契约决策
+     *（为各自定义键集合并扩展枚举，或做键映射），已登记在
+     * `docs/CONTRACT_DRIFT_AUDIT.md`，不在本次改动里擅自决定。
+     */
+    it('【关键】个人报告（report.mbti）的段落键必须与契约 §3.5.4 白名单逐字一致（含顺序）', () => {
+      const mbti = PROMPT_TEMPLATES.find((template) => template.key === 'report.mbti');
+
+      expect(mbti).toBeDefined();
+      expect(mbti?.sections.map((section) => section.key)).toEqual([...REPORT_SECTION_KEYS]);
     });
 
     it('段落标题非空且会被分段解析器的声明读取识别', () => {
