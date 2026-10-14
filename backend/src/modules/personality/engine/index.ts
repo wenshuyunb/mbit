@@ -7,6 +7,8 @@
  */
 
 export { PersonalityEngine } from './personality-engine.service';
+export { ModuleScoringService } from './module-scoring.service';
+export type { ModuleScorer, ModuleScoringResult } from './module-scoring.service';
 export {
   DEFAULT_RELATIONSHIP_STYLE,
   evaluateConditions,
