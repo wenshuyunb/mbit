@@ -56,7 +56,16 @@ export const SORT_ORDERS = ['asc', 'desc'] as const;
 export type SortOrder = (typeof SORT_ORDERS)[number];
 
 /** 报告类型（契约 §3.14.7.5；与 `AiReportType` 的差异见 admin-ai-report.service.ts） */
-export const ADMIN_REPORT_TYPES = ['MBTI_REPORT', 'BIG_FIVE_REPORT', 'GROWTH_REPORT', 'COMPATIBILITY_REPORT'] as const;
+export const ADMIN_REPORT_TYPES = [
+  'MBTI_REPORT',
+  'BIG_FIVE_REPORT',
+  'GROWTH_REPORT',
+  'COMPATIBILITY_REPORT',
+  // 情感测评报告（ADR-038 阶段 3）。
+  // ⚠ 与 `admin/report/dto` 里的同名常量必须**逐字一致** ——
+  // 两处是独立定义的历史遗留，漏改一处只会表现为"某个后台页面筛不到"。
+  'EMOTION_REPORT',
+] as const;
 export type AdminReportType = (typeof ADMIN_REPORT_TYPES)[number];
 
 /** 报告状态（契约 §3.14.7.5；`PARTIAL` 为匹配报告「算分完成但 AI 解读失败」的推导态） */

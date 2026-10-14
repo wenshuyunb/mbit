@@ -41,7 +41,16 @@ export const RELATIONSHIP_SORT_FIELDS = ['createdAt', 'activatedAt', 'overallSco
 export type RelationshipSortField = (typeof RELATIONSHIP_SORT_FIELDS)[number];
 
 /** 报告类型（契约 §3.14.8.2） */
-export const ADMIN_REPORT_TYPES = ['MBTI_REPORT', 'BIG_FIVE_REPORT', 'GROWTH_REPORT', 'COMPATIBILITY_REPORT'] as const;
+export const ADMIN_REPORT_TYPES = [
+  'MBTI_REPORT',
+  'BIG_FIVE_REPORT',
+  'GROWTH_REPORT',
+  'COMPATIBILITY_REPORT',
+  // 情感测评报告（ADR-038 阶段 3）。
+  // ⚠ 管理端白名单有**两处**（本文件与 `admin/ai-stats/dto`），
+  // 漏改一处就会出现「后台筛不到情感报告」这类静默不一致。
+  'EMOTION_REPORT',
+] as const;
 export type ReportTypeFilter = (typeof ADMIN_REPORT_TYPES)[number];
 
 /** 报告状态（契约 §3.14.8.2） */

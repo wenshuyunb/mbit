@@ -46,12 +46,15 @@ const TEMPLATE_KEY_BY_TYPE: Readonly<Record<string, string>> = {
   BIG_FIVE_REPORT: 'report.bigfive',
   RELATIONSHIP_REPORT: 'report.relationship',
   GROWTH_SUMMARY: 'report.growth',
+  // 情感报告走**自己的**组装器与模板（ADR-038）：人格报告不掺情感结论，
+  // 情感报告也不掺人格结论 —— 两条路径刻意不共用上下文
+  EMOTION_REPORT: 'report.emotion',
 };
 
 /** 创建请求 */
 export interface CreateReportInput {
   readonly userId: string;
-  readonly type: 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY';
+  readonly type: 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY' | 'EMOTION_REPORT';
   /** 指定测评会话；不传则取该用户最新一次已算分的会话 */
   readonly sessionId?: string;
   /** 关系报告必填：上下文来自这段关系（契约 §3.6.9） */
@@ -195,6 +198,17 @@ export class ReportService {
     // 不挂单一画像。因此 `profileId` 为 null、`relationshipId` 必填
     if (input.type === 'RELATIONSHIP_REPORT') {
       return this.createRelationshipReport(input, templateKey);
+    }
+
+    /**
+     * 情感报告挂**情感画像**，人格类报告挂人格画像（ADR-038）
+     *
+     * 两条取数路径刻意分开：`ai_reports.profile_id` 是外键指向
+     * `personality_profiles`，拿它指向情感画像在数据库层就做不到；
+     * 而"读哪张画像表"这件事一旦写成条件，漏看一处就是静默取错数据。
+     */
+    if (input.type === 'EMOTION_REPORT') {
+      return this.createEmotionReport(input, templateKey);
     }
 
     const profile = await this.prisma.personalityProfile.findFirst({
@@ -413,6 +427,94 @@ export class ReportService {
     });
 
     this.logger.log(`关系报告已创建并入队 reportId=${report.id} compatibilityReportId=${compatibility.id}`);
+
+    return {
+      reportId: report.id,
+      status: 'QUEUED',
+      isReused: false,
+      pollUrl: `/api/v1/reports/${report.id}/progress`,
+    };
+  }
+
+  /**
+   * 创建情感测评报告（ADR-038 阶段 3）
+   *
+   * 与人格报告的差异集中在"挂哪份画像"：
+   *   · 取 `emotion_profiles` 的当前版本，写 `emotionProfileId`（**不是** `profileId`，
+   *     后者是外键指向 `personality_profiles`）；
+   *   · `cacheKey` 里用情感画像自己的 id+version，与人格报告完全隔离 ——
+   *     两份画像各有各的幂等空间，互不影响；
+   *   · 没有情感画像时明确引导"先做情感测评"，而不是抛一个含糊的系统错误
+   *     （错误码用**情感模块自己的** `40014`，前端据此跳不同的引导页）。
+   */
+  private async createEmotionReport(input: CreateReportInput, templateKey: string): Promise<ReportCreatedView> {
+    const profile = await this.prisma.emotionProfile.findFirst({
+      where: { userId: input.userId, deletedAt: null, isCurrent: true },
+      orderBy: { version: 'desc' },
+      select: { id: true, version: true },
+    });
+
+    if (profile === null) {
+      throw new BusinessException(ErrorCode.EMOTION_PROFILE_NOT_FOUND, '请先完成一次情感测评，再生成报告');
+    }
+
+    const meta = await this.prompts.getTemplateMeta(templateKey);
+
+    const cacheKey = this.crypto.sha256(
+      [
+        input.userId,
+        // 前缀 `emotion:` 让这份 key 与人格报告（裸 profileId）在**字面上**就是不同空间，
+        // 即使将来两者的 UUID 恰好撞车也不会互相复用
+        `emotion:${profile.id}`,
+        String(profile.version),
+        templateKey,
+        meta.versionId,
+        meta.provider ?? '',
+        meta.model ?? '',
+      ].join('|'),
+    );
+
+    const existing = await this.prisma.aiReport.findUnique({
+      where: { cacheKey },
+      select: { id: true, status: true },
+    });
+
+    if (existing !== null && existing.status === 'SUCCEEDED') {
+      this.logger.log(`情感报告缓存命中，直接复用 reportId=${existing.id}`);
+      return {
+        reportId: existing.id,
+        status: existing.status,
+        isReused: true,
+        pollUrl: `/api/v1/reports/${existing.id}/progress`,
+      };
+    }
+
+    const report =
+      existing === null
+        ? await this.prisma.aiReport.create({
+            data: {
+              userId: input.userId,
+              type: 'EMOTION_REPORT',
+              status: 'QUEUED',
+              // ⚠ 人格画像列为 null：这份报告与人格画像无关
+              profileId: null,
+              emotionProfileId: profile.id,
+              sessionId: input.sessionId ?? null,
+              promptTemplateKey: templateKey,
+              promptVersionId: meta.versionId,
+              cacheKey,
+            },
+            select: { id: true },
+          })
+        : await this.prisma.aiReport.update({
+            where: { cacheKey },
+            data: { status: 'QUEUED', progress: 0, errorCode: null, errorMessage: null },
+            select: { id: true },
+          });
+
+    await this.enqueueGeneration(report.id);
+
+    this.logger.log(`情感报告已创建并入队 reportId=${report.id} emotionProfileId=${profile.id}`);
 
     return {
       reportId: report.id,

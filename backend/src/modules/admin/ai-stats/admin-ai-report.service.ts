@@ -60,6 +60,10 @@ const TYPE_TO_DB: Readonly<Record<AdminReportType, string>> = {
   BIG_FIVE_REPORT: 'BIG_FIVE_REPORT',
   GROWTH_REPORT: 'GROWTH_SUMMARY',
   COMPATIBILITY_REPORT: 'RELATIONSHIP_REPORT',
+  // ADR-038 阶段 3。⚠ 这张映射表在管理端有**两处**（本文件与 `admin/report/admin-report.util.ts`），
+  // 加上两处 `ADMIN_REPORT_TYPES` 白名单，一次"加报告类型"要改四处 —— 漏改只会表现为
+  // "某个后台页面筛不到/显示成原始枚举值"，不会有任何报错
+  EMOTION_REPORT: 'EMOTION_REPORT',
 };
 
 /** 库内类型 → 契约类型 */
@@ -68,6 +72,7 @@ const DB_TO_TYPE: Readonly<Record<string, AdminReportType>> = {
   BIG_FIVE_REPORT: 'BIG_FIVE_REPORT',
   GROWTH_SUMMARY: 'GROWTH_REPORT',
   RELATIONSHIP_REPORT: 'COMPATIBILITY_REPORT',
+  EMOTION_REPORT: 'EMOTION_REPORT',
 };
 
 /** 契约状态 → 库内 `AiReportStatus`（`PARTIAL` 无对应成员，以条件表达） */

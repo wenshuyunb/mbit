@@ -26,6 +26,7 @@ import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
 import { buildGrowthReportContext, type GrowthProfileSnapshot } from '../context/growth-report-context.builder';
+import { EMOTION_ATTACHMENT_LABELS, buildEmotionReportContext } from '../context/emotion-report-context.builder';
 import {
   buildReportContext,
   UNAVAILABLE_PLACEHOLDER,
@@ -61,9 +62,9 @@ export interface ReportGenerationRequest {
   readonly profileId: string;
   readonly templateKey: string;
   /** 任务类型（写入 `ai_usage_logs.task_type`，用于成本归集） */
-  readonly taskType: 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY';
+  readonly taskType: 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY' | 'EMOTION_REPORT';
   /** 报告类型（写入 `ai_reports.type`） */
-  readonly reportType: 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY';
+  readonly reportType: 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY' | 'EMOTION_REPORT';
   readonly sessionId: string | null;
 }
 
@@ -132,6 +133,7 @@ export class ReportGenerationService {
         type: true,
         status: true,
         profileId: true,
+        emotionProfileId: true,
         sessionId: true,
         relationshipId: true,
         promptTemplateKey: true,
@@ -170,7 +172,23 @@ export class ReportGenerationService {
      */
     const isGrowthReport = report.type === 'GROWTH_SUMMARY';
 
-    if (!isRelationshipReport && report.profileId === null) {
+    /**
+     * 是否为情感报告（ADR-038 阶段 3）
+     *
+     * 同样用 `typeof === 'string'` 判"有没有值"（理由见上面 `isRelationshipReport` 的注释）。
+     * 情感报告的上下文来自 `emotion_profiles`，与人格画像**完全无关** ——
+     * 因此它既不校验 `profileId`，也不读任何人格表。
+     */
+    const isEmotionReport = report.type === 'EMOTION_REPORT';
+
+    // 情感报告挂的是 `emotionProfileId`，人格类报告挂的是 `profileId`。
+    // 两类报告各自校验自己的关联列：把"缺少关联画像"写成一句通用错误，
+    // 排查时无法区分是数据缺失还是挂错了列
+    if (isEmotionReport) {
+      if (typeof report.emotionProfileId !== 'string') {
+        throw new BusinessException(ErrorCode.EMOTION_PROFILE_NOT_FOUND, '情感报告缺少关联的情感画像');
+      }
+    } else if (!isRelationshipReport && report.profileId === null) {
       throw new BusinessException(ErrorCode.PERSONALITY_PROFILE_NOT_FOUND, '报告缺少关联画像');
     }
 
@@ -203,9 +221,10 @@ export class ReportGenerationService {
     // 重新推导上下文与 Prompt：3c 的确定性让"重新推导"必然等于首次推导，
     // 因此无需把变量快照落库（少一份可能与画像脱节的数据）
     //
-    // 三条取数路径**刻意分开写**而不是塞进一个函数：关系报告读"关系 + 双方画像 +
-    // 算分报告"，成长报告读"画像版本序列"，个人报告读"单份画像 + 最近会话"——
-    // 合成一个函数后"这次到底读了哪些表"就会埋在条件里，读代码时看不出来。
+    // 四条取数路径**刻意分开写**而不是塞进一个函数：关系报告读"关系 + 双方画像 +
+    // 算分报告"，成长报告读"画像版本序列"，情感报告读"情感画像"，个人报告读
+    // "单份人格画像 + 最近会话" —— 合成一个函数后"这次到底读了哪些表"就会埋在
+    // 条件里，读代码时看不出来。
     const prepared = isRelationshipReport
       ? await this.prepareForRelationship(
           report.userId,
@@ -213,20 +232,27 @@ export class ReportGenerationService {
           report.promptTemplateKey,
           options ?? {},
         )
-      : isGrowthReport
-        ? await this.prepareForGrowth(
+      : isEmotionReport
+        ? await this.prepareForEmotion(
             report.userId,
-            report.profileId as string,
+            report.emotionProfileId as string,
             report.promptTemplateKey,
             options ?? {},
           )
-        : await this.prepare(
-            report.userId,
-            report.profileId as string,
-            report.promptTemplateKey,
-            report.type,
-            options ?? {},
-          );
+        : isGrowthReport
+          ? await this.prepareForGrowth(
+              report.userId,
+              report.profileId as string,
+              report.promptTemplateKey,
+              options ?? {},
+            )
+          : await this.prepare(
+              report.userId,
+              report.profileId as string,
+              report.promptTemplateKey,
+              report.type,
+              options ?? {},
+            );
 
     // 阶段②：Prompt 已渲染完成（`prepare*` 内部已调用模板渲染）
     await this.publishLiveProgress(reportId, report.userId, {
@@ -418,6 +444,90 @@ export class ReportGenerationService {
     const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
 
     return { prompt, title: buildPersonalReportTitle(reportType, variables).slice(0, 128) };
+  }
+
+  /**
+   * 读取**情感画像**并渲染 Prompt（情感测评报告，ADR-038 阶段 3）
+   *
+   * ## 为什么是独立方法而不是给 `prepare` 加一个分支
+   *
+   * 两条路径读的是**两张不同的表**（`emotion_profiles` / `personality_profiles`），
+   * 而且读者必须一眼看出"情感报告绝不读人格数据"。合成一个函数后，
+   * 这个不变量就只剩下条件语句，而它一旦被破坏，表现是情感报告里出现
+   * MBTI 结论 —— 读起来毫无破绽，正是 ADR-038 阶段 2 刚清掉的那类问题。
+   *
+   * ## 为什么质量指标从**情感画像**读而不是从最近会话读
+   *
+   * 人格报告的 `prepare` 取"该用户最近一次会话"来补 `answeredCount/questionCount`，
+   * 那是个人报告的便利做法。情感报告不加这一层：会话可能属于另一个模块
+   * （用户先做了人格测评），拿它来填情感报告的完成率会得到一份
+   * "人格测评的答题数"配"情感测评的分数"的上下文。
+   * 因此这里只读情感画像自带的三个质量列。
+   */
+  private async prepareForEmotion(
+    userId: string,
+    emotionProfileId: string,
+    templateKey: string,
+    options: ReportGenerationOptions = {},
+  ): Promise<{ prompt: ResolvedPrompt; title: string }> {
+    const profile = await this.prisma.emotionProfile.findFirst({
+      where: { id: emotionProfileId, userId, deletedAt: null },
+      select: {
+        attachmentStyle: true,
+        attachmentAnxiety: true,
+        attachmentAvoidance: true,
+        loveLanguageScores: true,
+        primaryLoveLanguages: true,
+        conflictStyle: true,
+        conflictScores: true,
+        consistencyScore: true,
+        completionRate: true,
+        avgResponseMs: true,
+        engineVersion: true,
+        testResult: { select: { definitionCode: true, qualityMetrics: true } },
+      },
+    });
+
+    if (profile === null) {
+      throw new BusinessException(ErrorCode.EMOTION_PROFILE_NOT_FOUND);
+    }
+
+    // 作答题数从**这次测评自己的** qualityMetrics 里取。
+    // 取不到时给 null → 组装器用占位文案（而不是回落成某个别的会话的数字）
+    const quality = (profile.testResult?.qualityMetrics ?? {}) as Record<string, unknown>;
+    const answeredCount = typeof quality['answeredCount'] === 'number' ? quality['answeredCount'] : null;
+    const questionCount = typeof quality['totalCount'] === 'number' ? quality['totalCount'] : null;
+
+    const { variables } = buildEmotionReportContext({
+      profile: {
+        attachmentStyle: profile.attachmentStyle,
+        attachmentAnxiety: profile.attachmentAnxiety,
+        attachmentAvoidance: profile.attachmentAvoidance,
+        loveLanguageScores: (profile.loveLanguageScores ?? null) as Record<string, number> | null,
+        primaryLoveLanguages: profile.primaryLoveLanguages,
+        conflictStyle: profile.conflictStyle,
+        conflictScores: (profile.conflictScores ?? null) as Record<string, number> | null,
+        consistencyScore: profile.consistencyScore,
+        completionRate: profile.completionRate,
+        avgResponseMs: profile.avgResponseMs,
+        engineVersion: profile.engineVersion,
+      },
+      testDefinitionCode: profile.testResult?.definitionCode ?? null,
+      answeredCount,
+      questionCount,
+    });
+
+    const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
+
+    /**
+     * 标题带依恋类型
+     *
+     * 报告列表里会同时躺着人格报告与情感报告，标题必须让用户一眼分辨 ——
+     * 一个"情感测评报告"的通用标题会让人以为它是人格报告的另一版。
+     */
+    const attachment = EMOTION_ATTACHMENT_LABELS[profile.attachmentStyle] ?? profile.attachmentStyle;
+
+    return { prompt, title: `情感测评报告｜${attachment}依恋`.slice(0, 128) };
   }
 
   /**
@@ -860,13 +970,22 @@ export type AiUsageTaskType =
 /**
  * 报告类型 → 用量日志任务类型
  *
- * `AiTaskType` 枚举只有 `MBTI_REPORT` / `RELATIONSHIP_REPORT` 两个报告类目，
- * 没有 `BIG_FIVE_REPORT` 与 `GROWTH_SUMMARY`。为了不给一个成本归集字段
- * 动数据库枚举（= 迁移 + 发版），把这两个归入 `MBTI_REPORT`（个人报告桶）。
+ * `AiTaskType` 枚举只有 `MBTI_REPORT` / `RELATIONSHIP_REPORT` / `EMOTION_ANALYSIS`
+ * 三个报告相关类目，没有 `BIG_FIVE_REPORT` 与 `GROWTH_SUMMARY`。为了不给一个
+ * 成本归集字段动数据库枚举（= 迁移 + 发版），把这两个归入 `MBTI_REPORT`（个人报告桶）。
  * 若将来成本需要按报告类型细分，应先扩展枚举再改这里。
+ *
+ * ⚠ 情感报告归到 **`EMOTION_ANALYSIS`** 而不是 `MBTI_REPORT`：
+ * 那个枚举值此前是个"有取值、无模板、无代码路径"的空位（`CONTRACT_DRIFT_AUDIT.md` §9.3
+ * 记录过），现在它终于有了真实用途。把情感报告记成 MBTI 报告会让后台的
+ * **成本按任务类型拆分**把两个模块混在一起 —— 而模块隔离正是这次整改的目的。
  */
-const reportUsageTaskType = (reportType: string): AiUsageTaskType =>
-  reportType === 'RELATIONSHIP_REPORT' ? 'RELATIONSHIP_REPORT' : 'MBTI_REPORT';
+const reportUsageTaskType = (reportType: string): AiUsageTaskType => {
+  if (reportType === 'RELATIONSHIP_REPORT') return 'RELATIONSHIP_REPORT';
+  if (reportType === 'EMOTION_REPORT') return 'EMOTION_ANALYSIS';
+
+  return 'MBTI_REPORT';
+};
 
 /**
  * 段落正文 → `JsonB` 值

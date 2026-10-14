@@ -1018,7 +1018,7 @@ model EmotionProfile {
   attachmentAnxiety    Float           @map("attachment_anxiety")
   attachmentAvoidance  Float           @map("attachment_avoidance")
   loveLanguageScores   Json            @map("love_language_scores") @db.JsonB
-  primaryLoveLanguages String[]        @map("primary_love_languages")
+  primaryLoveLanguages String[]        @default([]) @map("primary_love_languages")
   conflictStyle        String          @map("conflict_style") @db.VarChar(32)
   conflictScores       Json            @map("conflict_scores") @db.JsonB
   consistencyScore     Float?          @map("consistency_score")
@@ -1028,6 +1028,8 @@ model EmotionProfile {
   createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt            DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  aiReports            AiReport[]
 
   @@unique([userId, version])
   @@index([userId, isCurrent])
@@ -1221,6 +1223,8 @@ model AiReport {
   relationship         Relationship?    @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
   profileId            String?          @map("profile_id") @db.Uuid
   profile              PersonalityProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  emotionProfileId     String?          @map("emotion_profile_id") @db.Uuid
+  emotionProfile       EmotionProfile?  @relation(fields: [emotionProfileId], references: [id], onDelete: SetNull)
   promptTemplateKey    String           @map("prompt_template_key") @db.VarChar(64)
   promptVersionId      String?          @map("prompt_version_id") @db.Uuid
   promptVersion        PromptVersion?   @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)

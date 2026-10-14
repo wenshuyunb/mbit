@@ -16,6 +16,9 @@ export const TYPE_TO_DB: Readonly<Record<string, string>> = {
   BIG_FIVE_REPORT: 'BIG_FIVE_REPORT',
   GROWTH_REPORT: 'GROWTH_SUMMARY',
   COMPATIBILITY_REPORT: 'RELATIONSHIP_REPORT',
+  // ADR-038 阶段 3。⚠ 与 `admin/ai-stats/admin-ai-report.service.ts` 里的同名映射
+  // 必须逐字一致（加上两处白名单，共四处），漏改不会有任何报错
+  EMOTION_REPORT: 'EMOTION_REPORT',
 };
 
 /** 库内类型 → 契约类型 */
@@ -24,6 +27,7 @@ export const DB_TO_TYPE: Readonly<Record<string, string>> = {
   BIG_FIVE_REPORT: 'BIG_FIVE_REPORT',
   GROWTH_SUMMARY: 'GROWTH_REPORT',
   RELATIONSHIP_REPORT: 'COMPATIBILITY_REPORT',
+  EMOTION_REPORT: 'EMOTION_REPORT',
 };
 
 /** 契约状态 → 库内 `AiReportStatus`（`PARTIAL` 以条件表达，不是独立成员） */

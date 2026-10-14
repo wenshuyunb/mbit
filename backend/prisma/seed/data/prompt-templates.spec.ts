@@ -40,11 +40,47 @@ import {
   type RelationshipReportContextInput,
   type RelationshipReportSide,
 } from '../../../src/modules/ai/context/relationship-report-context.builder';
+import {
+  buildEmotionReportContext,
+  type EmotionReportContextInput,
+} from '../../../src/modules/ai/context/emotion-report-context.builder';
 import { assembleChatContext, type ChatContextAssembly } from '../../../src/modules/ai/chat/chat-context.util';
 import { buildPromptVariables, templateKeyCandidatesOf } from '../../../src/modules/ai/chat/chat-prompt';
 import { extractPlaceholders, renderPromptVersion } from '../../../src/modules/ai/prompt/prompt-renderer';
 import { parseReportSections, readExpectedSections } from '../../../src/modules/ai/report/report-section.parser';
 import { REPORT_SECTION_KEYS } from '../../../src/modules/ai/report/report-section.util';
+
+/**
+ * 数据齐全的**情感**画像（情感报告模板的夹具）
+ *
+ * 刻意与上面的 `fullProfile()`（人格画像）**完全不同的字段集合** ——
+ * 两组夹具若能互相替换，就说明情感模板读的是人格数据。
+ */
+const fullEmotionProfile = (): EmotionReportContextInput['profile'] => ({
+  attachmentStyle: 'ANXIOUS',
+  attachmentAnxiety: 72,
+  attachmentAvoidance: 31,
+  loveLanguageScores: {
+    LOVE_WORDS: 86,
+    LOVE_TIME: 80,
+    LOVE_SERVICE: 58,
+    LOVE_TOUCH: 52,
+    LOVE_GIFTS: 33,
+  },
+  primaryLoveLanguages: ['LOVE_WORDS', 'LOVE_TIME'],
+  conflictStyle: 'CONFLICT_ACCOMMODATING',
+  conflictScores: {
+    CONFLICT_COLLABORATING: 60,
+    CONFLICT_COMPROMISING: 67,
+    CONFLICT_ACCOMMODATING: 74,
+    CONFLICT_AVOIDING: 45,
+    CONFLICT_COMPETING: 28,
+  },
+  consistencyScore: 78,
+  completionRate: 100,
+  avgResponseMs: 6420,
+  engineVersion: 'ee-v1.0.0',
+});
 
 /** 数据齐全的画像 */
 const fullProfile = (): ReportContextInput => ({
@@ -120,6 +156,14 @@ const isRelationshipTemplate = (key: string): boolean => key.startsWith('report.
  * 用前缀判定（与 `report.relationship` 同一写法），日后新增同类模板会自然落进这一族。
  */
 const isGrowthTemplate = (key: string): boolean => key.startsWith('report.growth');
+
+/**
+ * 情感测评报告模板的近似判定（ADR-038 阶段 3）
+ *
+ * 它的取数路径与前三者都不同：喂给模型的是**情感画像**（依恋双轴 / 爱的语言 /
+ * 冲突风格），与人格画像零交集。用前缀判定，与 `report.growth` 同一写法。
+ */
+const isEmotionTemplate = (key: string): boolean => key.startsWith('report.emotion');
 
 /**
  * 对话模板的近似判定
@@ -351,6 +395,35 @@ const availableVariables = (templateKey: string, dataComplete: boolean): Set<str
   if (isGrowthTemplate(templateKey)) {
     const context = dataComplete ? fullGrowthContext() : emptyGrowthContext();
     return new Set(Object.keys(buildGrowthReportContext(context).variables));
+  }
+
+  // 情感测评报告：**情感画像**，走情感自己的组装器。
+  // ⚠ 漏掉这条分支的话，情感模板会被拿去和人格变量集合比对，
+  // 于是"它引用的每个变量都不存在"—— 而那其实正是模块隔离**应有的**结果
+  if (isEmotionTemplate(templateKey)) {
+    const profile = fullEmotionProfile();
+
+    return new Set(
+      Object.keys(
+        buildEmotionReportContext({
+          profile: dataComplete
+            ? profile
+            : {
+                ...profile,
+                loveLanguageScores: null,
+                conflictScores: null,
+                primaryLoveLanguages: [],
+                consistencyScore: null,
+                completionRate: null,
+                avgResponseMs: null,
+                engineVersion: null,
+              },
+          testDefinitionCode: dataComplete ? 'EMOTION_LITE' : null,
+          answeredCount: dataComplete ? 52 : null,
+          questionCount: dataComplete ? 52 : null,
+        }).variables,
+      ),
+    );
   }
 
   if (isCompanionTemplate(templateKey)) {
@@ -872,6 +945,186 @@ describe('Prompt 模板种子数据契约', () => {
 
       const modelOutput = [
         '这半年你在开放性上明显打开，神经质则明显回落。',
+        ...template.sections.map((section) => `## ${section.title}\n这是「${section.title}」的正文。`),
+      ].join('\n');
+
+      const parsed = parseReportSections(modelOutput, readExpectedSections({ sections: template.sections }));
+
+      expect(parsed.sections.map((section) => section.sectionKey)).toEqual(
+        template.sections.map((section) => section.key),
+      );
+      expect(parsed.extraSectionKeys).toEqual([]);
+      expect(parsed.droppedSectionKeys).toEqual([]);
+      expect(parsed.freePreviewLength).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * 情感测评报告模板（EMOTION_REPORT，ADR-038 阶段 3）
+   *
+   * `EMOTION_REPORT` 是 `report.dto.ts` 支持的枚举值，`report.service.ts` 的
+   * `TEMPLATE_KEY_BY_TYPE` 把它指向 `report.emotion` —— 模板一旦缺失，用户请求
+   * 就会在 `getTemplateMeta('report.emotion')` 处报 `50011`。
+   *
+   * 这个类型最危险的失败形态与成长报告不同：**它可能悄悄用人格上下文渲染出
+   * 一份"情感报告"** —— 内容里谈着 MBTI 与大五，而报告标题写着"情感测评报告"。
+   * 用户读起来毫无破绽，却正是 ADR-038 要消除的模块串味。
+   * 因此这一组除了键名，还专门钉住"只引用情感族变量、不引用任何人格变量"。
+   */
+  describe('情感测评报告模板（EMOTION_REPORT）', () => {
+    const emotion = (): (typeof PROMPT_TEMPLATES)[number] | undefined =>
+      PROMPT_TEMPLATES.find((template) => template.key === 'report.emotion');
+
+    const emotionVariables = (dataComplete: boolean): Readonly<Record<string, string>> =>
+      buildEmotionReportContext({
+        profile: dataComplete
+          ? fullEmotionProfile()
+          : {
+              ...fullEmotionProfile(),
+              loveLanguageScores: null,
+              conflictScores: null,
+              primaryLoveLanguages: [],
+              consistencyScore: null,
+              completionRate: null,
+              avgResponseMs: null,
+              engineVersion: null,
+            },
+        testDefinitionCode: dataComplete ? 'EMOTION_LITE' : null,
+        answeredCount: dataComplete ? 52 : null,
+        questionCount: dataComplete ? 52 : null,
+      }).variables;
+
+    it('【关键】键名与 report.service.ts 的 TEMPLATE_KEY_BY_TYPE 一致（否则该报告类型开箱即 50011）', () => {
+      // `TEMPLATE_KEY_BY_TYPE` 未导出，这里按它当前的字面值断言：改动任一侧都会让这条断红
+      expect(emotion()?.key).toBe('report.emotion');
+      // `type` 用已有的 `EMOTION_ANALYSIS`（它此前是个"有取值、无模板、无代码路径"的空位），
+      // 不新造枚举值
+      expect(emotion()?.type).toBe('EMOTION_ANALYSIS');
+      expect(Object.values(PromptType)).toContain('EMOTION_ANALYSIS');
+    });
+
+    it('【关键】能用真实的情感上下文渲染成功（占位符全有值、无残留）', () => {
+      const template = emotion();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: template.systemPrompt, userPromptTemplate: template.userPromptTemplate },
+        emotionVariables(true),
+      );
+
+      expect(rendered.user).not.toContain('{{');
+      expect(rendered.system).not.toContain('{{');
+      expect(rendered.usedVariables.length).toBeGreaterThan(5);
+    });
+
+    it('【关键】数据全缺时同样能渲染成功（占位文案保证不会 50012）', () => {
+      const template = emotion();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: template.systemPrompt, userPromptTemplate: template.userPromptTemplate },
+        emotionVariables(false),
+      );
+
+      expect(rendered.user).not.toContain('{{');
+      expect(rendered.user).toContain('（本次测评未包含此项）');
+    });
+
+    it('【关键】真的用到了"两条轴 + 完整分布"，而不只是类型标签', () => {
+      const template = emotion();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const placeholders = placeholdersOf(template);
+
+      // 依恋类型是两条轴**求交**的结果：只给类型，模型无法解释"为什么是焦虑型"
+      for (const name of [
+        'attachmentStyle',
+        'attachmentAxes',
+        'loveLanguageSummary',
+        'primaryLoveLanguages',
+        'conflictStyle',
+        'conflictStyleSummary',
+      ]) {
+        expect(placeholders).toContain(name);
+      }
+
+      const rendered = renderPromptVersion(
+        { systemPrompt: '', userPromptTemplate: template.userPromptTemplate },
+        emotionVariables(true),
+      );
+
+      expect(rendered.user).toContain('焦虑型');
+      expect(rendered.user).toContain('焦虑轴 72');
+      expect(rendered.user).toContain('回避轴 31');
+      expect(rendered.user).toContain('迁就型');
+      // 最不主导的爱的语言也要出现在提示词里（"不是不在乎，而是不如前几项"要靠它）
+      expect(rendered.user).toContain('接受礼物');
+    });
+
+    it('【关键】不引用任何人格变量（引用它就意味着这份报告会串味）', () => {
+      const template = emotion();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const placeholders = placeholdersOf(template);
+
+      for (const personalityOnly of [
+        'mbtiType',
+        'mbtiTypeName',
+        'mbtiGroup',
+        'mbtiStrengths',
+        'mbtiWatchouts',
+        'mbtiConfidence',
+        'dimensionEI',
+        'dimensionSN',
+        'dimensionTF',
+        'dimensionJP',
+        'bigFiveSummary',
+      ]) {
+        expect(placeholders).not.toContain(personalityOnly);
+      }
+    });
+
+    it('【关键】系统提示词写死了合规边界（不评判关系 / 不给专业建议 / 类型不是标签）', () => {
+      const template = emotion();
+      const systemPrompt = template?.systemPrompt ?? '';
+
+      expect(systemPrompt).toContain('不评判任何一段具体关系');
+      expect(systemPrompt).toContain('不给专业建议');
+      // 依恋类型是连续倾向的象限划分，不能写成对人的定性
+      expect(systemPrompt).toContain('依恋类型不是标签');
+      // 临床用语黑名单（与其它模板同源，但情感主题更容易滑向病理化描述）
+      for (const word of ['诊断', '症状', '障碍', '治疗']) {
+        expect(systemPrompt).toContain(word);
+      }
+      // ADR-005 底线：不得重新算分
+      expect(systemPrompt).toContain('绝不重新计算');
+    });
+
+    it('首段免费预览（用户先看到自己的依恋姿态再决定付费）', () => {
+      const template = emotion();
+
+      expect(template?.sections[0]?.key).toBe('attachment_portrait');
+      expect(template?.sections[0]?.freePreview).toBe(true);
+      expect(template?.sections).toHaveLength(4);
+      expect(template?.sections.map((section) => section.key)).toEqual([
+        'attachment_portrait',
+        'love_language_map',
+        'conflict_pattern',
+        'pattern_insight',
+      ]);
+    });
+
+    it('【关键】按提示词要求的标题生成的正文，能被分段解析器切回声明的段落键', () => {
+      const template = emotion();
+      expect(template).toBeDefined();
+      if (template === undefined) return;
+
+      const modelOutput = [
+        '你的依恋姿态是焦虑型，同时冲突里偏向迁就。',
         ...template.sections.map((section) => `## ${section.title}\n这是「${section.title}」的正文。`),
       ].join('\n');
 

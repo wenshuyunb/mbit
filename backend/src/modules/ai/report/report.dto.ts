@@ -20,8 +20,24 @@ import {
   type ReportStatusFilter,
 } from './report-list.util';
 
-/** 支持的报告类型（与 Prisma `AiReportType` 对齐） */
-export const REPORT_TYPES = ['MBTI_REPORT', 'BIG_FIVE_REPORT', 'RELATIONSHIP_REPORT', 'GROWTH_SUMMARY'] as const;
+/**
+ * 支持的报告类型（与 Prisma `AiReportType` 对齐）
+ *
+ * ⚠ 加一个取值必须**成对**做完下面五处，否则要么在 DTO 层就被拒、
+ * 要么通过了 DTO 却在取模板时 `50011`（`CONTRACT_DRIFT_AUDIT.md` §9.3 记录过
+ * 这个坑：`PromptType.EMOTION_ANALYSIS` 曾长期是个"有枚举、无模板、无代码路径"的空位）：
+ *   ① 这里；② `report.service.ts` 的 `TEMPLATE_KEY_BY_TYPE`；
+ *   ③ 管理端两处 `ADMIN_REPORT_TYPES`（`admin/report` 与 `admin/ai-stats`）；
+ *   ④ 上下文组装器；⑤ `prisma/seed/data/prompt-templates.ts` 的模板本身。
+ */
+export const REPORT_TYPES = [
+  'MBTI_REPORT',
+  'BIG_FIVE_REPORT',
+  'RELATIONSHIP_REPORT',
+  'GROWTH_SUMMARY',
+  // 情感测评报告（ADR-038 阶段 3）
+  'EMOTION_REPORT',
+] as const;
 export type ReportTypeValue = (typeof REPORT_TYPES)[number];
 
 /**

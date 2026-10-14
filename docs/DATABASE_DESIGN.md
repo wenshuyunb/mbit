@@ -2147,7 +2147,8 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 | `status`                                            | `enum AiReportStatus`         | 否       | `QUEUED`                     | 生成状态                                             |
 | `sessionId`                                         | `String @db.Uuid`             | 是       | `—`                          | 来源测试会话（个人报告）                             |
 | `relationshipId`                                    | `String @db.Uuid`             | 是       | `—`                          | 来源关系（匹配报告）                                 |
-| `profileId`                                         | `String @db.Uuid`             | 是       | `—`                          | 来源画像版本（个人报告）                             |
+| `profileId`                                         | `String @db.Uuid`             | 是       | `—`                          | 来源画像版本（**人格**报告：MBTI / 大五 / 成长）     |
+| `emotionProfileId`                                  | `String @db.Uuid`             | 是       | `—`                          | 来源画像版本（**情感**报告，ADR-038 阶段 3）         |
 | `promptTemplateKey`                                 | `String @db.VarChar(64)`      | 否       | `—`                          | 使用的模板 key（快照，便于模板改名后仍可追溯）       |
 | `promptVersionId`                                   | `String @db.Uuid`             | 是       | `—`                          | 使用的模板版本（**必须记录**，架构 §10.6）           |
 | `cacheKey`                                          | `String @db.VarChar(128)`     | 否       | `—`                          | 幂等/复用键（UNIQUE）：`sha256(userId                | type | sourceId | promptVersion)` |
@@ -5052,6 +5053,8 @@ model EmotionProfile {
   updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt            DateTime?       @map("deleted_at") @db.Timestamptz(3)
 
+  aiReports            AiReport[]
+
   @@unique([userId, version])
   @@index([userId, isCurrent])
   @@map("emotion_profiles")
@@ -5248,6 +5251,8 @@ model AiReport {
   relationship         Relationship?    @relation(fields: [relationshipId], references: [id], onDelete: SetNull)
   profileId            String?          @map("profile_id") @db.Uuid
   profile              PersonalityProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  emotionProfileId     String?          @map("emotion_profile_id") @db.Uuid
+  emotionProfile       EmotionProfile?  @relation(fields: [emotionProfileId], references: [id], onDelete: SetNull)
   promptTemplateKey    String           @map("prompt_template_key") @db.VarChar(64)
   promptVersionId      String?          @map("prompt_version_id") @db.Uuid
   promptVersion        PromptVersion?   @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)
