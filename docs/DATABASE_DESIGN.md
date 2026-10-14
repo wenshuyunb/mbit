@@ -33,7 +33,7 @@
 
 | 覆盖内容             | 说明                                                                  |
 | -------------------- | --------------------------------------------------------------------- |
-| 全部物理表结构       | 7 个域、**46 张表**，每张表给出完整字段表、类型、可空性、默认值、说明 |
+| 全部物理表结构       | 7 个域、**47 张表**，每张表给出完整字段表、类型、可空性、默认值、说明 |
 | 全部索引与约束       | 主键、唯一约束、普通索引、外键与 `onDelete` 级联策略                  |
 | 全部状态机与业务规则 | 测试会话、报告生成、关系、订单、支付、退款、会员、权益、注销          |
 | 完整 Prisma 模型     | 第 6 章，可整体落地为 `backend/prisma/schema.prisma`                  |
@@ -117,7 +117,7 @@ JSONB 字段的写入必须经过 Prisma 的 `InputJsonValue` 类型，且**每�
 
 ## 2. ER 关系总览
 
-下图覆盖全部 46 张表与全部外键关系。为可读性，实体只列出主键、核心外键、状态字段；完整字段见第 5 章。
+下图覆盖全部 47 张表与全部外键关系。为可读性，实体只列出主键、核心外键、状态字段；完整字段见第 5 章。
 
 ```mermaid
 erDiagram
@@ -221,6 +221,14 @@ erDiagram
         uuid profileId FK
         uuid sourceSessionId FK
         datetime capturedAt
+    }
+    EmotionProfile {
+        uuid id PK
+        uuid userId FK
+        uuid testResultId FK
+        int version
+        bool isCurrent
+        string attachmentStyle
     }
     RelationshipStyleRule {
         uuid id PK
@@ -498,6 +506,8 @@ erDiagram
     TestDefinition ||--o{ TestResult : "1:N 成绩"
     TestResult ||--o{ PersonalityProfile : "1:N 画像版本"
     User ||--o{ PersonalityProfile : "1:N 画像版本"
+    TestResult ||--o{ EmotionProfile : "1:N 情感画像版本"
+    User ||--o{ EmotionProfile : "1:N 情感画像版本"
     PersonalityProfile ||--o{ PersonalitySnapshot : "1:N 时间序列"
     User ||--o{ PersonalitySnapshot : "1:N 成长曲线"
     TestSession ||--o| PersonalitySnapshot : "1:1 快照来源"
@@ -594,7 +604,7 @@ erDiagram
 
 ## 3. 领域模型速查表
 
-共 **46 张表**，分为 7 个域。数据量级按「3 年、100 万注册用户、5% 付费转化」的业务假设估算，用于容量规划与分区/归档决策。
+共 **47 张表**，分为 7 个域。数据量级按「3 年、100 万注册用户、5% 付费转化」的业务假设估算，用于容量规划与分区/归档决策。
 
 ### 3.1 身份域（Identity，5 张）
 
@@ -606,7 +616,7 @@ erDiagram
 | `user_consents`          | `UserConsent`         | 用户同意记录                       | 百万级（人均 4–6 条）  | ❌（合规证据不可删） |
 | `user_deletion_requests` | `UserDeletionRequest` | 账号注销申请                       | 万级                   | ❌（审计留痕）       |
 
-### 3.2 测评域（Assessment，9 张）
+### 3.2 测评域（Assessment，10 张）
 
 | 表名                       | Prisma 模型             | 中文名                | 数据量级（3 年）             | 软删除             |
 | -------------------------- | ----------------------- | --------------------- | ---------------------------- | ------------------ |
@@ -617,6 +627,7 @@ erDiagram
 | `test_answers`             | `TestAnswer`            | 答题明细              | **亿级**（单会话 50–100 条） | ❌（随会话）       |
 | `test_results`             | `TestResult`            | 测试原始分结果        | 千万级                       | ❌                 |
 | `personality_profiles`     | `PersonalityProfile`    | 人格画像（版本化）    | 千万级                       | ✅ `deletedAt`     |
+| `emotion_profiles`         | `EmotionProfile`        | 情感画像（版本化）    | 千万级                       | ✅ `deletedAt`     |
 | `personality_snapshots`    | `PersonalitySnapshot`   | 人格时间序列快照      | 千万级                       | ❌（成长曲线数据） |
 | `relationship_style_rules` | `RelationshipStyleRule` | 关系风格推导规则      | 十级                         | ✅ `deletedAt`     |
 
@@ -1518,15 +1529,15 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 
 **索引与约束**
 
-| 类型         | 定义                                               | 服务场景                                                                 |
-| ------------ | -------------------------------------------------- | ------------------------------------------------------------------------ |
-| PK           | `(id)`                                             | —                                                                        |
-| UNIQUE       | `(userId, version)`                                | 一人一版（架构 §8.4 明确要求）                                           |
-| INDEX        | `(userId, isCurrent)`                              | 取当前画像（首页/报告/匹配的高频查询）                                   |
-| INDEX        | `(mbtiType)`                                       | 群体统计                                                                 |
-| FK           | `userId → users.id ON DELETE CASCADE`              | 清理                                                                     |
-| FK           | `testResultId → test_results.id ON DELETE CASCADE` | 结果删除时画像一并清理                                                   |
-| 部分唯一索引 | `UNIQUE(userId) WHERE is_current = true`           | 保证「当前画像」唯一（Prisma schema 无法声明，随迁移 SQL 手写，见 §9.4） |
+| 类型         | 定义                                                            | 服务场景                                                                                                                                                                                                                                   |
+| ------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PK           | `(id)`                                                          | —                                                                                                                                                                                                                                          |
+| UNIQUE       | `(userId, version)`                                             | 一人一版（架构 §8.4 明确要求）                                                                                                                                                                                                             |
+| INDEX        | `(userId, isCurrent)`                                           | 取当前画像（首页/报告/匹配的高频查询）                                                                                                                                                                                                     |
+| INDEX        | `(mbtiType)`                                                    | 群体统计                                                                                                                                                                                                                                   |
+| FK           | `userId → users.id ON DELETE CASCADE`                           | 清理                                                                                                                                                                                                                                       |
+| FK           | `testResultId → test_results.id ON DELETE CASCADE`              | 结果删除时画像一并清理                                                                                                                                                                                                                     |
+| 部分唯一索引 | `UNIQUE(userId) WHERE is_current = true AND deleted_at IS NULL` | 保证「当前画像」唯一（Prisma schema 无法声明，随迁移 SQL 手写，见 §9.4）。谓词与读路径 `{ userId, isCurrent: true, deletedAt: null }` **逐字一致**；⚠ 这条索引此前**从未真正建过**，是 2026-10-14 随情感模块迁移补上的（见下方业务规则 5） |
 
 **业务规则**
 
@@ -1540,6 +1551,14 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
    推导"出来的 —— 等于用 A 模块的数据产 B 模块的结论，并印在 A 模块的画像上。
    需要的消费方（情侣匹配、关系报告、AI 人设）改为在读取时用本表的大五五列
    **现算**（`deriveRelationshipStyleFromBigFive`），值不变，只是把"存储"换成"计算"。
+5. ⚠ **「当前画像唯一」这条约束是 2026-10-14 才真正落地的**：本表从建表起就在文档里
+   声称有 `UNIQUE(userId) WHERE is_current = true`，并注明"随迁移 SQL 手写"，
+   但 `pg_indexes` 里**从来没有这条索引** —— 也就是说这句话写下后一直没兑现。
+   代码侧只在事务里 `updateMany(isCurrent=false)` → `create(isCurrent=true)`，
+   **并发提交**下两个请求可以各插一版、各置 true，于是同一用户出现两条
+   `is_current = true`，而报告链路读的正是 `isCurrent` 那一份 ——
+   同一份数据在不同请求里指向不同版本且不报错。已随情感模块迁移
+   （`20261016000000_add_emotion_module`）补上。
 
 **示例数据**
 
@@ -1678,6 +1697,104 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
   "createdByAdminId": "0195d000-0000-7000-8000-000000000001",
   "createdAt": "2026-01-01T09:00:00.000Z",
   "updatedAt": "2026-01-01T09:00:00.000Z",
+  "deletedAt": null
+}
+```
+
+#### 5.2.10 `emotion_profiles`（EmotionProfile — 情感画像）
+
+**用途**：情感测评的**结果画像**（ADR-038：情感模块与人格模块**物理隔离**，各存各的）。
+存的是**直接测量**出来的依恋类型、爱的语言排序与冲突风格 —— 不再是"从大五推导"。
+
+**与 `personality_profiles` 的关系**：结构上刻意同构（版本化 + `isCurrent` 唯一 + 来源
+`testResult`），但**没有任何外键互相引用**。两张表能同时存在、各自演进；
+报告链路读哪张由 `test_definitions.module` 决定。这正是"三个模块互不干扰"的落点。
+
+| 字段名                                  | 类型                          | 可空     | 默认值                       | 说明                                                          |
+| --------------------------------------- | ----------------------------- | -------- | ---------------------------- | ------------------------------------------------------------- |
+| `id`                                    | `String @db.Uuid`             | 否       | `uuid(7)`                    | 主键                                                          |
+| `userId`                                | `String @db.Uuid`             | 否       | `—`                          | 用户                                                          |
+| `testResultId`                          | `String @db.Uuid`             | 否       | `—`                          | 来源测试结果（一次测量对应一份画像）                          |
+| `version`                               | `Int`                         | 否       | `1`                          | 画像版本号：`UNIQUE(userId, version)`，每次算分产生新版本     |
+| `isCurrent`                             | `Boolean`                     | 否       | `true`                       | 是否当前生效画像（同一用户只有一条为 true，由事务保证）       |
+| `engineVersion`                         | `String @db.VarChar(16)`      | 否       | `—`                          | 算法版本（保证历史结果可用当时算法离线复算，ADR-005）         |
+| `attachmentStyle`                       | `enum AttachmentStyle`        | 否       | `—`                          | 依恋类型（由下面两个轴**求交**得出，不是单题判定）            |
+| `attachmentAnxiety`                     | `Float`                       | 否       | `—`                          | 依恋·焦虑轴得分（0–100，ECR 模型）                            |
+| `attachmentAvoidance`                   | `Float`                       | 否       | `—`                          | 依恋·回避轴得分（0–100）                                      |
+| `loveLanguageScores`                    | `Json @db.JsonB`              | 否       | `—`                          | 五种爱的语言各自得分（0–100），用于解释"第一名与第二名很接近" |
+| `primaryLoveLanguages`                  | `String[]`                    | 否       | `[]`                         | 主导爱的语言（**取前两名，数组顺序即排名**）                  |
+| `conflictStyle`                         | `String @db.VarChar(32)`      | 否       | `—`                          | 主导冲突风格（TKI 五种之一）                                  |
+| `conflictScores`                        | `Json @db.JsonB`              | 否       | `—`                          | 五种 TKI 风格各自得分（0–100）                                |
+| `consistencyScore`                      | `Float`                       | 是       | `—`                          | 来源测试的作答一致性分数                                      |
+| `completionRate`                        | `Float`                       | 是       | `—`                          | 来源测试完成率                                                |
+| `avgResponseMs`                         | `Int`                         | 是       | `—`                          | 来源测试平均每题耗时                                          |
+| `computedAt`                            | `DateTime @db.Timestamptz(3)` | 否       | `now()`                      | 画像生成时间                                                  |
+| `createdAt` / `updatedAt` / `deletedAt` | `DateTime @db.Timestamptz(3)` | 否/否/是 | `now()` / `@updatedAt` / `—` | 通用审计列                                                    |
+
+**为什么不只存"结论标签"**（这一条决定了好几列的存在）：
+
+只存 `attachmentStyle = ANXIOUS` 会让报告只能写"你是焦虑型依恋" ——
+而四种依恋类型是**两个连续轴的象限划分**，标签本身丢掉了"离分界线多远"这个信息。
+用户对产品的原话是「不要过于简陋」，因此两个轴、五项爱的语言、五种冲突风格的
+**完整分布**都要落库，报告才能写"你的焦虑轴偏高但回避轴很低，这解释了为什么……"。
+
+**索引与约束**
+
+| 类型         | 定义                                                            | 服务场景                                                              |
+| ------------ | --------------------------------------------------------------- | --------------------------------------------------------------------- |
+| PK           | `(id)`                                                          | —                                                                     |
+| UNIQUE       | `(userId, version)`                                             | 一人一版（与人格画像同一约定）                                        |
+| INDEX        | `(userId, isCurrent)`                                           | 取当前情感画像（情感报告与 AI 管家的高频查询）                        |
+| FK           | `userId → users.id ON DELETE CASCADE`                           | 清理                                                                  |
+| FK           | `testResultId → test_results.id ON DELETE CASCADE`              | 结果删除时画像一并清理                                                |
+| 部分唯一索引 | `UNIQUE(userId) WHERE is_current = true AND deleted_at IS NULL` | 保证「当前情感画像」唯一（与人格画像同一谓词，随迁移 SQL 手写，§9.4） |
+
+**业务规则**
+
+1. 新画像写入必须同事务：把该用户旧的 `isCurrent` 置 false → 插入新行 `isCurrent = true`。
+2. `version` 自增用 `SELECT COALESCE(MAX(version),0)+1`，并发下由 `UNIQUE(userId, version)` 兜底。
+3. **只有 `module = EMOTION` 的会话结果才允许写本表** —— 与 `personality_profiles` 的护栏
+   对称（ADR-038）。写错模块会**顶掉用户真实的情感画像**，而报告链路读的正是 `isCurrent`。
+4. 依恋类型必须由两个轴**求交**得出（`anxiety ≥ 阈值` × `avoidance ≥ 阈值` → 四象限），
+   阈值取自系统配置而非代码常量，允许运营校准。
+5. 爱的语言存**前两名**而不是第一名：五项量表的分差常常很小，只给第一名会把
+   "其实你最在意的是被肯定，其次是被陪伴"压成一句听起来很绝对的话。
+
+**示例数据**
+
+```json
+{
+  "id": "0195f105-0001-7000-8000-000000000901",
+  "userId": "0195f0c2-7b31-7a4e-9c1d-2f8a6e5d4b03",
+  "testResultId": "0195f102-0001-7000-8000-000000000502",
+  "version": 1,
+  "isCurrent": true,
+  "engineVersion": "ee-v1.0.0",
+  "attachmentStyle": "ANXIOUS",
+  "attachmentAnxiety": 72.5,
+  "attachmentAvoidance": 31.0,
+  "loveLanguageScores": {
+    "LOVE_WORDS": 86.0,
+    "LOVE_TIME": 79.5,
+    "LOVE_SERVICE": 58.0,
+    "LOVE_TOUCH": 51.5,
+    "LOVE_GIFTS": 33.0
+  },
+  "primaryLoveLanguages": ["LOVE_WORDS", "LOVE_TIME"],
+  "conflictStyle": "CONFLICT_ACCOMMODATING",
+  "conflictScores": {
+    "CONFLICT_ACCOMMODATING": 74.0,
+    "CONFLICT_COMPROMISING": 66.5,
+    "CONFLICT_COLLABORATING": 60.0,
+    "CONFLICT_AVOIDING": 44.5,
+    "CONFLICT_COMPETING": 28.0
+  },
+  "consistencyScore": 78.4,
+  "completionRate": 100,
+  "avgResponseMs": 6420,
+  "computedAt": "2026-02-14T02:31:07.100Z",
+  "createdAt": "2026-02-14T02:31:07.100Z",
+  "updatedAt": "2026-02-14T02:31:07.100Z",
   "deletedAt": null
 }
 ```
@@ -4050,6 +4167,20 @@ enum QuestionType {
 }
 
 /// 计分维度
+///
+/// ## 为什么情感模块的维度是**细粒度**的（ADR-038）
+///
+/// `ATTACHMENT` / `LOVE_LANGUAGE` / `CONFLICT_STYLE` 这三个粗粒度值是模块早期的占位：
+/// 那时情感结论是"从大五分数经 `relationship_style_rules` 推导"出来的，**没有任何题目**，
+/// 所以只需要一个能装结果的桶。
+///
+/// 现在情感测评用自己的题目**直接测量**，计分维度必须细到**可解释的单轴**——
+/// 否则"你是焦虑型依恋"这句话无法回答"凭什么"，而用户要的正是"专业、简单易懂"。
+/// 具体地：
+///   · 依恋用的是 ECR 双轴模型（焦虑轴 / 回避轴），四种依恋类型是两轴**求交**的结果，
+///     所以两个轴必须各自可算，不能合成一个 `ATTACHMENT`；
+///   · 爱的语言是**五项排序**，需要五项各自的分数才能解释"第一名只比第二名高 2 分"；
+///   · 冲突风格同理，五种 TKI 风格各有分数，主导风格只是最高分的那个。
 enum Dimension {
   EI // 外向/内向
   SN // 实感/直觉
@@ -4060,9 +4191,23 @@ enum Dimension {
   EXTRAVERSION
   AGREEABLENESS
   NEUROTICISM
-  ATTACHMENT // 依恋类型
-  LOVE_LANGUAGE // 爱的语言
-  CONFLICT_STYLE // 冲突风格
+  // 情感模块的族级维度（保留：后台分组与题库筛选仍按族归类）
+  ATTACHMENT // 依恋类型（族）
+  LOVE_LANGUAGE // 爱的语言（族）
+  CONFLICT_STYLE // 冲突风格（族）
+  // ===== 情感模块的计分维度（ADR-038 阶段 3）=====
+  ATTACH_ANXIETY // 依恋·焦虑轴（ECR）
+  ATTACH_AVOIDANCE // 依恋·回避轴（ECR）
+  LOVE_WORDS // 爱的语言·肯定的言辞
+  LOVE_TIME // 爱的语言·精心的时刻
+  LOVE_GIFTS // 爱的语言·接受礼物
+  LOVE_SERVICE // 爱的语言·服务的行动
+  LOVE_TOUCH // 爱的语言·身体的接触
+  CONFLICT_COMPETING // 冲突风格·竞争型（TKI）
+  CONFLICT_COLLABORATING // 冲突风格·协作型
+  CONFLICT_COMPROMISING // 冲突风格·妥协型
+  CONFLICT_AVOIDING // 冲突风格·回避型
+  CONFLICT_ACCOMMODATING // 冲突风格·迁就型
 
   @@map("dimension")
 }
@@ -4144,6 +4289,16 @@ enum AiReportType {
   BIG_FIVE_REPORT
   RELATIONSHIP_REPORT
   GROWTH_SUMMARY
+  // 情感测评报告（ADR-038 阶段 3）
+  //
+  // 追加在**末尾**：`ALTER TYPE ... ADD VALUE` 只能往末尾加，保持文档顺序与库内顺序一致。
+  // ⚠ 加这一个值必须**成对**做完下面四处，否则请求会在 DTO 层就被拒、
+  //   或者通过了 DTO 却在取模板时 `50011`（详见 CONTRACT_DRIFT_AUDIT.md §9.3）：
+  //     ① `report.dto.ts` 的 `REPORT_TYPES`
+  //     ② `report.service.ts` 的 `TEMPLATE_KEY_BY_TYPE`
+  //     ③ 管理端白名单（`ADMIN_REPORT_TYPES` ×2 处）
+  //     ④ 报告上下文组装器 + `prisma/seed/data/prompt-templates.ts` 的模板本身
+  EMOTION_REPORT
 
   @@map("ai_report_type")
 }
@@ -4485,6 +4640,7 @@ model User {
   testAnswers             TestAnswer[]
   testResults             TestResult[]
   profiles                PersonalityProfile[]
+  emotionProfiles         EmotionProfile[]
   snapshots               PersonalitySnapshot[]
   aiConversations         AiConversation[]
   aiMessages              AiMessage[]
@@ -4793,6 +4949,7 @@ model TestResult {
   updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   profiles          PersonalityProfile[]
+  emotionProfiles   EmotionProfile[]
 
   @@index([userId, computedAt(sort: Desc)])
   @@index([mbtiType])
@@ -4859,6 +5016,45 @@ model PersonalitySnapshot {
 
   @@index([userId, capturedAt(sort: Desc)])
   @@map("personality_snapshots")
+}
+
+/// 情感画像（ADR-038：情感模块自有画像，与人格画像**物理隔离**）
+///
+/// 存的是**直接测量**出来的依恋类型 / 爱的语言 / 冲突风格。
+/// 与 `PersonalityProfile` 无任何外键往来：两张表各自演进，读哪张由
+/// `test_definitions.module` 决定。
+///
+/// ⚠ 刻意**不建**情感版的时间序列快照表：人格模块有 `personality_snapshots`
+///   是因为成长报告要画曲线；情感模块目前没有任何消费者需要跨版本趋势，
+///   先建表等于凭空多一份要维护、要清理、且没有测试覆盖的数据。
+///   真要做情感成长曲线时，按 `personality_snapshots` 的形状复制一张即可。
+model EmotionProfile {
+  id                   String          @id @default(uuid(7)) @db.Uuid
+  userId               String          @map("user_id") @db.Uuid
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testResultId         String          @map("test_result_id") @db.Uuid
+  testResult           TestResult      @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  version              Int             @default(1)
+  isCurrent            Boolean         @default(true) @map("is_current")
+  engineVersion        String          @map("engine_version") @db.VarChar(16)
+  attachmentStyle      AttachmentStyle @map("attachment_style")
+  attachmentAnxiety    Float           @map("attachment_anxiety")
+  attachmentAvoidance  Float           @map("attachment_avoidance")
+  loveLanguageScores   Json            @map("love_language_scores") @db.JsonB
+  primaryLoveLanguages String[]        @default([]) @map("primary_love_languages")
+  conflictStyle        String          @map("conflict_style") @db.VarChar(32)
+  conflictScores       Json            @map("conflict_scores") @db.JsonB
+  consistencyScore     Float?          @map("consistency_score")
+  completionRate       Float?          @map("completion_rate")
+  avgResponseMs        Int?            @map("avg_response_ms")
+  computedAt           DateTime        @default(now()) @map("computed_at") @db.Timestamptz(3)
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  @@unique([userId, version])
+  @@index([userId, isCurrent])
+  @@map("emotion_profiles")
 }
 
 /// 关系风格推导规则（Big Five 组合 → 依恋/爱的语言/冲突风格）
@@ -6357,7 +6553,7 @@ model UserPhoneHistory {
 
 | #   | 取舍                                                                                                                                       | 代价                                                            | 为什么仍然这样选                                                                                                                                                                                                                                                                                                                          |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | 10 张核心表规范化为 46 张表                                                                                                                | JOIN 数量增加，部分查询需要组合 Read Model                      | 写入特征（配置/过程/结果/计量）截然不同，合并会带来锁竞争、索引冗余与归档困难；用**受控冗余列**（`test_answers.userId`、`payments.userId`、`refunds.userId`、`test_results.consistencyScore`）抵消高频 JOIN。其中 46 = 44（由 10 张核心表规范化而来）+ 2（`stored_files` / `user_phone_history`，由接口契约要求补充，见 §3.7 与 ADR-029） |
+| 1   | 10 张核心表规范化为 47 张表                                                                                                                | JOIN 数量增加，部分查询需要组合 Read Model                      | 写入特征（配置/过程/结果/计量）截然不同，合并会带来锁竞争、索引冗余与归档困难；用**受控冗余列**（`test_answers.userId`、`payments.userId`、`refunds.userId`、`test_results.consistencyScore`）抵消高频 JOIN。其中 47 = 45（由 10 张核心表规范化而来）+ 2（`stored_files` / `user_phone_history`，由接口契约要求补充，见 §3.7 与 ADR-029） |
 | 2   | 关键算分与画像数据用 JSONB 承载                                                                                                            | 无法用 FK/CHECK 约束内部结构；查询需 GIN 索引                   | 半结构化数据演化快（新增维度、改权重矩阵），硬列化需要频繁迁移；通过「写入前 DTO 校验 + 键必须来自枚举集合」保证质量                                                                                                                                                                                                                      |
 | 3   | 冗余聚合字段（`ai_conversations.messageCount`、`relationships.reportCount`、`entitlements.remainingQuota`、`test_sessions.answeredCount`） | 存在漂移风险                                                    | 列表页与配额判定是最高频查询，实时聚合不可接受；由「同事务更新 + 每日对账任务修正 + 差异告警」控制                                                                                                                                                                                                                                        |
 | 4   | `share_records.targetId` 为多态逻辑引用（无外键）                                                                                          | 失去引用完整性，可能出现指向已删除对象的记录                    | 分享目标类型会持续增加（未来可能有「成长曲线图」「AI 对话片段」），为每种类型加一个可空外键列会让表结构持续膨胀；分析数据允许「孤儿记录」                                                                                                                                                                                                 |

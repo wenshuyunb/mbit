@@ -758,7 +758,7 @@ export class TestService {
           mbtiType,
           mbtiDimensions: output.mbti.dimensions,
           bigFiveScores: output.bigFive as unknown as Prisma.InputJsonValue,
-          rawScores: output.rawScores,
+          rawScores: output.rawScores as unknown as Prisma.InputJsonValue,
           qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
           consistencyScore: output.quality.consistencyScore,
           completionRate: output.quality.completionRate,
@@ -770,7 +770,7 @@ export class TestService {
           mbtiType,
           mbtiDimensions: output.mbti.dimensions,
           bigFiveScores: output.bigFive as unknown as Prisma.InputJsonValue,
-          rawScores: output.rawScores,
+          rawScores: output.rawScores as unknown as Prisma.InputJsonValue,
           qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
           consistencyScore: output.quality.consistencyScore,
           completionRate: output.quality.completionRate,
@@ -831,7 +831,9 @@ export class TestService {
           extraversion: output.bigFive.extraversion,
           agreeableness: output.bigFive.agreeableness,
           neuroticism: output.bigFive.neuroticism,
-          traits: output.rawScores,
+          // `traits` 是 `Json?` 列：`RawScores` 是具名接口（无索引签名），
+          // Prisma 的 `InputJsonValue` 要求索引签名，故显式转换 —— 值本身是合法 JSON
+          traits: output.rawScores as unknown as Prisma.InputJsonValue,
           consistencyScore: output.quality.consistencyScore,
           completionRate: output.quality.completionRate,
           avgResponseMs: output.quality.avgResponseMs,

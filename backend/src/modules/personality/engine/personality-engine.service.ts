@@ -25,6 +25,11 @@
 import { Injectable } from '@nestjs/common';
 
 import {
+  collectResponseMetrics as collectResponseMetricsShared,
+  computeQualityMetrics,
+  isRushedAnswer,
+} from '../../../common/engine/assessment-quality.util';
+import {
   BIG_FIVE_DIMENSIONS,
   DEFAULT_SCALE,
   ENGINE_VERSION,
@@ -59,10 +64,16 @@ const BIG_FIVE_FIELDS: Record<BigFiveDimension, keyof BigFiveResult> = {
   NEUROTICISM: 'neuroticism',
 };
 
-/** 过快作答阈值（毫秒）：低于该值视为「未认真读题」 */
-const RUSH_THRESHOLD_MS = 1200;
-
-/** 参与算分的维度白名单（ATTACHMENT / LOVE_LANGUAGE / CONFLICT_STYLE 由规则推导，不直接算分） */
+/**
+ * 参与算分的维度白名单
+ *
+ * ⚠ 这里**只列人格模块的维度**。情感模块的 12 个维度（`ATTACH_*` / `LOVE_*` /
+ * `CONFLICT_*`）故意不在其中：它们由情感引擎单独算分，人格引擎见到它们时
+ * 按"非算分维度"处理（计入完成率、不参与得分）。
+ *
+ * 这正是"三个模块互不干扰"的机制之一 —— 情感题混进人格试卷时**不会**污染人格分数；
+ * 而 `submit()` 侧还有一道模块分派与落库护栏把关（ADR-038 阶段 1）。
+ */
 const SCORABLE_DIMENSIONS: readonly string[] = [...MBTI_DIMENSIONS, ...BIG_FIVE_DIMENSIONS];
 
 /** 维度最终结果：百分比 + 是否具备有效数据 */
@@ -481,67 +492,39 @@ export class PersonalityEngine {
   }): QualityMetrics {
     const { accumulators, validAnsweredCount, skippedCount, totalCount } = params;
 
-    const completionRate = totalCount === 0 ? 0 : roundTo(clamp((validAnsweredCount / totalCount) * 100, 0, 100));
-
-    return {
-      consistencyScore: this.computeConsistency(accumulators),
-      completionRate,
-      avgResponseMs: params.responseMsCount === 0 ? null : Math.round(params.responseMsSum / params.responseMsCount),
-      answeredCount: validAnsweredCount,
+    // 质量指标的算法**不在此处实现**：它与测的是人格还是情感无关，
+    // 抽到 `common/engine/assessment-quality.util.ts` 由三个模块共用，
+    // 这样「一致性必须比较翻转后的值」这条教训只需要在一处保持正确（ADR-038 阶段 3）
+    return computeQualityMetrics({
+      dimensionPairValues: [...accumulators.values()].map((accumulator) => ({
+        forward: accumulator.forwardValues,
+        reverse: accumulator.reverseValues,
+      })),
+      validAnsweredCount,
       skippedCount,
       totalCount,
-      rushRate: validAnsweredCount === 0 ? 0 : roundTo(clamp(params.rushCount / validAnsweredCount, 0, 1), 4),
-    };
-  }
-
-  /**
-   * 作答一致性：正/反向题是否互相印证
-   *
-   * 原理：引擎在算分时已把反向题的语义**翻转**到与正向题同一极
-   *       （`effective = scaleMin + scaleMax − raw`）。
-   *       因此翻转之后，同一维度的正向题与反向题应当给出**相近**的归一化值：
-   *         · 一致作答者：正向题 5、反向题 1 → 翻转后两者都是「高」→ 差值 ≈ 0
-   *         · 乱答/一条线选满分者：正向题 5、反向题 5 → 翻转后前高后低 → 差值大
-   *
-   * ⚠ 注意：这里比较的是**翻转后**的值，因此判据是 `|forward − reverse|`；
-   *    若改为比较翻转前的原始值，判据才应是 `|forward + reverse − 1|`。
-   *    两者等价，但不可混用（曾因混用导致「一条线全选满分」被误判为高一致性）。
-   *
-   * 无正/反向题配对的维度无法评估，**不计入平均**（避免因题库结构惩罚用户）。
-   * 所有维度都无法评估时返回 100（不做无依据的扣分）。
-   */
-  private computeConsistency(accumulators: Map<string, DimensionAccumulator>): number {
-    const deviations: number[] = [];
-
-    for (const accumulator of accumulators.values()) {
-      if (accumulator.forwardValues.length === 0 || accumulator.reverseValues.length === 0) continue;
-
-      const forwardMean = mean(accumulator.forwardValues);
-      const reverseMean = mean(accumulator.reverseValues);
-
-      // 翻转后两者语义同向，理想情况完全相等
-      deviations.push(Math.abs(forwardMean - reverseMean));
-    }
-
-    if (deviations.length === 0) return 100;
-
-    const meanDeviation = mean(deviations);
-    return roundTo(clamp((1 - meanDeviation) * 100, 0, 100));
+      responseMsSum: params.responseMsSum,
+      responseMsCount: params.responseMsCount,
+      rushCount: params.rushCount,
+    });
   }
 
   // ==========================================================================
   // 工具
   // ==========================================================================
 
-  /** 仅在答案带有耗时数据时回调（避免把 undefined 当成 0 拉低均值） */
+  /**
+   * 仅在答案带有耗时数据时回调（避免把 undefined 当成 0 拉低均值）
+   *
+   * 实现已抽到 `common/engine/assessment-quality.util.ts`：情感引擎需要完全相同的
+   * 耗时采集口径，否则同一份作答在两个模块里的「平均耗时」会不一样。
+   */
   private collectResponseMetrics(answer: EngineAnswer, onValue: (value: number) => void): void {
-    if (typeof answer.responseMs === 'number' && Number.isFinite(answer.responseMs) && answer.responseMs >= 0) {
-      onValue(answer.responseMs);
-    }
+    collectResponseMetricsShared(answer, onValue);
   }
 
-  /** 是否属于「过快作答」 */
+  /** 是否属于「过快作答」（阈值与情感引擎共用同一个常量） */
   private isRushed(answer: EngineAnswer): boolean {
-    return typeof answer.responseMs === 'number' && answer.responseMs >= 0 && answer.responseMs < RUSH_THRESHOLD_MS;
+    return isRushedAnswer(answer);
   }
 }

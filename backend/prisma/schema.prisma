@@ -144,6 +144,20 @@ enum QuestionType {
 }
 
 /// 计分维度
+///
+/// ## 为什么情感模块的维度是**细粒度**的（ADR-038）
+///
+/// `ATTACHMENT` / `LOVE_LANGUAGE` / `CONFLICT_STYLE` 这三个粗粒度值是模块早期的占位：
+/// 那时情感结论是"从大五分数经 `relationship_style_rules` 推导"出来的，**没有任何题目**，
+/// 所以只需要一个能装结果的桶。
+///
+/// 现在情感测评用自己的题目**直接测量**，计分维度必须细到**可解释的单轴**——
+/// 否则"你是焦虑型依恋"这句话无法回答"凭什么"，而用户要的正是"专业、简单易懂"。
+/// 具体地：
+///   · 依恋用的是 ECR 双轴模型（焦虑轴 / 回避轴），四种依恋类型是两轴**求交**的结果，
+///     所以两个轴必须各自可算，不能合成一个 `ATTACHMENT`；
+///   · 爱的语言是**五项排序**，需要五项各自的分数才能解释"第一名只比第二名高 2 分"；
+///   · 冲突风格同理，五种 TKI 风格各有分数，主导风格只是最高分的那个。
 enum Dimension {
   EI // 外向/内向
   SN // 实感/直觉
@@ -154,9 +168,23 @@ enum Dimension {
   EXTRAVERSION
   AGREEABLENESS
   NEUROTICISM
-  ATTACHMENT // 依恋类型
-  LOVE_LANGUAGE // 爱的语言
-  CONFLICT_STYLE // 冲突风格
+  // 情感模块的族级维度（保留：后台分组与题库筛选仍按族归类）
+  ATTACHMENT // 依恋类型（族）
+  LOVE_LANGUAGE // 爱的语言（族）
+  CONFLICT_STYLE // 冲突风格（族）
+  // ===== 情感模块的计分维度（ADR-038 阶段 3）=====
+  ATTACH_ANXIETY // 依恋·焦虑轴（ECR）
+  ATTACH_AVOIDANCE // 依恋·回避轴（ECR）
+  LOVE_WORDS // 爱的语言·肯定的言辞
+  LOVE_TIME // 爱的语言·精心的时刻
+  LOVE_GIFTS // 爱的语言·接受礼物
+  LOVE_SERVICE // 爱的语言·服务的行动
+  LOVE_TOUCH // 爱的语言·身体的接触
+  CONFLICT_COMPETING // 冲突风格·竞争型（TKI）
+  CONFLICT_COLLABORATING // 冲突风格·协作型
+  CONFLICT_COMPROMISING // 冲突风格·妥协型
+  CONFLICT_AVOIDING // 冲突风格·回避型
+  CONFLICT_ACCOMMODATING // 冲突风格·迁就型
 
   @@map("dimension")
 }
@@ -238,6 +266,16 @@ enum AiReportType {
   BIG_FIVE_REPORT
   RELATIONSHIP_REPORT
   GROWTH_SUMMARY
+  // 情感测评报告（ADR-038 阶段 3）
+  //
+  // 追加在**末尾**：`ALTER TYPE ... ADD VALUE` 只能往末尾加，保持文档顺序与库内顺序一致。
+  // ⚠ 加这一个值必须**成对**做完下面四处，否则请求会在 DTO 层就被拒、
+  //   或者通过了 DTO 却在取模板时 `50011`（详见 CONTRACT_DRIFT_AUDIT.md §9.3）：
+  //     ① `report.dto.ts` 的 `REPORT_TYPES`
+  //     ② `report.service.ts` 的 `TEMPLATE_KEY_BY_TYPE`
+  //     ③ 管理端白名单（`ADMIN_REPORT_TYPES` ×2 处）
+  //     ④ 报告上下文组装器 + `prisma/seed/data/prompt-templates.ts` 的模板本身
+  EMOTION_REPORT
 
   @@map("ai_report_type")
 }
@@ -579,6 +617,7 @@ model User {
   testAnswers             TestAnswer[]
   testResults             TestResult[]
   profiles                PersonalityProfile[]
+  emotionProfiles         EmotionProfile[]
   snapshots               PersonalitySnapshot[]
   aiConversations         AiConversation[]
   aiMessages              AiMessage[]
@@ -887,6 +926,7 @@ model TestResult {
   updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   profiles          PersonalityProfile[]
+  emotionProfiles   EmotionProfile[]
 
   @@index([userId, computedAt(sort: Desc)])
   @@index([mbtiType])
@@ -953,6 +993,45 @@ model PersonalitySnapshot {
 
   @@index([userId, capturedAt(sort: Desc)])
   @@map("personality_snapshots")
+}
+
+/// 情感画像（ADR-038：情感模块自有画像，与人格画像**物理隔离**）
+///
+/// 存的是**直接测量**出来的依恋类型 / 爱的语言 / 冲突风格。
+/// 与 `PersonalityProfile` 无任何外键往来：两张表各自演进，读哪张由
+/// `test_definitions.module` 决定。
+///
+/// ⚠ 刻意**不建**情感版的时间序列快照表：人格模块有 `personality_snapshots`
+///   是因为成长报告要画曲线；情感模块目前没有任何消费者需要跨版本趋势，
+///   先建表等于凭空多一份要维护、要清理、且没有测试覆盖的数据。
+///   真要做情感成长曲线时，按 `personality_snapshots` 的形状复制一张即可。
+model EmotionProfile {
+  id                   String          @id @default(uuid(7)) @db.Uuid
+  userId               String          @map("user_id") @db.Uuid
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testResultId         String          @map("test_result_id") @db.Uuid
+  testResult           TestResult      @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  version              Int             @default(1)
+  isCurrent            Boolean         @default(true) @map("is_current")
+  engineVersion        String          @map("engine_version") @db.VarChar(16)
+  attachmentStyle      AttachmentStyle @map("attachment_style")
+  attachmentAnxiety    Float           @map("attachment_anxiety")
+  attachmentAvoidance  Float           @map("attachment_avoidance")
+  loveLanguageScores   Json            @map("love_language_scores") @db.JsonB
+  primaryLoveLanguages String[]        @map("primary_love_languages")
+  conflictStyle        String          @map("conflict_style") @db.VarChar(32)
+  conflictScores       Json            @map("conflict_scores") @db.JsonB
+  consistencyScore     Float?          @map("consistency_score")
+  completionRate       Float?          @map("completion_rate")
+  avgResponseMs        Int?            @map("avg_response_ms")
+  computedAt           DateTime        @default(now()) @map("computed_at") @db.Timestamptz(3)
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  @@unique([userId, version])
+  @@index([userId, isCurrent])
+  @@map("emotion_profiles")
 }
 
 /// 关系风格推导规则（Big Five 组合 → 依恋/爱的语言/冲突风格）
