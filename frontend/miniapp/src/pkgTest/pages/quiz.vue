@@ -17,8 +17,10 @@ import { computed, ref } from 'vue';
 import { onHide, onLoad, onUnload } from '@dcloudio/uni-app';
 
 import { useTestStore } from '@/store/test';
+import { useAppStore } from '@/store/app';
 import { confirm } from '@/utils/toast';
 
+const appStore = useAppStore();
 const testStore = useTestStore();
 
 /** 提交中：防止重复提交 */
@@ -113,8 +115,13 @@ onUnload(() => {
 
 <template>
   <view class="quiz">
-    <!-- 顶部：进度 + 题号 -->
-    <view class="quiz__header">
+    <!--
+      顶部：进度 + 题号
+      ⚠ 本页在 pages.json 里是 `navigationStyle: custom`（自定义导航栏），
+      系统**不会**给状态栏留位置 —— 不自己加 `statusBarHeight` 的话，
+      进度条会直接贴在手机屏幕最上沿（刘海/状态栏上）。这里与首页保持一致的做法。
+    -->
+    <view class="quiz__header" :style="{ paddingTop: `${appStore.statusBarHeight + 12}px` }">
       <view class="quiz__progress-bar">
         <view class="quiz__progress-inner" :style="{ width: `${testStore.progress}%` }" />
       </view>
@@ -187,8 +194,12 @@ onUnload(() => {
   padding: 0 $space-lg;
   background-color: $color-bg-card;
 
+  /**
+   * 顶部内边距由模板按 `statusBarHeight` 动态设置（自定义导航栏需要自己让开状态栏），
+   * 这里只负责与题目区之间的间距 —— 两者都写 padding-top 会让人分不清谁在生效。
+   */
   &__header {
-    padding-top: $space-md;
+    padding-bottom: $space-sm;
   }
 
   &__progress-bar {

@@ -15,15 +15,26 @@ import { onLoad, onShareAppMessage } from '@dcloudio/uni-app';
 import RadarChart from '@/components/RadarChart.vue';
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
 import { getSessionResult, type TestSessionResult } from '@/api/test';
+import { createReport, getReportProgress, progressStageLabel, type ReportStatus } from '@/api/report';
+import { ApiError } from '@/api/types';
 import { BIG_FIVE_DIMENSIONS, MBTI_DIMENSIONS } from '@/config/constants';
+import { useAppStore } from '@/store/app';
+import { goBack, goToPage } from '@/utils/navigate';
+
+const appStore = useAppStore();
 
 const sessionId = ref('');
 const result = ref<TestSessionResult | null>(null);
 const loading = ref(true);
 const loadFailed = ref(false);
-/** 报告生成进度（Phase 3 由轮询/SSE 驱动） */
+/** 报告生成进度（0–100）与状态，由轮询驱动 */
 const reportProgress = ref(0);
+const reportStatus = ref<ReportStatus | undefined>(undefined);
 const generating = ref(false);
+/** 本次生成出来的报告 id（失败/超时后仍可进详情页查看状态） */
+const reportId = ref<string | null>(null);
+/** 生成失败或超时的提示；成功与重新开始时清空 */
+const generateError = ref<string | null>(null);
 
 const summary = computed(() => result.value?.result ?? null);
 const mbtiType = computed(() => summary.value?.mbtiType ?? null);
@@ -93,22 +104,129 @@ onShareAppMessage(() => ({
   path: '/pages/index/index',
 }));
 
-const generateReport = async (): Promise<void> => {
-  // Phase 3：调用 reportApi.createReport 并轮询进度
-  generating.value = true;
-  uni.showToast({ title: '报告生成功能将在 Phase 3 接入', icon: 'none' });
-  setTimeout(() => {
-    generating.value = false;
-  }, 1200);
+// ============================================================================
+// 生成报告：真实链路（建任务 → 轮询进度 → 进入报告详情）
+// ============================================================================
+
+/**
+ * 轮询间隔与总超时
+ *
+ * 后端是**异步任务**：`POST /reports` 返回 202 与 reportId，由 worker 生成。
+ * 因此必须轮询；但也不能无限等 —— worker 未启动或网络异常时要有兜底，
+ * 让用户至少能进详情页看到真实状态，而不是卡在一个转不动的按钮上。
+ */
+const POLL_INTERVAL_MS = 1500;
+const POLL_MAX_MS = 120_000;
+
+/** 生成中的按钮文案：失败时直接显示原因，成功/进行中显示阶段 + 百分比 */
+const generatingText = computed(() => {
+  if (generateError.value !== null) return generateError.value;
+
+  return `${progressStageLabel(reportStatus.value, reportProgress.value)} ${reportProgress.value}%`;
+});
+
+const openReportDetail = (id: string): void => {
+  goToPage(`/pkgReport/pages/detail?id=${id}`);
 };
 
-const goReport = (): void => {
-  uni.navigateTo({ url: '/pages/report/list' });
+/** 轮询直到终态；返回是否成功 */
+const waitForReport = async (id: string): Promise<boolean> => {
+  const deadline = Date.now() + POLL_MAX_MS;
+
+  while (Date.now() < deadline) {
+    const progress = await getReportProgress(id);
+    reportProgress.value = progress.progress;
+    reportStatus.value = progress.status;
+
+    if (progress.status === 'SUCCEEDED') return true;
+
+    if (progress.status === 'FAILED' || progress.status === 'CANCELLED') {
+      generateError.value = progress.errorMessage ?? '报告生成失败，可稍后重试';
+
+      return false;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+
+  generateError.value = '生成时间较长，已转入后台继续，可稍后在详情页查看';
+
+  return false;
+};
+
+/**
+ * 生成深度报告
+ *
+ * 注意**不传 `sessionId`**：后端 `CreateReportDto` 只接受 `type` / `relationshipId`，
+ * 全局管道开着 `forbidNonWhitelisted`，多传一个字段会直接 `400/10001`。
+ * 报告取的是**当前画像**（由最近一次已算分的测评产生），不需要会话 id。
+ */
+const generateReport = async (): Promise<void> => {
+  if (generating.value) return;
+
+  generating.value = true;
+  reportProgress.value = 0;
+  reportStatus.value = 'QUEUED';
+  generateError.value = null;
+
+  try {
+    const created = await createReport({ type: 'MBTI_REPORT' });
+    reportId.value = created.reportId;
+
+    const finished = await waitForReport(created.reportId);
+
+    if (finished) {
+      uni.showToast({ title: '报告已生成', icon: 'success' });
+    }
+
+    // 成功与"超时但有报告 id"都进详情页：那里能看到实时状态与完整正文
+    openReportDetail(created.reportId);
+  } catch (error) {
+    generateError.value = error instanceof ApiError ? error.message : '网络异常，请稍后重试';
+  } finally {
+    generating.value = false;
+  }
+};
+
+// ============================================================================
+// 页面动作
+// ============================================================================
+
+/** 本页是自定义导航栏（`navigationStyle: custom`），没有原生返回按钮，需自己处理 */
+const onBack = (): void => goBack();
+
+const goReportList = (): void => goToPage('/pages/report/list');
+const goChat = (): void => goToPage('/pkgChat/pages/index');
+const goHome = (): void => goToPage('/pages/index/index');
+const goRetake = (): void => goToPage('/pages/test/intro');
+
+/** 已有报告时，「下一步」里把按钮换成"查看报告详情" */
+const goMyReportDetail = (): void => {
+  if (reportId.value !== null) {
+    openReportDetail(reportId.value);
+
+    return;
+  }
+
+  goReportList();
 };
 </script>
 
 <template>
   <view class="result">
+    <!--
+      自定义导航栏（pages.json 里本页是 navigationStyle: custom）
+      —— 系统不会给返回按钮，必须自己画；顶部内边距还要加上状态栏高度，
+      否则内容会顶到刘海/状态栏上。
+    -->
+    <view class="result__navbar" :style="{ paddingTop: `${appStore.statusBarHeight}px` }">
+      <view class="result__navbar-back" @tap="onBack">
+        <text class="result__navbar-back-icon">‹</text>
+      </view>
+      <text class="result__navbar-title">测试结果</text>
+      <view class="result__navbar-back result__navbar-back--placeholder" />
+    </view>
+
     <!-- 加载中 -->
     <view v-if="loading" class="card result__state">
       <text>正在获取测评结果…</text>
@@ -118,7 +236,8 @@ const goReport = (): void => {
     <view v-else-if="loadFailed" class="card result__state">
       <text class="result__state-title">未能获取测评结果</text>
       <text class="result__state-desc">测评可能尚未提交或已过期，请返回重新开始测评</text>
-      <button class="result__state-action" @tap="goReport">查看我的报告</button>
+      <button class="result__state-action" @tap="goReportList">查看我的报告</button>
+      <button class="result__state-action result__state-action--ghost" @tap="goRetake">重新测一次</button>
     </view>
 
     <template v-else>
@@ -175,11 +294,62 @@ const goReport = (): void => {
 
       <SafetyDisclaimer variant="reportFooter" display="block" />
 
-      <!-- 底部行动 -->
+      <!-- 失败/超时提示：把原因说清楚，并给出可执行的下一步，而不是只让按钮转圈 -->
+      <view v-if="generateError" class="card result__error">
+        <text class="result__error-text">{{ generateError }}</text>
+        <button class="result__error-action" @tap="goMyReportDetail">查看报告详情</button>
+      </view>
+
+      <!--
+        「接下来可以做什么」——
+        拿到结果页之后用户往往不知道下一步干嘛，这里把三条最自然的动线摆出来，
+        而不是只留一个孤零零的按钮。
+      -->
+      <view class="card result__section">
+        <text class="result__section-title">接下来可以做什么</text>
+
+        <view class="result__next-item" @tap="generateReport">
+          <text class="result__next-icon">📄</text>
+          <view class="result__next-body">
+            <text class="result__next-title">生成深度报告</text>
+            <text class="result__next-desc">AI 逐段解读你的画像、关系模式与成长建议</text>
+          </view>
+          <text class="result__next-arrow">›</text>
+        </view>
+
+        <view class="result__next-item" @tap="goChat">
+          <text class="result__next-icon">💬</text>
+          <view class="result__next-body">
+            <text class="result__next-title">和 AI 助手聊聊</text>
+            <text class="result__next-desc">带着你的画像，说说最近在关系里的困扰</text>
+          </view>
+          <text class="result__next-arrow">›</text>
+        </view>
+
+        <view class="result__next-item" @tap="goRetake">
+          <text class="result__next-icon">🔁</text>
+          <view class="result__next-body">
+            <text class="result__next-title">过段时间再测一次</text>
+            <text class="result__next-desc">画像会随状态变化，多次测评能看出趋势</text>
+          </view>
+          <text class="result__next-arrow">›</text>
+        </view>
+
+        <view class="result__next-item" @tap="goHome">
+          <text class="result__next-icon">🏠</text>
+          <view class="result__next-body">
+            <text class="result__next-title">回到首页</text>
+            <text class="result__next-desc">看看还有哪些测评与内容</text>
+          </view>
+          <text class="result__next-arrow">›</text>
+        </view>
+      </view>
+
+      <!-- 底部行动（固定） -->
       <view class="result__footer">
-        <button class="result__button-ghost" @tap="goReport">我的报告</button>
+        <button class="result__button-ghost" @tap="goReportList">我的报告</button>
         <button class="result__button" :disabled="generating" @tap="generateReport">
-          {{ generating ? `AI 正在解读 ${reportProgress}%` : '生成深度报告' }}
+          {{ generating ? generatingText : '生成深度报告' }}
         </button>
       </view>
     </template>
@@ -355,6 +525,115 @@ const goReport = (): void => {
     flex: 2;
 
     @include button-primary;
+  }
+
+  // ---------------------------------------------------------------- 自定义导航栏
+  /**
+   * 本页 `navigationStyle: custom`，系统不提供导航栏与返回按钮。
+   * 顶部内边距由模板按 `statusBarHeight` 动态设置，这里只负责高度与排版。
+   */
+  &__navbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: $navbar-height;
+    margin: -$space-lg -$space-lg 0;
+    padding-right: $space-lg;
+    padding-left: $space-lg;
+  }
+
+  &__navbar-back {
+    @include flex-center;
+
+    width: 64rpx;
+    height: 64rpx;
+  }
+
+  // 占位：让标题在视觉上居中（左右各一个等宽元素）
+  &__navbar-back--placeholder {
+    opacity: 0;
+  }
+
+  &__navbar-back-icon {
+    font-size: 48rpx;
+    line-height: 1;
+    color: $color-text-primary;
+  }
+
+  &__navbar-title {
+    font-size: $font-size-md;
+    font-weight: $font-weight-semibold;
+    color: $color-text-primary;
+  }
+
+  // ---------------------------------------------------------------- 生成失败提示
+  &__error {
+    margin-bottom: $space-md;
+    background-color: rgba(239, 68, 68, 0.06);
+  }
+
+  &__error-text {
+    display: block;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: #b91c1c;
+  }
+
+  &__error-action {
+    height: 64rpx;
+    margin-top: $space-sm;
+    font-size: $font-size-sm;
+    color: $color-primary;
+    background-color: $color-primary-fade;
+    border-radius: $radius-round;
+  }
+
+  // ---------------------------------------------------------------- 下一步动向
+  &__next-item {
+    display: flex;
+    align-items: center;
+    gap: $space-md;
+    padding: $space-md 0;
+    border-bottom: 1rpx solid $color-divider;
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  &__next-icon {
+    font-size: 40rpx;
+  }
+
+  &__next-body {
+    flex: 1;
+  }
+
+  &__next-title {
+    display: block;
+    font-size: $font-size-base;
+    font-weight: $font-weight-semibold;
+    color: $color-text-primary;
+  }
+
+  &__next-desc {
+    display: block;
+    margin-top: 4rpx;
+    font-size: $font-size-sm;
+    line-height: $line-height-base;
+    color: $color-text-secondary;
+  }
+
+  &__next-arrow {
+    font-size: 40rpx;
+    color: $color-text-placeholder;
+  }
+
+  // ---------------------------------------------------------------- 空态补充按钮
+  &__state-action--ghost {
+    margin-top: $space-sm;
+    color: $color-text-secondary;
+    background-color: $color-bg-page;
   }
 }
 </style>

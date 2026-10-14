@@ -197,8 +197,13 @@ export interface ListReportsQuery {
  * 创建个人人格报告（异步）
  *
  * 返回 `202`。`isReused` 为 `true` 时报告已就绪，无需轮询进度。
+ *
+ * ⚠ **只接受 `type` 与 `relationshipId` 两个字段**，与后端 `CreateReportDto` 严格一致。
+ * 原先这里多了一个可选的 `sessionId` —— 而全局管道开着 `forbidNonWhitelisted`，
+ * 一旦有页面真的传了它，会被 `400/10001 property sessionId should not exist` 拒掉。
+ * 报告取的是**当前画像**（由最近一次已算分的测评产生），本来也不需要会话 id。
  */
-export const createReport = (payload: { type: ReportType; sessionId?: string }): Promise<ReportCreated> =>
+export const createReport = (payload: { type: ReportType; relationshipId?: string }): Promise<ReportCreated> =>
   http.post<ReportCreated>('/reports', payload, { timeout: 20_000 });
 
 /**
