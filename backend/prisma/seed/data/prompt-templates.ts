@@ -228,8 +228,12 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      *
      * 种子对版本是 `(templateId, version)` 幂等 upsert，原地改 v1 也能生效；
      * 但段落结构与键名都变了，历史报告引用的是当时的 v1，保留它才对得上号。
+     *
+     * v3：**摘掉情感变量**（`{{attachmentStyle}}` / `{{loveLanguages}}` / `{{conflictStyle}}`），
+     * 见下方那段说明 —— 模块隔离（ADR-038）。注入的变量变了，报告内容也会变，
+     * 因此同样保留 v2 供历史报告对号。
      */
-    version: 2,
+    version: 3,
     systemPrompt: REPORT_SYSTEM_GUARDRAILS,
     userPromptTemplate: [
       '请为下面这位用户撰写人格深度解读报告。',
@@ -239,9 +243,16 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
       '- 类型标语：{{mbtiTagline}}',
       '- 四维倾向：{{dimensionEI}}；{{dimensionSN}}；{{dimensionTF}}；{{dimensionJP}}',
       '- 大五特质：{{bigFiveSummary}}',
-      '- 依恋风格：{{attachmentStyle}}',
-      '- 偏好的爱的语言：{{loveLanguages}}',
-      '- 冲突处理风格：{{conflictStyle}}',
+      /**
+       * ⚠ 这里**刻意不再注入**依恋风格 / 爱的语言 / 冲突处理风格（ADR-038）
+       *
+       * 这三项是**情感模块**的结论，而此前它们是"从大五分数经 `relationship_style_rules`
+       * 规则表推导"出来的 —— 等于用**人格模块的答题数据**产**情感模块的结论**，
+       * 还把它印在人格报告上，正是"模块互相干扰"的典型形态。
+       *
+       * 人格报告只谈人格。情感结论将来由**情感模块自己的题目直接测量**，
+       * 出现在情感报告里（阶段 3）。
+       */
       '',
       '## 参考已知特征（仅供措辞参考，不要照抄）',
       '- 该类型的常见优势：{{mbtiStrengths}}',
@@ -266,8 +277,9 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     // 6 段 × 600 字 ≈ 3600 字 ≈ 2100 token，2048 会被截断，故提高到 4096
     maxTokens: 4096,
     changeNote:
-      'v2：段落键对齐契约 §3.5.3 的 6 段白名单（原为 overview/strengths/growth，导致金句卡分享永远取不到段落），' +
-      '并补齐「关系模式 / 优势与盲点 / 30 天行动清单」三段、每段放宽到 350–600 字',
+      'v3：摘掉情感变量（attachmentStyle / loveLanguages / conflictStyle）—— 模块隔离（ADR-038）：' +
+      '这三项是情感模块的结论，且当初是从大五推导出来的，不该出现在人格报告里。' +
+      'v2 为段落键对齐契约 6 段并补齐关系模式 / 优势与盲点 / 30 天行动清单',
   },
   {
     /**
@@ -296,7 +308,12 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     type: 'BIG_FIVE_REPORT',
     description:
       '基于大五（Big Five / OCEAN）五维特质分数生成个人深度解读报告（4 段：五维特质概览 / 特质优势 / 需要留意的张力 / 成长建议）',
-    version: 1,
+    /**
+     * v2：**摘掉情感变量**（ADR-038 模块隔离）——
+     * 原先有一段「由大五分派生的关系风格」，等于人格模块在产情感结论。
+     * 保留 v1 供历史报告对号。
+     */
+    version: 2,
     /**
      * 与 MBTI 报告共用 `REPORT_SYSTEM_GUARDRAILS`（不得重新算分 / 禁止临床用语 / 不用绝对化断言），
      * 再补五条大五专属要求。
@@ -349,11 +366,13 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
       '- 作答题数：{{answeredRatio}}',
       '- 用户最近一次测评使用的量表：{{testDefinitionCode}}（可能不是大五量表，仅作背景，不要据此展开别的框架）',
       '',
-      '## 由大五分派生的关系风格（只作旁证，不要展开成报告主线）',
-      '- 依恋风格：{{attachmentStyle}}',
-      '- 偏好的爱的语言：{{loveLanguages}}',
-      '- 冲突处理风格：{{conflictStyle}}',
-      '',
+      /**
+       * ⚠ 原有一段「## 由大五分派生的关系风格（只作旁证，不要展开成报告主线）」
+       *
+       * 那个小标题本身就是"模块互相干扰"的自白 —— 大五报告里出现"由大五分派生的关系风格"，
+       * 意味着人格模块在产情感结论。ADR-038 之后这整段删除：**情感结论归情感模块**，
+       * 由情感模块自己的题目直接测量，不再从人格数据推导。
+       */
       buildSectionFormatInstruction(BIG_FIVE_REPORT_SECTIONS),
       '',
       '「五维特质概览」：把五个特质各自的档位（高／偏高／中等／偏低／低）逐项点出来，再给一句整体印象；五项一个都不能漏，也不要只挑高分项写。',
@@ -370,7 +389,8 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     // 四段 × 150–300 字，与关系报告同档；低于此值容易把最后一段截断
     maxTokens: 2560,
     changeNote:
-      '首个版本：4 段式大五特质报告，首段免费预览（补上 BIG_FIVE_REPORT 此前缺失的模板，该报告类型此前一请求即报 50011）',
+      'v2：摘掉「由大五分派生的关系风格」整段（attachmentStyle / loveLanguages / conflictStyle）' +
+      '—— 模块隔离（ADR-038）：人格模块不再产情感结论。v1 为首个 4 段式大五报告',
   },
   {
     key: 'report.relationship',

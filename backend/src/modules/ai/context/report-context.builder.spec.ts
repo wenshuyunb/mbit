@@ -28,9 +28,6 @@ const fullInput = (): ReportContextInput => ({
     extraversion: 31.5,
     agreeableness: 72.1,
     neuroticism: 48.9,
-    attachmentStyle: 'ATTACH_SECURE',
-    loveLanguages: ['WORDS_OF_AFFIRMATION', 'QUALITY_TIME'],
-    conflictStyle: 'COLLABORATING',
     consistencyScore: 88.6,
     completionRate: 100,
     avgResponseMs: 12_400,
@@ -55,9 +52,6 @@ const emptyInput = (): ReportContextInput => ({
     extraversion: null,
     agreeableness: null,
     neuroticism: null,
-    attachmentStyle: null,
-    loveLanguages: [],
-    conflictStyle: null,
     consistencyScore: null,
     completionRate: null,
     avgResponseMs: null,
@@ -114,13 +108,13 @@ describe('buildReportContext', () => {
       expect(BIG_FIVE_LABELS['neuroticism']).not.toContain('稳定');
     });
 
-    it('依恋风格与爱的语言转为中文标签', () => {
-      const { variables } = buildReportContext(fullInput());
-
-      expect(variables['attachmentStyle']).toBe('安全型依恋');
-      expect(variables['loveLanguages']).toBe('肯定的言辞、精心的时刻');
-    });
-
+    /**
+     * ⚠ 原先这里有一条「依恋风格与爱的语言转为中文标签」的用例
+     *
+     * 随 ADR-038 删除：这两个变量已不属于人格报告上下文（情感结论归情感模块）。
+     * 中文标签映射本身仍保留在 `ATTACHMENT_LABELS` / `LOVE_LANGUAGE_LABELS`，
+     * 关系（匹配）报告与将来的情感模块继续用它们。
+     */
     it('元信息齐备', () => {
       const { variables } = buildReportContext(fullInput());
 
@@ -179,9 +173,6 @@ describe('buildReportContext', () => {
         'dimensionJP',
         'bigFiveSummary',
         'mbtiConfidence',
-        'attachmentStyle',
-        'loveLanguages',
-        'conflictStyle',
         'avgResponseSeconds',
         'answeredRatio',
       ]) {
@@ -193,10 +184,10 @@ describe('buildReportContext', () => {
       const input = fullInput();
       const { unavailable } = buildReportContext({
         ...input,
-        profile: { ...input.profile, conflictStyle: null, avgResponseMs: null },
+        profile: { ...input.profile, avgResponseMs: null },
       });
 
-      expect(unavailable).toEqual(['conflictStyle', 'avgResponseSeconds']);
+      expect(unavailable).toEqual(['avgResponseSeconds']);
     });
 
     it('未知类型码时类型字段保留原值，百科字段缺项（不猜百科内容）', () => {
@@ -211,26 +202,13 @@ describe('buildReportContext', () => {
       expect(unavailable).toContain('mbtiTypeName');
     });
 
-    it('未知依恋编码原样输出（不猜成默认值）', () => {
-      const input = fullInput();
-      const { variables } = buildReportContext({
-        ...input,
-        profile: { ...input.profile, attachmentStyle: 'SOMETHING_NEW' },
-      });
-
-      expect(variables['attachmentStyle']).toBe('SOMETHING_NEW');
-    });
-
-    it('未知爱的语言编码原样输出', () => {
-      const input = fullInput();
-      const { variables } = buildReportContext({
-        ...input,
-        profile: { ...input.profile, loveLanguages: ['UNKNOWN_LANG'] },
-      });
-
-      expect(variables['loveLanguages']).toBe('UNKNOWN_LANG');
-    });
-
+    /**
+     * ⚠ 原先这里还有两条用例：「未知依恋编码原样输出」「未知爱的语言编码原样输出」
+     *
+     * 它们随 ADR-038 一并删除 —— 断言的对象（`attachmentStyle` / `loveLanguages`）
+     * 已经不属于人格报告上下文。**这两条用例本身就是"模块互相干扰"的化石**：
+     * 它们的存在说明当时的组装器确实在为情感结论服务。
+     */
     it('问题数为 0 时 answeredRatio 记为缺失（不产生 32/0 这种误导值）', () => {
       const { variables } = buildReportContext({
         ...fullInput(),

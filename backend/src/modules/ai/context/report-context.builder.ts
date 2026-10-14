@@ -96,9 +96,13 @@ export interface ReportContextInput {
     readonly extraversion: number | null;
     readonly agreeableness: number | null;
     readonly neuroticism: number | null;
-    readonly attachmentStyle: string | null;
-    readonly loveLanguages: readonly string[];
-    readonly conflictStyle: string | null;
+    /**
+     * ⚠ 这里**刻意不再有** `attachmentStyle` / `loveLanguages` / `conflictStyle`（ADR-038）
+     *
+     * 这三项是**情感模块**的结论，此前是"从大五分数经规则表推导"出来的 ——
+     * 等于人格模块在产情感结论，并从人格报告里解读出去，正是"模块互相干扰"的典型。
+     * 情感结论将来由情感模块自己的组装器产出（阶段 3）。
+     */
     readonly consistencyScore: number | null;
     readonly completionRate: number | null;
     readonly avgResponseMs: number | null;
@@ -197,9 +201,9 @@ export const buildReportContext = (input: ReportContextInput): ReportContext => 
     bigFiveLines.push(`${BIG_FIVE_LABELS[key]} ${score}（${describeBigFiveLevel(Number(score))}）`);
   }
 
-  // ---- 关系风格 ----
-  const loveLanguages = profile.loveLanguages.map((code) => LOVE_LANGUAGE_LABELS[code] ?? code).join('、');
-
+  // ---- 质量与元信息 ----
+  // ⚠ 关系风格（依恋 / 爱的语言 / 冲突处理）自 ADR-038 起**不在此组装**：
+  // 那是情感模块的结论，不再进入人格报告（见上面类型定义处的说明）
   const variables: Record<string, string> = {
     // 类型与百科
     mbtiType: resolve('mbtiType', mbtiType),
@@ -218,14 +222,6 @@ export const buildReportContext = (input: ReportContextInput): ReportContext => 
 
     // 大五
     bigFiveSummary: resolve('bigFiveSummary', bigFiveLines.length > 0 ? bigFiveLines.join('；') : null),
-
-    // 关系与依恋
-    attachmentStyle: resolve(
-      'attachmentStyle',
-      profile.attachmentStyle === null ? null : (ATTACHMENT_LABELS[profile.attachmentStyle] ?? profile.attachmentStyle),
-    ),
-    loveLanguages: resolve('loveLanguages', loveLanguages.length > 0 ? loveLanguages : null),
-    conflictStyle: resolve('conflictStyle', profile.conflictStyle),
 
     // 质量与元信息
     mbtiConfidence: resolve('mbtiConfidence', formatScore(profile.mbtiConfidence)),
