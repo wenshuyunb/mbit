@@ -12,11 +12,17 @@
 
 import type { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
+import { EmotionEngine } from '../emotion/engine/emotion-engine.service';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
-import { ModuleScoringService } from '../personality/engine/module-scoring.service';
+import { ModuleScoringService } from './module-scoring.service';
 import type { PrismaService } from '../../infra/prisma/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
-import { TestService, type SaveAnswersResult } from './test.service';
+import {
+  TestService,
+  type PersonalitySubmitResultView,
+  type SaveAnswersResult,
+  type SubmitResultView,
+} from './test.service';
 import type { PaperQuestion, PaperSnapshot } from './test.types';
 
 // ============================================================================
@@ -27,6 +33,22 @@ const USER_ID = '0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70';
 const OTHER_USER_ID = '0195f3a2-0000-7000-8000-000000000000';
 const SESSION_ID = '0195f3a2-91a7-7d53-b8c9-4a7b1e2f3c12';
 const DEFINITION_ID = '0195f3a2-1111-7111-8111-111111111111';
+
+/**
+ * 从提交结果里取出**人格**分支
+ *
+ * `SubmitResultView` 现在是按 `module` 判别的联合类型（ADR-038 阶段 3 加入情感模块后），
+ * 因此断言 `mbtiType` / `dimensions` 这类人格专有字段前必须先收窄。
+ * 这个 helper 顺带把"这段用例测的是人格模块"这件事写进代码里 ——
+ * 否则将来有人把夹具换成情感会话，测试会在取字段时静默变成 `undefined` 而不是报错。
+ */
+const personalityResult = (view: SubmitResultView): PersonalitySubmitResultView['result'] => {
+  if (view.module !== 'PERSONALITY') {
+    throw new Error(`夹具应为人格会话，实际是 ${view.module}`);
+  }
+
+  return view.result;
+};
 
 const question = (overrides: Partial<PaperQuestion> = {}): PaperQuestion => ({
   order: 0,
@@ -61,6 +83,42 @@ const buildSnapshot = (): PaperSnapshot => ({
   ],
 });
 
+/**
+ * 构造**情感测评**的试卷快照（ADR-038 阶段 3）
+ *
+ * 维度覆盖三个族：依恋双轴、爱的语言五项、冲突风格五项。
+ * 每族至少一题，否则引擎会因"某个族没有有效数据"把结果判为不完整（`unresolved`）。
+ */
+const EMOTION_DIMENSIONS = [
+  'ATTACH_ANXIETY',
+  'ATTACH_AVOIDANCE',
+  'LOVE_WORDS',
+  'LOVE_TIME',
+  'LOVE_GIFTS',
+  'LOVE_SERVICE',
+  'LOVE_TOUCH',
+  'CONFLICT_COLLABORATING',
+  'CONFLICT_COMPROMISING',
+  'CONFLICT_ACCOMMODATING',
+  'CONFLICT_AVOIDING',
+  'CONFLICT_COMPETING',
+] as const;
+
+const buildEmotionSnapshot = (): PaperSnapshot => ({
+  snapshotVersion: 'ps-v1',
+  questionsPerPage: 20,
+  shuffled: true,
+  optionShuffled: false,
+  answerScale: {
+    type: 'LIKERT5',
+    labels: ['非常不同意', '不同意', '中立', '同意', '非常同意'],
+    values: [1, 2, 3, 4, 5],
+  },
+  questions: EMOTION_DIMENSIONS.map((dimension, index) =>
+    question({ order: index, questionId: `q-${dimension}`, code: `Q_${dimension}`, dimension }),
+  ),
+});
+
 interface PrismaStub {
   testDefinition: { findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
   question: { findMany: jest.Mock };
@@ -75,10 +133,12 @@ interface PrismaStub {
     groupBy: jest.Mock;
   };
   testAnswer: { findMany: jest.Mock; upsert: jest.Mock; count: jest.Mock };
-  testResult: { upsert: jest.Mock };
+  testResult: { upsert: jest.Mock; findUnique: jest.Mock };
   personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock; updateMany: jest.Mock; create: jest.Mock };
   personalitySnapshot: { upsert: jest.Mock };
+  emotionProfile: { findFirst: jest.Mock; updateMany: jest.Mock; create: jest.Mock };
   relationshipStyleRule: { findMany: jest.Mock };
+  systemConfig: { findMany: jest.Mock };
   userDeletionRequest: { findFirst: jest.Mock };
   $transaction: jest.Mock;
 }
@@ -102,7 +162,10 @@ const createPrismaStub = (): PrismaStub => {
       upsert: jest.fn(),
       count: jest.fn().mockResolvedValue(0),
     },
-    testResult: { upsert: jest.fn().mockResolvedValue({ id: 'result-1' }) },
+    testResult: {
+      upsert: jest.fn().mockResolvedValue({ id: 'result-1' }),
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
     personalityProfile: {
       findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
@@ -110,7 +173,15 @@ const createPrismaStub = (): PrismaStub => {
       create: jest.fn().mockResolvedValue({ id: 'profile-1', version: 1 }),
     },
     personalitySnapshot: { upsert: jest.fn() },
+    // 情感画像（ADR-038 阶段 3）：与人格画像**平行**的一套桩
+    emotionProfile: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      create: jest.fn().mockResolvedValue({ id: 'emotion-profile-1', version: 1 }),
+    },
     relationshipStyleRule: { findMany: jest.fn().mockResolvedValue([]) },
+    // 依恋阈值走系统配置；默认返回空 → 引擎回落到中位切分 50
+    systemConfig: { findMany: jest.fn().mockResolvedValue([]) },
     userDeletionRequest: { findFirst: jest.fn().mockResolvedValue(null) },
   } as unknown as PrismaStub;
 
@@ -168,8 +239,14 @@ describe('TestService', () => {
      * "submit 到底用哪个算分器算分"这件事从测试里挖掉了。
      */
     const engine = new PersonalityEngine();
+    const emotionEngine = new EmotionEngine();
 
-    service = new TestService(prisma as unknown as PrismaService, redis, engine, new ModuleScoringService(engine));
+    service = new TestService(
+      prisma as unknown as PrismaService,
+      redis,
+      engine,
+      new ModuleScoringService(engine, emotionEngine),
+    );
 
     prisma.testSession.findUnique.mockResolvedValue(sessionRow());
   });
@@ -498,7 +575,7 @@ describe('TestService', () => {
 
       expect(result.status).toBe('SCORED');
       expect(result.engineVersion).toBe('pe-v1.0.0');
-      expect(result.result.mbtiType).toBe('ESTJ'); // 全选最高分
+      expect(personalityResult(result).mbtiType).toBe('ESTJ'); // 全选最高分
       expect(result.isDuplicate).toBe(false);
 
       expect(prisma.testSession.update).toHaveBeenCalledWith(
@@ -608,13 +685,19 @@ describe('TestService', () => {
 
     it('【关键】会话属于未接入的模块 → 显式报错，且**一行画像都不写**（不产出占位结果）', async () => {
       prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
-      prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module: 'EMOTION' } }));
+      /**
+       * ⚠ 必须用**尚未接入**的模块：阶段 3 起 `EMOTION` 已有算分器，
+       * 拿它测"未接入"就变成在测另一条路径了。
+       * 目前只剩 `MENTAL_HEALTH` 未接入（阶段 4）—— 等它也接上，
+       * 这条用例应改成"临时从注册表摘掉一个模块"，而不是把断言删掉。
+       */
+      prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module: 'MENTAL_HEALTH' } }));
 
       const error = await submitError(service);
 
       expect(error.code).toBe(ErrorCode.PERSONALITY_PROFILE_BUILDING);
       // 报错要点名是哪个模块没接入 —— 否则接入者只能靠猜
-      expect(error.message).toContain('EMOTION');
+      expect(error.message).toContain('MENTAL_HEALTH');
 
       // 最关键的一条：绝不能"先把画像写了再说"
       expect(prisma.personalityProfile.create).not.toHaveBeenCalled();
@@ -635,7 +718,8 @@ describe('TestService', () => {
       const passthrough = {
         // ⚠ 签名必须是 `(module, input)` —— 只写一个参数会让 `input` 接到模块名上，
         // 报出的错会变成引擎里的 `.map of undefined`，与本测试的意图完全无关
-        score: (_module: unknown, input: Parameters<PersonalityEngine['compute']>[0]) => engine.compute(input),
+        scorePersonality: (_module: unknown, input: Parameters<PersonalityEngine['compute']>[0]) =>
+          engine.compute(input),
       } as unknown as ModuleScoringService;
       const guarded = new TestService(prisma as unknown as PrismaService, redis, engine, passthrough);
 
@@ -648,6 +732,110 @@ describe('TestService', () => {
       expect(prisma.personalityProfile.updateMany).not.toHaveBeenCalled();
     });
 
+    // ==========================================================================
+    // ADR-038 阶段 3：情感模块的提交落库
+    // ==========================================================================
+
+    /** 把会话伪装成情感测评，并挂上情感试卷 */
+    const seedEmotionSession = (dimensions: readonly string[] = EMOTION_DIMENSIONS): void => {
+      const snapshot: PaperSnapshot = {
+        ...buildEmotionSnapshot(),
+        questions: dimensions.map((dimension, index) =>
+          question({ order: index, questionId: `q-${dimension}`, code: `Q_${dimension}`, dimension }),
+        ),
+      };
+
+      // ⚠ 试卷快照挂在**会话行**上（`loadOwnedSession` 一次读出），
+      // 不是另发一次 `testSession.findFirst` —— 第一版桩写错了地方，
+      // 结果 `submit()` 读到的是人格试卷，报「还有 -8 道题未作答」
+      prisma.testSession.findUnique.mockResolvedValue(
+        sessionRow({
+          testDefinition: { module: 'EMOTION' },
+          definitionCode: 'EMOTION_LITE',
+          paperSnapshot: snapshot,
+        }),
+      );
+      prisma.testAnswer.findMany.mockResolvedValue(
+        dimensions.map((dimension, index) => ({
+          questionId: `q-${dimension}`,
+          rawValue: { value: 1 + (index % 5) },
+          responseMs: 3000,
+        })),
+      );
+    };
+
+    it('【关键】情感测评提交 → 写入 `emotion_profiles`，且**一行人格数据都不碰**', async () => {
+      seedEmotionSession();
+
+      const view = await service.submit(USER_ID, SESSION_ID, { confirm: true });
+
+      // 判别键必须是 EMOTION —— 前端据此决定渲染哪套结果页
+      expect(view.module).toBe('EMOTION');
+
+      const createArgs = prisma.emotionProfile.create.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+      expect(createArgs.data['isCurrent']).toBe(true);
+      // 依恋类型由**两个轴求交**得出，因此两轴都必须落库（否则报告无法解释"为什么是这个类型"）
+      expect(typeof createArgs.data['attachmentStyle']).toBe('string');
+      expect(typeof createArgs.data['attachmentAnxiety']).toBe('number');
+      expect(typeof createArgs.data['attachmentAvoidance']).toBe('number');
+      expect(Array.isArray(createArgs.data['primaryLoveLanguages'])).toBe(true);
+      expect(createArgs.data['loveLanguageScores']).toBeDefined();
+      expect(createArgs.data['conflictScores']).toBeDefined();
+
+      /**
+       * 最关键的一条（ADR-038 的模块隔离）：情感测评**绝不能**写人格画像。
+       * 写错会翻转 `isCurrent`，顶掉用户真实的人格画像，而报告链路读的正是那一份 ——
+       * 用户会看到一份归属错误的画像，且不报任何错。
+       */
+      expect(prisma.personalityProfile.create).not.toHaveBeenCalled();
+      expect(prisma.personalityProfile.updateMany).not.toHaveBeenCalled();
+      expect(prisma.personalitySnapshot.upsert).not.toHaveBeenCalled();
+    });
+
+    it('【关键】情感测评的 `test_results` 不借用 MBTI / 大五列', async () => {
+      seedEmotionSession();
+
+      await service.submit(USER_ID, SESSION_ID, { confirm: true });
+
+      const args = prisma.testResult.upsert.mock.calls[0]?.[0] as { create: Record<string, unknown> };
+      // 留空而不是塞进去：填上会被日后的统计与成长曲线当成人格分数读
+      expect(args.create['mbtiType']).toBeUndefined();
+      expect(args.create['mbtiDimensions']).toBeUndefined();
+      expect(args.create['bigFiveScores']).toBeUndefined();
+      // 但原始分与质量指标**必须**写：它们是复算依据（ADR-005）
+      expect(args.create['rawScores']).toBeDefined();
+      expect(args.create['qualityMetrics']).toBeDefined();
+      expect(args.create['engineVersion']).toBe('ee-v1.0.0');
+    });
+
+    it('【关键】某个族没有有效作答 → 不落库、明确报错（绝不写一份"看起来正常"的画像）', async () => {
+      /**
+       * 造法是"题库里根本没有爱的语言与冲突风格的题"（配置事故），
+       * 而不是"用户少答了几题" —— 后者会在更早的地方被
+       * 「题量完整」规则（`40006`）拦下，测不到本用例要测的那道门禁。
+       */
+      seedEmotionSession(['ATTACH_ANXIETY', 'ATTACH_AVOIDANCE']);
+
+      const error = await submitError(service);
+
+      expect(error.code).toBe(ErrorCode.EMOTION_RESULT_INCOMPLETE);
+      // 报错必须点名缺哪个族 —— 否则运营不知道该去补哪段题库
+      expect(error.message).toContain('爱的语言');
+      expect(error.message).toContain('冲突风格');
+      expect(prisma.emotionProfile.create).not.toHaveBeenCalled();
+      expect(prisma.emotionProfile.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('情感测评不读关系风格规则表（它不参与情感算分）', async () => {
+      seedEmotionSession();
+
+      await service.submit(USER_ID, SESSION_ID, { confirm: true });
+
+      // 规则表是"由大五推导关系风格"用的，情感模块是**直接测量**，不需要它。
+      // 在读之前就已经 return，因此不该发生这次查询（白读一次配置表）
+      expect(prisma.relationshipStyleRule.findMany).not.toHaveBeenCalled();
+    });
+
     it('【幂等】重复提交返回既有结果且不重复递增画像版本', async () => {
       // loadOwnedSession 读会话行；buildSubmitResultFromExisting 再读一次并带出 result
       prisma.testSession.findUnique.mockResolvedValueOnce(sessionRow({ status: 'SCORED' })).mockResolvedValue({
@@ -656,6 +844,8 @@ describe('TestService', () => {
         status: 'SCORED',
         submittedAt: new Date(),
         scoredAt: new Date(),
+        // ADR-038 阶段 3：既有结果读取按模块分流，因此这条查询必须带出 module
+        testDefinition: { module: 'PERSONALITY' },
         result: {
           id: 'result-1',
           engineVersion: 'pe-v1.0.0',
@@ -767,6 +957,8 @@ describe('TestService', () => {
         status: 'SCORED',
         submittedAt: new Date(),
         scoredAt: new Date(),
+        // ADR-038 阶段 3：既有结果读取按模块分流，因此这条查询必须带出 module
+        testDefinition: { module: 'PERSONALITY' },
         result: {
           id: 'result-1',
           engineVersion: 'pe-v1.0.0',
@@ -784,16 +976,16 @@ describe('TestService', () => {
 
       const result = await service.getSessionResult(USER_ID, SESSION_ID);
 
-      expect(result.result.mbtiType).toBe('ISTJ');
-      expect(result.result.dimensions['EI']).toEqual({
+      expect(personalityResult(result).mbtiType).toBe('ISTJ');
+      expect(personalityResult(result).dimensions['EI']).toEqual({
         percent: 34.5,
         pole: 'I',
         leftLabel: '内向 I',
         rightLabel: '外向 E',
       });
       // percent ≥ 50 → 取正极字母（SN 维度的正极是 S）
-      expect(result.result.dimensions['SN']?.pole).toBe('S');
-      expect(result.result.confidence).toBe(78.4);
+      expect(personalityResult(result).dimensions['SN']?.pole).toBe('S');
+      expect(personalityResult(result).confidence).toBe(78.4);
       expect(result.profileVersion).toBe(3);
       expect(result.isDuplicate).toBe(true);
     });

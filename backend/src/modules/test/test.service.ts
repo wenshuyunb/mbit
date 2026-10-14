@@ -22,10 +22,11 @@ import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
+import type { EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
-import { ModuleScoringService } from '../personality/engine/module-scoring.service';
 import type { EngineAnswer, EngineQuestion } from '../personality/engine/personality-engine.types';
 import { loadRelationshipStyleRules } from '../personality/relationship-style-rules.loader';
+import { ModuleScoringService } from './module-scoring.service';
 import { buildPaperSnapshot } from './paper-snapshot.builder';
 import type {
   GetSessionQueryDto,
@@ -104,8 +105,13 @@ export interface SaveAnswersResult {
   serverAt: string;
 }
 
-/** 提交结果 */
-export interface SubmitResultView {
+/**
+ * 提交结果的**公共外壳**
+ *
+ * 两个模块的提交响应共享这些字段（会话、版本、耗时、幂等标记），
+ * 差异全部收在 `result` 里，并用 `module` 做判别键。
+ */
+interface SubmitResultEnvelope {
   sessionId: string;
   status: string;
   submittedAt: string;
@@ -117,21 +123,70 @@ export interface SubmitResultView {
   engineVersion: string;
   /** true 表示本次是重复提交，返回的是既有结果（未重新算分） */
   isDuplicate: boolean;
+}
+
+/** 质量块（两个模块共用同一份定义与算法，见 `common/engine/assessment-quality.util.ts`） */
+export interface SubmitQualityView {
+  consistencyScore: number;
+  completionRate: number;
+  avgResponseMs: number | null;
+  rushRate: number;
+  /** 置信度偏低时的提示文案（不阻断流程） */
+  notice: string | null;
+}
+
+/** 人格模块的提交结果 */
+export interface PersonalitySubmitResultView extends SubmitResultEnvelope {
+  module: 'PERSONALITY';
   result: {
     mbtiType: string | null;
     dimensions: Record<string, { percent: number; pole: string; leftLabel: string; rightLabel: string }>;
     confidence: number;
     bigFive: Record<string, number>;
-    quality: {
-      consistencyScore: number;
-      completionRate: number;
-      avgResponseMs: number | null;
-      rushRate: number;
-      /** 置信度偏低时的提示文案（不阻断流程） */
-      notice: string | null;
-    };
+    quality: SubmitQualityView;
   };
 }
+
+/**
+ * 情感模块的提交结果（ADR-038 阶段 3）
+ *
+ * ⚠ 响应里**只有情感数据**：不含 `mbtiType` / `bigFive`。
+ * 情感测评没有测人格，给出这些字段等于暗示"这份情感测评也测了人格"。
+ */
+export interface EmotionSubmitResultView extends SubmitResultEnvelope {
+  module: 'EMOTION';
+  result: {
+    attachment: {
+      style: string;
+      /** 依恋焦虑轴 0–100（结论来自两轴求交，因此两轴一起给，供报告解释） */
+      anxiety: number;
+      /** 依恋回避轴 0–100 */
+      avoidance: number;
+      thresholds: { anxiety: number; avoidance: number };
+    };
+    loveLanguage: {
+      /** 五项得分（0–100） */
+      scores: Record<string, number>;
+      /** 主导项（按分数降序，最多两项） */
+      primary: string[];
+    };
+    conflict: {
+      /** 五种得分（0–100） */
+      scores: Record<string, number>;
+      style: string;
+    };
+    quality: SubmitQualityView;
+  };
+}
+
+/**
+ * 提交结果
+ *
+ * 用 `module` 判别的联合类型而不是"一个包含全部可选字段的大对象"：
+ * 后者会让前端必须靠"这个字段在不在"来猜模块，而且人格接口会莫名其妙地
+ * 暴露情感字段（正是 ADR-038 阶段 2 刚清掉的那类问题）。
+ */
+export type SubmitResultView = PersonalitySubmitResultView | EmotionSubmitResultView;
 
 /** 历史会话列表项 */
 export interface SessionHistoryItem {
@@ -665,8 +720,6 @@ export class TestService {
     // --------------------------------------------------------------- 组装引擎输入
     // 规则读取走共用 loader（ADR-038）：匹配、关系报告、AI 人设都在读同一张表，
     // 各写一份 `findMany` 会让筛选条件悄悄漂移，导致"同一份数据不同页面结论不同"
-    const relationshipRules = await loadRelationshipStyleRules(this.prisma);
-
     const engineQuestions: EngineQuestion[] = snapshot.questions.map((question) => ({
       id: question.questionId,
       type: question.type,
@@ -686,16 +739,46 @@ export class TestService {
     const scoringStartedAt = Date.now();
 
     /**
+     * 情感模块走**自己的分支**（ADR-038 阶段 3）
+     *
+     * 为什么是提前 return 而不是在同一条流程里加判断：两个模块的落库形状**完全不同** ——
+     * 人格落 MBTI 四维 + 大五五维 + 时间序列快照，情感落依恋双轴 + 五+五种分数分布、
+     * 且**没有**快照表。硬合成一个函数会让"哪一列属于哪个模块"埋在条件里，
+     * 而这类错误不会报错，只会写出归属混乱的数据。
+     *
+     * ⚠ 分支必须放在人格那套门禁**之前**：下面的 `mbti.type === null` 门禁是
+     * **人格模块专属**的（情绪量表本来就没有"类型"这个概念），
+     * 情感结果走进去必然被判成"算分失败"，并把用户已答的数据置为 EXPIRED。
+     */
+    if (session.testDefinition.module === 'EMOTION') {
+      return this.submitEmotion({
+        sessionId,
+        userId,
+        testDefinitionId: session.testDefinitionId,
+        definitionCode: session.definitionCode,
+        engineQuestions,
+        engineAnswers,
+        startedAt: scoringStartedAt,
+      });
+    }
+
+    /**
      * 按**模块**分派算分（ADR-038）
      *
      * 此前这里直接调 `this.engine.compute(…)`，等于假设"所有测评都是人格测评" ——
      * 后果是新增任何一类测评都会走进下面那道 `mbti.type === null` 门禁，
      * 以 `40011`（HTTP 500）收场并**把用户已答的数据作废**。
      *
-     * 调度器对**尚未接入**的模块显式抛错（同样 `40011`），而不是返回占位结果 ——
+     * 调度器对**尚未接入**的模块显式抛错，而不是返回占位结果 ——
      * 见 `module-scoring.service.ts` 文件头。
+     *
+     * 规则表只在这里读：情感分支在上面已经 return 了，而情感算分**不用**关系风格规则
+     * （它是直接测量，不是从大五推导）—— 放在更前面就等于每提交一次情感测评
+     * 都白读一次配置表。
      */
-    const output = this.moduleScoring.score(session.testDefinition.module, {
+    const relationshipRules = await loadRelationshipStyleRules(this.prisma);
+
+    const output = this.moduleScoring.scorePersonality(session.testDefinition.module, {
       questions: engineQuestions,
       answers: engineAnswers,
       relationshipRules,
@@ -880,14 +963,220 @@ export class TestService {
       profileVersion: persisted.profileVersion,
       engineVersion: output.engineVersion,
       isDuplicate: false,
+      module: 'PERSONALITY',
       result: this.buildResultView(output),
     };
+  }
+
+  /**
+   * 情感模块的提交落库（ADR-038 阶段 3）
+   *
+   * ## 与人格分支的三处关键差异
+   *
+   * 1. **完整性门禁不同**：人格以 MBTI 四字母为骨架，算不出类型就整份作废；
+   *    情感没有"类型"这个概念，它的门禁是**三个族各自有没有有效数据** ——
+   *    借用引擎的 `unresolved` 列出来，缺哪个族就说哪个族。
+   *    ⚠ 不能照搬人格那道门禁（见 `compute()` 里的注释），
+   *    否则每次情感提交都会被判"算分失败"并把用户答案置为 EXPIRED。
+   *
+   * 2. **落库形状不同**：`test_results` 的 MBTI / 大五列**留空**（它们是 `nullable`，
+   *    而 `definition_code` 已经说明了这是什么测评）。把情感分数塞进
+   *    `bigFiveScores` 之类的列是典型的"借用别的模块的字段"，
+   *    日后的统计与成长曲线会把它们当人格分数读。
+   *
+   * 3. **画像表不同**：写 `emotion_profiles`，**不碰** `personality_profiles` ——
+   *    两者零外键往来，各自版本化、各自 `isCurrent`。
+   *
+   * 与人格分支一致的做法：同事务里"旧画像取消 current → 插入新版本"，
+   * 并由 `emotion_profiles` 上的部分唯一索引兜底并发（见迁移
+   * `20261016000000_add_emotion_module`）。
+   */
+  private async submitEmotion(params: {
+    sessionId: string;
+    userId: string;
+    testDefinitionId: string;
+    definitionCode: string;
+    engineQuestions: EngineQuestion[];
+    engineAnswers: EngineAnswer[];
+    startedAt: number;
+  }): Promise<SubmitResultView> {
+    const { sessionId, userId, testDefinitionId, definitionCode, engineQuestions, engineAnswers, startedAt } = params;
+
+    const output = this.moduleScoring.scoreEmotion('EMOTION', {
+      questions: engineQuestions,
+      answers: engineAnswers,
+      // 阈值走系统配置（运营可调，不需要发版）：`attachment_threshold_anxiety` /
+      // `attachment_threshold_avoidance`，读不到时用引擎默认的中位切分
+      attachmentThreshold: await this.loadAttachmentThreshold(),
+    });
+
+    const scoringDurationMs = Date.now() - startedAt;
+
+    // 三个族里任何一个给不出结论 → **不落库、明确报错**。
+    // 落一份"看起来正常"的画像是这个项目里最危险的一类错误：
+    // 它会顶掉用户真实的情感画像（`isCurrent` 翻转），而报告链路读的正是那一份
+    if (output.unresolved.length > 0) {
+      this.logger.error(
+        `情感算分结果不完整，拒绝落库 sessionId=${sessionId} unresolved=${output.unresolved.join(',')}`,
+      );
+
+      throw BusinessException.internal(
+        ErrorCode.EMOTION_RESULT_INCOMPLETE,
+        `本次测评的结果不完整（${output.unresolved.join('、')} 缺少有效作答），无法生成画像`,
+        { sessionId, unresolved: output.unresolved },
+      );
+    }
+
+    // 收窄为 string：`unresolved` 为空 ⇒ 三个结论都非 null。但 TypeScript 无法把
+    // "数组为空"转成属性收窄，因此这里**显式再挡一次** —— 既让类型收窄成立，
+    // 也保证 `null` 绝不会落进 `NOT NULL` 列（那样 Prisma 会抛一个与业务无关的错）
+    const attachmentStyle = output.attachment.style;
+    const conflictStyle = output.conflict.style;
+
+    if (attachmentStyle === null || conflictStyle === null) {
+      throw BusinessException.internal(
+        ErrorCode.EMOTION_RESULT_INCOMPLETE,
+        '情感结果缺少必要的类型结论，无法生成画像',
+        {
+          sessionId,
+          attachmentStyle,
+          conflictStyle,
+        },
+      );
+    }
+
+    const now = new Date();
+
+    const persisted = await this.prisma.$transaction(async (tx) => {
+      await tx.testSession.update({
+        where: { id: sessionId },
+        data: {
+          status: 'SCORED',
+          submittedAt: now,
+          scoredAt: now,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+        },
+      });
+
+      const result = await tx.testResult.upsert({
+        where: { sessionId },
+        create: {
+          sessionId,
+          userId,
+          testDefinitionId,
+          definitionCode,
+          engineVersion: output.engineVersion,
+          // MBTI / 大五列留空：它们不属于情感模块
+          rawScores: output.rawScores as unknown as Prisma.InputJsonValue,
+          qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+          avgResponseMs: output.quality.avgResponseMs,
+          computedAt: now,
+        },
+        update: {
+          engineVersion: output.engineVersion,
+          rawScores: output.rawScores as unknown as Prisma.InputJsonValue,
+          qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+          avgResponseMs: output.quality.avgResponseMs,
+          computedAt: now,
+        },
+        select: { id: true },
+      });
+
+      const latest = await tx.emotionProfile.findFirst({
+        where: { userId },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      });
+      const nextVersion = (latest?.version ?? 0) + 1;
+
+      await tx.emotionProfile.updateMany({
+        where: { userId, isCurrent: true },
+        data: { isCurrent: false },
+      });
+
+      const profile = await tx.emotionProfile.create({
+        data: {
+          userId,
+          testResultId: result.id,
+          version: nextVersion,
+          isCurrent: true,
+          engineVersion: output.engineVersion,
+          attachmentStyle,
+          attachmentAnxiety: output.attachment.anxiety,
+          attachmentAvoidance: output.attachment.avoidance,
+          loveLanguageScores: output.loveLanguage.scores,
+          primaryLoveLanguages: output.loveLanguage.primary,
+          conflictStyle,
+          conflictScores: output.conflict.scores,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+          avgResponseMs: output.quality.avgResponseMs,
+          computedAt: now,
+        },
+        select: { id: true, version: true },
+      });
+
+      return { resultId: result.id, profileId: profile.id, profileVersion: profile.version };
+    });
+
+    this.logger.log(
+      `情感算分完成 sessionId=${sessionId} 依恋=${attachmentStyle} 主导爱的语言=${output.loveLanguage.primary.join(',')} 冲突=${conflictStyle} profileVersion=${persisted.profileVersion} 耗时=${scoringDurationMs}ms`,
+    );
+
+    return {
+      sessionId,
+      status: 'SCORED',
+      submittedAt: now.toISOString(),
+      scoredAt: now.toISOString(),
+      scoringDurationMs,
+      resultId: persisted.resultId,
+      profileId: persisted.profileId,
+      profileVersion: persisted.profileVersion,
+      engineVersion: output.engineVersion,
+      isDuplicate: false,
+      module: 'EMOTION',
+      result: this.buildEmotionResultView(output),
+    };
+  }
+
+  /**
+   * 依恋两轴的判定阈值（系统配置，运营可调）
+   *
+   * 读不到或值非法时返回 `undefined`，由引擎回落到 ECR 惯例的中位切分 50。
+   * **不抛错**：一个可选的产品口径配置缺失，不该让用户提交不了测评。
+   */
+  private async loadAttachmentThreshold(): Promise<{ anxiety: number; avoidance: number } | undefined> {
+    const rows = await this.prisma.systemConfig.findMany({
+      where: {
+        key: { in: ['attachment_threshold_anxiety', 'attachment_threshold_avoidance'] },
+        deletedAt: null,
+      },
+      select: { key: true, value: true },
+    });
+
+    // `system_configs.value` 是 `Text` 列 —— 配置值**一律以字符串存储**，
+    // 由 `valueType` 说明它该怎么解释。因此这里按字符串解析后校验范围
+    const readNumber = (key: string): number | undefined => {
+      const raw = rows.find((row) => row.key === key)?.value;
+      const value = raw === undefined ? Number.NaN : Number(raw);
+
+      return Number.isFinite(value) && value >= 0 && value <= 100 ? value : undefined;
+    };
+
+    const anxiety = readNumber('attachment_threshold_anxiety');
+    const avoidance = readNumber('attachment_threshold_avoidance');
+
+    return anxiety === undefined || avoidance === undefined ? undefined : { anxiety, avoidance };
   }
 
   // ==========================================================================
   // 历史与结果
   // ==========================================================================
-
   async listSessions(
     userId: string,
     query: ListSessionsQueryDto,
@@ -976,6 +1265,7 @@ export class TestService {
         status: true,
         submittedAt: true,
         scoredAt: true,
+        testDefinition: { select: { module: true } },
         result: {
           select: {
             id: true,
@@ -993,6 +1283,13 @@ export class TestService {
       throw BusinessException.notFound(ErrorCode.TEST_SESSION_NOT_FOUND);
     }
 
+    // 情感模块的结果不在 `test_results` 的 MBTI / 大五列里（那些列对它**留空**），
+    // 而是落在 `emotion_profiles`。按模块分流读取，
+    // 否则情感会话会返回一份 mbtiType=null、bigFive={} 的"人格结果"
+    if (session.testDefinition.module === 'EMOTION') {
+      return this.buildEmotionResultFromExisting({ userId, sessionId, session });
+    }
+
     /**
      * 画像同时提供 `mbtiConfidence`
      *
@@ -1008,7 +1305,6 @@ export class TestService {
 
     const dimensions = (session.result.mbtiDimensions ?? {}) as Record<string, number>;
     const bigFive = (session.result.bigFiveScores ?? {}) as Record<string, number>;
-    const quality = (session.result.qualityMetrics ?? {}) as Record<string, unknown>;
 
     return {
       sessionId,
@@ -1021,24 +1317,162 @@ export class TestService {
       profileVersion: profile?.version ?? 0,
       engineVersion: session.result.engineVersion,
       isDuplicate: true,
+      module: 'PERSONALITY',
       result: {
         mbtiType: session.result.mbtiType,
         dimensions: this.buildDimensionView(dimensions),
         confidence: profile?.mbtiConfidence ?? 0,
         bigFive,
+        quality: this.buildQualityViewFromJson(session.result.qualityMetrics),
+      },
+    };
+  }
+
+  /**
+   * 情感会话的既有结果
+   *
+   * 数据来源是 `emotion_profiles` 那一行 —— 它比 `test_results.qualityMetrics`
+   * 更完整（两个轴、五+五种分数分布都在那里），因此质量指标也从它读，
+   * 保证"同一份画像怎么读都是同一组数字"。
+   */
+  private async buildEmotionResultFromExisting(params: {
+    userId: string;
+    sessionId: string;
+    session: {
+      status: string;
+      submittedAt: Date | null;
+      scoredAt: Date | null;
+      result: { id: string; engineVersion: string } | null;
+    };
+  }): Promise<EmotionSubmitResultView> {
+    const { userId, sessionId, session } = params;
+
+    if (session.result === null) {
+      throw BusinessException.notFound(ErrorCode.TEST_SESSION_NOT_FOUND);
+    }
+
+    const profile = await this.prisma.emotionProfile.findFirst({
+      where: { userId, testResultId: session.result.id, deletedAt: null },
+      select: {
+        id: true,
+        version: true,
+        attachmentStyle: true,
+        attachmentAnxiety: true,
+        attachmentAvoidance: true,
+        loveLanguageScores: true,
+        primaryLoveLanguages: true,
+        conflictStyle: true,
+        conflictScores: true,
+        consistencyScore: true,
+        completionRate: true,
+        avgResponseMs: true,
+      },
+    });
+
+    if (profile === null) {
+      // 画像被清理后结果仍在：明确告知"结果不存在"，而不是回一份空壳
+      throw BusinessException.notFound(ErrorCode.EMOTION_PROFILE_NOT_FOUND);
+    }
+
+    return {
+      sessionId,
+      status: session.status,
+      submittedAt: session.submittedAt ? session.submittedAt.toISOString() : new Date().toISOString(),
+      scoredAt: session.scoredAt ? session.scoredAt.toISOString() : new Date().toISOString(),
+      scoringDurationMs: 0,
+      resultId: session.result.id,
+      profileId: profile.id,
+      profileVersion: profile.version,
+      engineVersion: session.result.engineVersion,
+      isDuplicate: true,
+      module: 'EMOTION',
+      result: {
+        attachment: {
+          style: profile.attachmentStyle,
+          anxiety: profile.attachmentAnxiety,
+          avoidance: profile.attachmentAvoidance,
+          // 阈值不落库（它是当时的配置，不是测量值）—— 重复读取时给当前的生效值，
+          // 并明确它是"用于解释类型判定的口径"，不参与任何分数
+          thresholds: (await this.loadAttachmentThreshold()) ?? { anxiety: 50, avoidance: 50 },
+        },
+        loveLanguage: {
+          scores: (profile.loveLanguageScores ?? {}) as Record<string, number>,
+          primary: profile.primaryLoveLanguages,
+        },
+        conflict: {
+          scores: (profile.conflictScores ?? {}) as Record<string, number>,
+          style: profile.conflictStyle,
+        },
         quality: {
-          consistencyScore: Number(quality['consistencyScore'] ?? 0),
-          completionRate: Number(quality['completionRate'] ?? 0),
-          avgResponseMs: quality['avgResponseMs'] === null ? null : Number(quality['avgResponseMs'] ?? 0),
-          rushRate: Number(quality['rushRate'] ?? 0),
-          notice: this.buildQualityNotice(Number(quality['consistencyScore'] ?? 0)),
+          consistencyScore: profile.consistencyScore ?? 0,
+          completionRate: profile.completionRate ?? 0,
+          avgResponseMs: profile.avgResponseMs,
+          // `emotion_profiles` 没有存 rushRate（它是质量指标的派生值，不是画像数据）；
+          // 从 `test_results.qualityMetrics` 里读，读不到给 0 ——
+          // 它是提示性指标，不值得为它给画像表加一列
+          rushRate: await this.readRushRate(session.result.id),
+          notice: this.buildQualityNotice(profile.consistencyScore ?? 0),
         },
       },
     };
   }
 
+  /** 从 `test_results.qualityMetrics` 读过快作答比例（读不到给 0） */
+  private async readRushRate(testResultId: string): Promise<number> {
+    const row = await this.prisma.testResult.findUnique({
+      where: { id: testResultId },
+      select: { qualityMetrics: true },
+    });
+
+    const quality = (row?.qualityMetrics ?? {}) as Record<string, unknown>;
+
+    return Number(quality['rushRate'] ?? 0);
+  }
+
+  /** 从 JSONB 质量块组装视图（类型守卫，避免把对象 String 化成 '[object Object]'） */
+  private buildQualityViewFromJson(value: unknown): SubmitQualityView {
+    const quality = (value ?? {}) as Record<string, unknown>;
+    const consistencyScore = Number(quality['consistencyScore'] ?? 0);
+
+    return {
+      consistencyScore,
+      completionRate: Number(quality['completionRate'] ?? 0),
+      avgResponseMs: quality['avgResponseMs'] === null ? null : Number(quality['avgResponseMs'] ?? 0),
+      rushRate: Number(quality['rushRate'] ?? 0),
+      notice: this.buildQualityNotice(consistencyScore),
+    };
+  }
+
+  /** 从情感引擎输出组装提交响应 */
+  private buildEmotionResultView(output: EmotionEngineOutput): EmotionSubmitResultView['result'] {
+    return {
+      attachment: {
+        // `submitEmotion` 已在落库前拦下 `style === null` 的情况，因此这里必然有值
+        style: output.attachment.style ?? '',
+        anxiety: output.attachment.anxiety,
+        avoidance: output.attachment.avoidance,
+        thresholds: output.attachment.thresholds,
+      },
+      loveLanguage: {
+        scores: output.loveLanguage.scores,
+        primary: [...output.loveLanguage.primary],
+      },
+      conflict: {
+        scores: output.conflict.scores,
+        style: output.conflict.style ?? '',
+      },
+      quality: {
+        consistencyScore: output.quality.consistencyScore,
+        completionRate: output.quality.completionRate,
+        avgResponseMs: output.quality.avgResponseMs,
+        rushRate: output.quality.rushRate,
+        notice: this.buildQualityNotice(output.quality.consistencyScore),
+      },
+    };
+  }
+
   /** 从引擎输出组装提交响应 */
-  private buildResultView(output: ReturnType<PersonalityEngine['compute']>): SubmitResultView['result'] {
+  private buildResultView(output: ReturnType<PersonalityEngine['compute']>): PersonalitySubmitResultView['result'] {
     return {
       mbtiType: output.mbti.type,
       dimensions: this.buildDimensionView(output.mbti.dimensions),

@@ -1,19 +1,31 @@
 /**
- * 人格引擎模块出口
+ * 测评引擎的纯函数实现（**无 I/O**）
  *
- * 只导出「纯逻辑」部分：类型契约、算法引擎、规则求值器、数学工具。
- * 访问数据库的 PersonalityService（画像读写、快照、画像查询接口）在下一阶段接入，
- * 与引擎保持**单向依赖**：Service → Engine，引擎永不反向依赖 Service。
+ * ⚠ `ModuleScoringService`（按模块分派算分）**不在这里**：它要同时引用人格引擎与
+ * 情感引擎，住在人格模块下就等于人格模块 import 情感模块 —— 那是 ADR-038 要消除的
+ * 越界。它现在住在唯一的消费方 `test` 模块里（`test/module-scoring.service.ts`）。
  */
 
 export { PersonalityEngine } from './personality-engine.service';
-export { ModuleScoringService } from './module-scoring.service';
-export type { ModuleScorer, ModuleScoringResult } from './module-scoring.service';
+export { ENGINE_VERSION } from './personality-engine.types';
+export type {
+  BigFiveDimension,
+  BigFiveResult,
+  EngineAnswer,
+  EngineQuestion,
+  MbtiDimension,
+  MbtiResult,
+  PersonalityEngineInput,
+  PersonalityEngineOutput,
+  QualityMetrics,
+  RelationshipStyleRule,
+} from './personality-engine.types';
+
+export { clamp, mean, normalizeToUnit, roundTo } from './engine-math.util';
+
 export {
   DEFAULT_RELATIONSHIP_STYLE,
-  evaluateConditions,
-  evaluatePredicate,
+  deriveRelationshipStyleFromBigFive,
   resolveRelationshipStyle,
 } from './relationship-style.evaluator';
-export { clamp, mean, normalizeToUnit, roundTo } from './engine-math.util';
-export * from './personality-engine.types';
+export type { BigFiveSource } from './relationship-style.evaluator';
