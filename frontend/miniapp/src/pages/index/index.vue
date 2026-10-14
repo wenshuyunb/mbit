@@ -20,11 +20,24 @@ import { onPullDownRefresh, onShow, onShareAppMessage, onShareTimeline } from '@
 
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
 import { useHome } from '@/composables/use-home';
+import { modulePresentation } from '@/config/modules';
 import { useAppStore } from '@/store/app';
 import { useAuthStore } from '@/store/auth';
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
+
+/**
+ * 情感测评的定义编码
+ *
+ * 与后端 `test_definitions.code` 对应。放在这里而不是写进 URL 字符串里散落各处：
+ * 后端改编码时只需改这一处，且改错了会影响所有引用点（而不是某一条入口静默 404）。
+ */
+const EMOTION_TEST_CODE = 'EMOTION_LITE';
+
+/** 两个模块的展示文案来自**同一份配置**（`config/modules.ts`），不在页面里写死 */
+const personalityEntry = modulePresentation('PERSONALITY');
+const emotionEntry = modulePresentation('EMOTION');
 
 const { hasProfile, profileError, profileBadge, primaryTitle, primaryDesc, reportDesc, loadHomeData } = useHome();
 
@@ -47,11 +60,26 @@ const entrances = computed(() =>
   [
     {
       key: 'test',
-      title: '人格测试',
-      desc: hasProfile.value ? '重新测试，更新画像' : '约 8 分钟，了解真实的自己',
-      icon: '🧭',
+      title: personalityEntry.entranceTitle,
+      desc: hasProfile.value ? '重新测试，更新画像' : personalityEntry.entranceDesc,
+      icon: personalityEntry.icon,
       url: '/pages/test/intro',
       enabled: true,
+    },
+    {
+      /**
+       * 情感测评入口（ADR-038 阶段 3）
+       *
+       * 与人格测试是**两个独立入口**，不走同一个按钮：两者测的不是一回事，
+       * 合并成一个"开始测评"会让人以为做完人格测评就顺便得到了情感结论 ——
+       * 而那正是整改要消除的误解。
+       */
+      key: 'emotion',
+      title: emotionEntry.entranceTitle,
+      desc: emotionEntry.entranceDesc,
+      icon: emotionEntry.icon,
+      url: `/pages/test/intro?code=${EMOTION_TEST_CODE}`,
+      enabled: emotionEntry.available,
     },
     {
       key: 'report',

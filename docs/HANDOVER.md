@@ -1230,54 +1230,57 @@ AI 助手改为「能读取三个模块报告」的管家角色，**需要会员
 - **历史报告没有回填**：`ai_reports` 里 v1/v2/v3 模板产出的报告正文可能含旧的
   情感措辞。要不要动用户已付过费的报告是一次数据迁移决策，不在本轮范围。
 
-#### 后续阶段（阶段 3–6）
+#### 后续阶段（阶段 4–6）
 
-**阶段 3 情感模块 —— 进行中（约 2/3 完成）**
+**阶段 3 情感模块 —— ✅ 已完成**
 
-已完成：
+交付内容（四个 commit）：数据层迁移、算分引擎、52 题题库、读接口、情感报告、前端入口。
+完整取舍与证据见 `CONTRACT_DRIFT_AUDIT.md` §12，摘要：
 
 - **数据层**：迁移 `20261016000000_add_emotion_module` —— `ai_report_type` 加
   `EMOTION_REPORT`、`dimension` 加 12 个计分维度、新建 `emotion_profiles`、
   补上两张画像表缺失的**部分唯一索引**（`personality_profiles` 那条从建表起就只写在
   文档里、从未真正建过 —— 并发提交会产出两条 `is_current = true` 且不报错）；
+  以及 `20261017000000_add_emotion_profile_to_ai_reports`（报告挂情感画像）；
 - **引擎** `emotion-engine.service.ts`：依恋 ECR 双轴 → 四象限、爱的语言五项排序、
   冲突风格 TKI 五选一。阈值走系统配置（运营可调，不发版）；
   **数据不足时不给结论**（`style = null` / `primary = []` + `unresolved` 列表），
   绝不回落到"默认安全型"；
-- **共用算分数学**抽到 `common/engine/assessment-scoring.util.ts`：反向计分口径、
-  量表解析三级优先级、维度累加与归一化 —— 两个模块各写一份会让同一份作答被
-  以不同方式评分且不报错；
+- **共用算分数学**抽到 `common/engine/`：反向计分口径、量表解析、维度累加与归一化
+  由两个引擎共用 —— 各写一份会让同一份作答被以不同方式评分且不报错；
 - **模块分派**搬到 `test/module-scoring.service.ts`（要同时引用两个引擎，
   留在人格模块下就等于 `personality → emotion`）；
 - **提交落库**：情感走独立分支（三道差异：完整性门禁、`test_results` 留空 MBTI/大五列、
   写 `emotion_profiles`），错误码 `40014/40015/40016` 与人格**平行而不复用**；
 - **题库 52 题**（依恋 12 + 爱的语言 20 + 冲突风格 20，四项维度每项 2 正 2 反）；
-- **读接口** `GET /emotion/me`（含服务端下发的免责声明）。
+- **读接口** `GET /emotion/me` + **情感报告** `EMOTION_REPORT`（4 段、首段免费）；
+- **前端**：`config/modules.ts` 是模块文案唯一来源；新增情感测评入口；
+  结果页按 `module` 分两条支路；报告类型按模块取。
 
-活体验证 `.runlogs/probe-emotion-journey.cjs` **26/26 通过**（真实库 + 真实引擎）：
-新用户跑完 52 题 → 提交 200 → `GET /emotion/me` 200（依恋 ANXIOUS / 焦虑 50 / 回避 37.5、
-主导爱的语言与冲突风格都有值）→ **模块隔离**：`GET /personality/me` 仍是 404(40010)、
-`personality_profiles` 与 `personality_snapshots` 该用户**各 0 行**、
-`emotion_profiles` 恰好 1 行 `isCurrent = true`。
+活体证据：
 
-尚未做：
+- `.runlogs/probe-emotion-journey.cjs` **28/28**：新用户跑完 52 题 → 提交 200 →
+  `GET /emotion/me` 200 → **模块隔离**（`GET /personality/me` 仍 404/`40010`、
+  两张人格表该用户各 0 行、`emotion_profiles` 恰好 1 行 `isCurrent`);
+- `.runlogs/probe-emotion-report.cjs` **26/26**：无画像时 `40014`、全新生成
+  （`isReused=false`）、4 段落库、`emotionProfileId` 有值而 **`profileId` 为 null**、
+  用量 `task_type=EMOTION_ANALYSIS`、**正文里没有 MBTI 类型与"大五"术语**。
 
-- **情感报告**：`AiReportType.EMOTION_REPORT` 已在库里，但 `REPORT_TYPES`、
-  `TEMPLATE_KEY_BY_TYPE`、管理端两处白名单、上下文组装器与模板**都还没动** ——
-  现在请求情感报告会在 DTO 层被拒（`CONTRACT_DRIFT_AUDIT.md` §9.3 描述的
-  "能力位空转"就是只加了枚举没做成对改动）；
-- **前端入口**：`EMOTION_LITE` 已能通过 API 跑通，但小程序仍只有一个人格测评入口。
+⚠ **前端未在真机验证**（当前最该补的一步）：界面改动只过了 `vue-tsc` 与配置层单测，
+没有在微信开发者工具或真机上点过 —— 属于"代码看起来对"，不是"验证过"。
 
 **阶段 4 心理健康模块**：多维度得分 + 文字结论，**只做结论、不给建议、不做心理干预**，
 「本结果仅供参考」由服务端下发（合规敏感，微信审核对诊断类措辞敏感；
-`seed-data.spec.ts` 已有敏感词黑名单可复用/扩展）；
+`seed-data.spec.ts` 已有敏感词黑名单可复用/扩展）。
+`ModuleScoringService` 里 `MENTAL_HEALTH` 尚未登记 —— 现在提交该类模块会**显式报错**
+（`40011`），不会写出假画像。
 **阶段 5 AI 助手重设计**：改为能读取三个模块报告的管家（总结、跨模块问答），
 **会员才可使用**；
-**阶段 6 前端**：三个模块各自的入口、结果页与报告页
-（`pages/test/intro.vue:24` 目前把 `MBTI_LITE` 写死）。
+**阶段 6 前端**：人格与情感两个模块的入口与结果页已在阶段 3 完成，
+心理健康模块的界面待阶段 4 落地后补。
 
-当前门禁状态（阶段 2 收尾）：`tsc` 0 错 / `eslint` 0 警告 /
-**jest 127 套 2799 例全过** / 小程序 vitest **14 套 189 例全过** /
+当前门禁状态（阶段 3 收尾）：`tsc` 0 错 / `eslint` 0 警告 /
+**jest 128 套 2870 例全过** / 小程序 **vue-tsc 0 错 + vitest 15 套 203 例全过** /
 `prettier` 干净 / `node dist/main.js` 启动正常且 `/health/ready` 返回 200。
 
 #### ⚠ 本轮遇到的一次环境故障（记录一下，别再当成代码问题排查）

@@ -4,26 +4,40 @@
  *
  * 职责：说明测试内容、时长与合规声明，引导开始测试，并处理断点续答入口。
  *
- * Phase 0 状态：页面结构与交互完整，测试定义数据为静态占位；
- *               Phase 2 接入 GET /tests 与本地草稿恢复状态。
+ * ## ADR-038：本页是**三个模块共用**的，文案按模块切换
+ *
+ * 通过 `?code=EMOTION_LITE` 进来时，标题/说明/维度数全部换成情感模块的那一套。
+ * 文案来源是 `config/modules.ts`（**唯一来源**），不再写死在模板里 ——
+ * 此前写死的结果是"情感测评的介绍页写着 MBTI + 大五人格双模型测评"，
+ * 而这类错误不会报错，只会让用户以为两个模块是同一个东西。
+ *
+ * 题量与时长优先用**服务端下发的真实值**（`GET /tests/{code}`）：
+ * 种子数据改了题量而这里硬编码，首屏就会出现与真实不符的数字。
  */
 
 import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
+import { getTest, type TestDefinition } from '@/api/test';
+import { modulePresentation } from '@/config/modules';
 import { useTestStore } from '@/store/test';
 
 /**
  * 测试定义编码
  *
- * 与后端 `test_definitions.code` 对应。当前默认使用已上架的 `MBTI_LITE`（32 题）；
- * `MBTI_FULL`（64 题深度版）在后端仍为 DRAFT 状态（配套题库尚未灌入），
- * 若在此引用会得到「测试已下架」错误 —— Phase 2b 内容增量完成后再切换默认值。
+ * 与后端 `test_definitions.code` 对应。默认 `MBTI_LITE`（32 题）；
+ * 情感测评走 `?code=EMOTION_LITE`（52 题）。
  */
 const definitionCode = ref('MBTI_LITE');
 
+/** 服务端下发的定义（拿不到时为 null，页面用模块配置的兜底值渲染） */
+const definition = ref<TestDefinition | null>(null);
+
 const testStore = useTestStore();
+
+/** 模块展示配置（未知模块走降级配置，不抛错） */
+const presentation = computed(() => modulePresentation(definition.value?.module));
 
 /** 本地是否存在未完成的草稿（断点续答） */
 const hasDraft = computed(() => {
@@ -34,18 +48,28 @@ const hasDraft = computed(() => {
 /**
  * 展示用题量与时长
  *
- * 优先取服务端定义的真实值（`testStore.startTest` 后从试卷快照得知）；
- * 这里的默认值与后端种子数据保持一致，避免首屏出现与真实不符的数字。
+ * 优先取服务端定义的真实值；未取到时显示 `—` 而不是猜一个数字 ——
+ * 猜错会让用户以为是 32 题、结果点进去有 52 题。
  */
-const estimatedMinutes = ref(5);
-const questionCount = ref(32);
+const questionCount = computed(() => definition.value?.questionCount ?? null);
+const estimatedMinutes = computed(() => definition.value?.estimatedMinutes ?? null);
+const questionCountText = computed(() => (questionCount.value === null ? '—' : String(questionCount.value)));
+const estimatedMinutesText = computed(() => (estimatedMinutes.value === null ? '—' : `约 ${estimatedMinutes.value}`));
 
 const starting = ref(false);
 
-onLoad((query) => {
+onLoad(async (query) => {
   const code = query?.['code'];
   if (typeof code === 'string' && code.length > 0) {
     definitionCode.value = code;
+  }
+
+  try {
+    definition.value = await getTest(definitionCode.value);
+  } catch (error) {
+    // 取不到定义不阻塞页面：用模块配置的兜底文案 + `—` 渲染，
+    // 真正的失败会在点「开始测试」时由 startTest 明确报出来
+    console.error('[test/intro] 拉取测试定义失败：', error);
   }
 });
 
@@ -72,23 +96,21 @@ const discardDraft = (): void => {
 <template>
   <view class="intro page-container">
     <view class="intro__header card">
-      <text class="intro__title">MBTI + 大五人格双模型测评</text>
-      <text class="intro__desc">
-        基于荣格类型学与五因素人格理论，从四个维度与五个特质描绘你的人格轮廓，再由 AI 生成个性化解读。
-      </text>
+      <text class="intro__title">{{ presentation.introTitle }}</text>
+      <text class="intro__desc">{{ presentation.introDesc }}</text>
 
       <view class="intro__meta">
         <view class="intro__meta-item">
-          <text class="intro__meta-value">{{ questionCount }}</text>
+          <text class="intro__meta-value">{{ questionCountText }}</text>
           <text class="intro__meta-label">题目数量</text>
         </view>
         <view class="intro__meta-item">
-          <text class="intro__meta-value">约 {{ estimatedMinutes }}</text>
+          <text class="intro__meta-value">{{ estimatedMinutesText }}</text>
           <text class="intro__meta-label">分钟</text>
         </view>
         <view class="intro__meta-item">
-          <text class="intro__meta-value">15</text>
-          <text class="intro__meta-label">个分析维度</text>
+          <text class="intro__meta-value">{{ presentation.introMetricValue }}</text>
+          <text class="intro__meta-label">{{ presentation.introMetricLabel }}</text>
         </view>
       </view>
     </view>

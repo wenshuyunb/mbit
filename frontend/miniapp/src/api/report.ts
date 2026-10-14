@@ -30,7 +30,13 @@ import { http } from './request';
 import type { PaginatedData } from './types';
 
 /** 报告类型（与后端 `REPORT_TYPES` 一致） */
-export type ReportType = 'MBTI_REPORT' | 'BIG_FIVE_REPORT' | 'RELATIONSHIP_REPORT' | 'GROWTH_SUMMARY';
+export type ReportType =
+  | 'MBTI_REPORT'
+  | 'BIG_FIVE_REPORT'
+  | 'RELATIONSHIP_REPORT'
+  | 'GROWTH_SUMMARY'
+  // 情感测评报告（ADR-038 阶段 3）——与人格报告**不同源**：它读的是情感画像
+  | 'EMOTION_REPORT';
 
 /** 报告状态（与 Prisma `AiReportStatus` 一致） */
 export type ReportStatus = 'QUEUED' | 'GENERATING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';

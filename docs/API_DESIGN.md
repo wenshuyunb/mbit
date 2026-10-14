@@ -2405,6 +2405,22 @@ CREATED ──取卷成功──► IN_PROGRESS ──提交全部答案──�
 | 幂等 | 是                                                                                                                   |
 | 异步 | 否                                                                                                                   |
 
+> ✅ **2026-10-14 补充：响应新增 `module` 字段**（ADR-038 阶段 3）。
+>
+> 取值 `PERSONALITY` \| `EMOTION` \| `MENTAL_HEALTH`，与 `TestModule` 枚举一致。
+> **前端必须靠它决定三件事**，缺了就只能靠 `category` 猜：
+>
+> 1. 介绍页文案（人格测评与情感测评讲的完全不是一回事）；
+> 2. 做完之后跳哪个结果页（人格是四维 + 大五，情感是依恋 + 爱的语言 + 冲突）；
+> 3. 生成哪种报告（`MBTI_REPORT` vs `EMOTION_REPORT`）。
+>
+> ⚠ `category` **不能**当模块用：它是模块内的**算分口径**细分
+> （如情感测评的 `category` 是 `RELATIONSHIP_STYLE`，而它的 `module` 是 `EMOTION`）。
+> 拿 `category` 当模块判断，表现是"情感测评的介绍页写着 MBTI + 大五人格双模型测评"——
+> 不报任何错，只让用户以为两个模块是同一个东西。
+>
+> 下面的响应示例写于该字段加入之前，实际响应**每个条目都会带 `module`**（列表与详情接口都带）。
+
 **Query 参数**
 
 | 参数       | 类型   | 必填 | 约束                                                                 | 说明       |
@@ -2557,6 +2573,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     "subtitle": "48 题 · 约 8 分钟",
     "description": "基于 MBTI 四维框架的快速人格测评。回答时请凭第一直觉选择，不要过度思考。",
     "category": "PERSONALITY",
+    "module": "PERSONALITY",
     "version": "1.3.0",
     "questionCount": 48,
     "estimatedMinutes": 8,

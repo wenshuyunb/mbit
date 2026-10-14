@@ -14,10 +14,23 @@ import { onLoad, onShareAppMessage } from '@dcloudio/uni-app';
 
 import RadarChart from '@/components/RadarChart.vue';
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
-import { getSessionResult, type TestSessionResult } from '@/api/test';
+import {
+  getSessionResult,
+  type EmotionSessionResult,
+  type PersonalitySessionResult,
+  type TestSessionResult,
+} from '@/api/test';
 import { createReport, getReportProgress, progressStageLabel, type ReportStatus } from '@/api/report';
 import { ApiError } from '@/api/types';
 import { BIG_FIVE_DIMENSIONS, MBTI_DIMENSIONS } from '@/config/constants';
+import {
+  ATTACHMENT_STYLE_LABELS,
+  CONFLICT_STYLE_LABELS,
+  CONFLICT_STYLE_ORDER,
+  LOVE_LANGUAGE_LABELS,
+  LOVE_LANGUAGE_ORDER,
+  modulePresentation,
+} from '@/config/modules';
 import { useAppStore } from '@/store/app';
 import { goBack, goToPage } from '@/utils/navigate';
 
@@ -36,7 +49,25 @@ const reportId = ref<string | null>(null);
 /** 生成失败或超时的提示；成功与重新开始时清空 */
 const generateError = ref<string | null>(null);
 
-const summary = computed(() => result.value?.result ?? null);
+/**
+ * 当前结果的模块（ADR-038）
+ *
+ * 页面是**两个模块共用**的：人格结果渲染四维 + 大五，情感结果渲染依恋 + 爱的语言 + 冲突。
+ * 靠 `module` 判别而不是靠"字段在不在"猜 —— 猜错的表现是页面出现一堆 `undefined`。
+ */
+const moduleKey = computed(() => result.value?.module ?? 'PERSONALITY');
+const presentation = computed(() => modulePresentation(moduleKey.value));
+const isEmotion = computed(() => result.value?.module === 'EMOTION');
+
+/** 人格结果（收窄后的便捷访问；非人格结果时为 null） */
+const personality = computed<PersonalitySessionResult | null>(() =>
+  result.value?.module === 'PERSONALITY' ? result.value : null,
+);
+
+/** 情感结果（收窄后的便捷访问；非情感结果时为 null） */
+const emotion = computed<EmotionSessionResult | null>(() => (result.value?.module === 'EMOTION' ? result.value : null));
+
+const summary = computed(() => personality.value?.result ?? null);
 const mbtiType = computed(() => summary.value?.mbtiType ?? null);
 const mbtiLetters = computed(() => (mbtiType.value ?? '????').split(''));
 
@@ -68,13 +99,78 @@ const radarDimensions = computed(() =>
   })),
 );
 
+// ---------------------------------------------------------------------------
+// 情感结果（ADR-038 阶段 3）
+// ---------------------------------------------------------------------------
+
+/**
+ * 依恋类型中文名 + 两条轴
+ *
+ * ⚠ 结果页**必须把两条轴一起展示**：四种依恋类型是焦虑轴与回避轴**求交**得出的
+ * 象限结果，只给一个"焦虑型"无法回答"凭什么"、也看不出"离分界线多近"。
+ * 这正是用户说的「不要过于简陋」。
+ */
+const attachmentView = computed(() => {
+  const attachment = emotion.value?.result.attachment;
+  if (attachment === undefined) return null;
+
+  const label = ATTACHMENT_STYLE_LABELS[attachment.style] ?? attachment.style;
+
+  return {
+    label,
+    anxiety: Math.round(attachment.anxiety),
+    avoidance: Math.round(attachment.avoidance),
+    thresholds: attachment.thresholds,
+  };
+});
+
+/**
+ * 爱的语言五项，按**固定顺序**排列（不按分数排序）
+ *
+ * 固定顺序让同一份结果每次渲染的行序一致，用户来回切换页面不会看到顺序跳动；
+ * "哪一项主导"由 `isPrimary` 高亮体现，不靠位置。
+ */
+const loveLanguageRows = computed(() => {
+  const scores = emotion.value?.result.loveLanguage.scores;
+  if (scores === undefined) return [];
+
+  const primary = new Set(emotion.value?.result.loveLanguage.primary ?? []);
+
+  return LOVE_LANGUAGE_ORDER.map((code) => ({
+    code,
+    label: LOVE_LANGUAGE_LABELS[code] ?? code,
+    score: Math.round(scores[code] ?? 0),
+    isPrimary: primary.has(code),
+  }));
+});
+
+/** 冲突风格五种，主导项高亮 */
+const conflictRows = computed(() => {
+  const conflict = emotion.value?.result.conflict;
+  if (conflict === undefined) return [];
+
+  return CONFLICT_STYLE_ORDER.map((code) => ({
+    code,
+    label: CONFLICT_STYLE_LABELS[code] ?? code,
+    score: Math.round(conflict.scores[code] ?? 0),
+    isPrimary: conflict.style === code,
+  }));
+});
+
+const conflictStyleLabel = computed(() => {
+  const style = emotion.value?.result.conflict.style;
+  if (style === undefined) return null;
+
+  return CONFLICT_STYLE_LABELS[style] ?? style;
+});
+
 /**
  * 结果提示文案
  *
  * 优先使用服务端下发的 `quality.notice`（阈值由后端统一控制），
  * 避免前后端各写一套判断标准而出现文案矛盾。
  */
-const qualityNotice = computed(() => summary.value?.quality?.notice ?? null);
+const qualityNotice = computed(() => result.value?.result.quality.notice ?? null);
 
 onLoad(async (query) => {
   const id = query?.['sessionId'];
@@ -99,10 +195,16 @@ onLoad(async (query) => {
   }
 });
 
-onShareAppMessage(() => ({
-  title: mbtiType.value ? `我的人格类型是 ${mbtiType.value}，你也来测测看` : '做一个 5 分钟的人格测评，认识真实的自己',
-  path: '/pages/index/index',
-}));
+onShareAppMessage(() => {
+  const title =
+    result.value?.module === 'EMOTION' && attachmentView.value !== null
+      ? `${presentation.value.shareTitlePrefix}${attachmentView.value.label}，你也来测测看`
+      : mbtiType.value
+        ? `${presentation.value.shareTitlePrefix} ${mbtiType.value}，你也来测测看`
+        : '做一个 8 分钟的测评，认识真实的自己';
+
+  return { title, path: '/pages/index/index' };
+});
 
 // ============================================================================
 // 生成报告：真实链路（建任务 → 轮询进度 → 进入报告详情）
@@ -160,6 +262,10 @@ const waitForReport = async (id: string): Promise<boolean> => {
  * 注意**不传 `sessionId`**：后端 `CreateReportDto` 只接受 `type` / `relationshipId`，
  * 全局管道开着 `forbidNonWhitelisted`，多传一个字段会直接 `400/10001`。
  * 报告取的是**当前画像**（由最近一次已算分的测评产生），不需要会话 id。
+ *
+ * ⚠ 报告类型**按模块取**（`presentation.reportType`）：情感测评要 `EMOTION_REPORT`，
+ * 它读的是情感画像。写死 `MBTI_REPORT` 的话，做完情感测评点「生成报告」
+ * 会以 `40010 尚未生成人格画像` 收场 —— 一个与该模块毫不相关的错误。
  */
 const generateReport = async (): Promise<void> => {
   if (generating.value) return;
@@ -170,7 +276,7 @@ const generateReport = async (): Promise<void> => {
   generateError.value = null;
 
   try {
-    const created = await createReport({ type: 'MBTI_REPORT' });
+    const created = await createReport({ type: presentation.value.reportType });
     reportId.value = created.reportId;
 
     const finished = await waitForReport(created.reportId);
@@ -182,6 +288,8 @@ const generateReport = async (): Promise<void> => {
     // 成功与"超时但有报告 id"都进详情页：那里能看到实时状态与完整正文
     openReportDetail(created.reportId);
   } catch (error) {
+    // 没有对应模块的画像时后端会明确报错（人格 `40010` / 情感 `40014`），
+    // 直接把服务端文案给用户看 —— 它已经写清了"该先做什么"
     generateError.value = error instanceof ApiError ? error.message : '网络异常，请稍后重试';
   } finally {
     generating.value = false;
@@ -198,7 +306,13 @@ const onBack = (): void => goBack();
 const goReportList = (): void => goToPage('/pages/report/list');
 const goChat = (): void => goToPage('/pkgChat/pages/index');
 const goHome = (): void => goToPage('/pages/index/index');
-const goRetake = (): void => goToPage('/pages/test/intro');
+
+/** 重测**本模块**（人格结果回人格入口，情感结果回情感入口） */
+const goRetake = (): void => {
+  const url = result.value?.module === 'EMOTION' ? '/pages/test/intro?code=EMOTION_LITE' : '/pages/test/intro';
+
+  goToPage(url);
+};
 
 /** 已有报告时，「下一步」里把按钮换成"查看报告详情" */
 const goMyReportDetail = (): void => {
@@ -223,7 +337,7 @@ const goMyReportDetail = (): void => {
       <view class="result__navbar-back" @tap="onBack">
         <text class="result__navbar-back-icon">‹</text>
       </view>
-      <text class="result__navbar-title">测试结果</text>
+      <text class="result__navbar-title">{{ presentation.resultTitle }}</text>
       <view class="result__navbar-back result__navbar-back--placeholder" />
     </view>
 
@@ -241,56 +355,140 @@ const goMyReportDetail = (): void => {
     </view>
 
     <template v-else>
-      <!-- MBTI 四字母 -->
-      <view class="result__hero">
-        <text class="result__label">你的人格类型</text>
-        <view class="result__letters">
-          <text v-for="(letter, index) in mbtiLetters" :key="index" class="result__letter">{{ letter }}</text>
+      <!--
+        主体分两条支路（ADR-038）：人格结果渲染四维 + 大五，
+        情感结果渲染依恋双轴 + 爱的语言 + 冲突风格。两者**不共用任何展示组件** ——
+        它们描述的本来就不是一回事，混排会让用户以为情感测评也测了性格。
+      -->
+      <template v-if="isEmotion">
+        <!-- 依恋：类型 + 两条轴 -->
+        <view class="result__hero">
+          <text class="result__label">你在亲密关系里的依恋风格</text>
+          <text class="result__emotion-style">{{ attachmentView?.label ?? '待生成' }}</text>
+          <text class="result__summary">依恋类型由两条倾向求交得出，会随情境与对象变化 · 仅供自我探索参考</text>
         </view>
-        <text class="result__summary">
-          {{ mbtiType ?? '待生成' }} · 结果置信度 {{ (summary?.confidence ?? 0).toFixed(0) }}% · 仅供自我探索参考
-        </text>
-      </view>
 
-      <!-- 结果提示（阈值由服务端统一控制） -->
-      <view v-if="qualityNotice" class="result__notice card">
-        <text class="result__notice-text">{{ qualityNotice }}</text>
-      </view>
+        <view v-if="qualityNotice" class="result__notice card">
+          <text class="result__notice-text">{{ qualityNotice }}</text>
+        </view>
 
-      <!-- 四维倾向 -->
-      <view class="card result__section">
-        <text class="result__section-title">四个维度的倾向</text>
-        <view v-for="bar in dimensionBars" :key="bar.key" class="result__dimension">
-          <view class="result__dimension-head">
-            <text class="result__dimension-label">{{ bar.label }}</text>
-            <text class="result__dimension-value">{{ bar.percent.toFixed(0) }}%</text>
-          </view>
-          <view class="result__dimension-bar">
-            <view class="result__dimension-left" :style="{ width: `${bar.negativeWidth}%` }">
-              <text class="result__dimension-side">{{ bar.negative }}</text>
+        <!-- 两条轴：只给类型标签无法解释"为什么是焦虑型" -->
+        <view v-if="attachmentView" class="card result__section">
+          <text class="result__section-title">两条依恋倾向</text>
+          <view class="result__axis">
+            <view class="result__axis-head">
+              <text class="result__axis-label">焦虑倾向</text>
+              <text class="result__axis-value">{{ attachmentView.anxiety }}</text>
             </view>
-            <view class="result__dimension-right" :style="{ width: `${bar.positiveWidth}%` }">
-              <text class="result__dimension-side">{{ bar.positive }}</text>
+            <view class="result__axis-track">
+              <view class="result__axis-fill" :style="{ width: `${attachmentView.anxiety}%` }" />
+            </view>
+            <text class="result__axis-hint">越高表示越容易担心对方是不是同样在意自己</text>
+          </view>
+          <view class="result__axis">
+            <view class="result__axis-head">
+              <text class="result__axis-label">回避倾向</text>
+              <text class="result__axis-value">{{ attachmentView.avoidance }}</text>
+            </view>
+            <view class="result__axis-track">
+              <view class="result__axis-fill" :style="{ width: `${attachmentView.avoidance}%` }" />
+            </view>
+            <text class="result__axis-hint">越高表示越习惯自己扛、不太愿意把脆弱说出口</text>
+          </view>
+        </view>
+
+        <!-- 爱的语言：完整五项，主导项高亮 -->
+        <view class="card result__section">
+          <text class="result__section-title">你最在意的被爱方式</text>
+          <view v-for="row in loveLanguageRows" :key="row.code" class="result__score-row">
+            <text class="result__score-label" :class="{ 'is-primary': row.isPrimary }">
+              {{ row.label }}{{ row.isPrimary ? ' · 主导' : '' }}
+            </text>
+            <view class="result__score-track">
+              <view
+                class="result__score-fill"
+                :class="{ 'is-primary': row.isPrimary }"
+                :style="{ width: `${row.score}%` }"
+              />
+            </view>
+            <text class="result__score-value">{{ row.score }}</text>
+          </view>
+          <text class="result__section-hint">
+            分数接近的几项同样重要；最靠后的那项不是"不在乎"，而是不如前几项能让你确定被爱。
+          </text>
+        </view>
+
+        <!-- 冲突风格：完整五种，主导项高亮 -->
+        <view class="card result__section">
+          <text class="result__section-title"> 有分歧时，你偏向「{{ conflictStyleLabel ?? '待生成' }}」 </text>
+          <view v-for="row in conflictRows" :key="row.code" class="result__score-row">
+            <text class="result__score-label" :class="{ 'is-primary': row.isPrimary }">
+              {{ row.label }}{{ row.isPrimary ? ' · 主导' : '' }}
+            </text>
+            <view class="result__score-track">
+              <view
+                class="result__score-fill"
+                :class="{ 'is-primary': row.isPrimary }"
+                :style="{ width: `${row.score}%` }"
+              />
+            </view>
+            <text class="result__score-value">{{ row.score }}</text>
+          </view>
+        </view>
+      </template>
+
+      <template v-else>
+        <!-- MBTI 四字母 -->
+        <view class="result__hero">
+          <text class="result__label">你的人格类型</text>
+          <view class="result__letters">
+            <text v-for="(letter, index) in mbtiLetters" :key="index" class="result__letter">{{ letter }}</text>
+          </view>
+          <text class="result__summary">
+            {{ mbtiType ?? '待生成' }} · 结果置信度 {{ (summary?.confidence ?? 0).toFixed(0) }}% · 仅供自我探索参考
+          </text>
+        </view>
+
+        <!-- 结果提示（阈值由服务端统一控制） -->
+        <view v-if="qualityNotice" class="result__notice card">
+          <text class="result__notice-text">{{ qualityNotice }}</text>
+        </view>
+
+        <!-- 四维倾向 -->
+        <view class="card result__section">
+          <text class="result__section-title">四个维度的倾向</text>
+          <view v-for="bar in dimensionBars" :key="bar.key" class="result__dimension">
+            <view class="result__dimension-head">
+              <text class="result__dimension-label">{{ bar.label }}</text>
+              <text class="result__dimension-value">{{ bar.percent.toFixed(0) }}%</text>
+            </view>
+            <view class="result__dimension-bar">
+              <view class="result__dimension-left" :style="{ width: `${bar.negativeWidth}%` }">
+                <text class="result__dimension-side">{{ bar.negative }}</text>
+              </view>
+              <view class="result__dimension-right" :style="{ width: `${bar.positiveWidth}%` }">
+                <text class="result__dimension-side">{{ bar.positive }}</text>
+              </view>
+            </view>
+            <view class="result__dimension-legend">
+              <text>{{ bar.negativeLabel }}</text>
+              <text>{{ bar.positiveLabel }}</text>
             </view>
           </view>
-          <view class="result__dimension-legend">
-            <text>{{ bar.negativeLabel }}</text>
-            <text>{{ bar.positiveLabel }}</text>
-          </view>
         </view>
-      </view>
 
-      <!-- Big Five 雷达图 -->
-      <view class="card result__section">
-        <text class="result__section-title">大五人格特质</text>
-        <RadarChart :dimensions="radarDimensions" :size="560" />
-        <view class="result__bigfive-list">
-          <view v-for="item in radarDimensions" :key="item.key" class="result__bigfive-item">
-            <text class="result__bigfive-label">{{ item.label }}</text>
-            <text class="result__bigfive-value">{{ item.value.toFixed(0) }}</text>
+        <!-- Big Five 雷达图 -->
+        <view class="card result__section">
+          <text class="result__section-title">大五人格特质</text>
+          <RadarChart :dimensions="radarDimensions" :size="560" />
+          <view class="result__bigfive-list">
+            <view v-for="item in radarDimensions" :key="item.key" class="result__bigfive-item">
+              <text class="result__bigfive-label">{{ item.label }}</text>
+              <text class="result__bigfive-value">{{ item.value.toFixed(0) }}</text>
+            </view>
           </view>
         </view>
-      </view>
+      </template>
 
       <SafetyDisclaimer variant="reportFooter" display="block" />
 

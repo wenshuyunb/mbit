@@ -46,6 +46,18 @@ export interface TestDefinitionView {
   code: string;
   name: string;
   category: string;
+  /**
+   * 所属模块（ADR-038）
+   *
+   * 前端**必须**靠它决定三件事，因此不能省：
+   *   ① 介绍页的文案（人格测评与情感测评讲的完全不是一回事）；
+   *   ② 做完之后跳哪个结果页（人格结果是四维 + 大五，情感结果是依恋 + 爱的语言）；
+   *   ③ 生成哪种报告（`MBTI_REPORT` vs `EMOTION_REPORT`）。
+   *
+   * 只给 `category` 是不够的：`category` 是模块内的算分口径细分
+   * （如 `RELATIONSHIP_STYLE`），而"这是哪个模块"是更高一层的概念。
+   */
+  module: string;
   description: string | null;
   version: string;
   questionCount: number;
@@ -265,6 +277,7 @@ export class TestService {
         code: true,
         name: true,
         category: true,
+        module: true,
         description: true,
         version: true,
         questionCount: true,
@@ -297,6 +310,7 @@ export class TestService {
       code: definition.code,
       name: definition.name,
       category: definition.category,
+      module: definition.module,
       description: definition.description,
       version: definition.version,
       questionCount: definition.questionCount,
@@ -315,6 +329,7 @@ export class TestService {
         code: true,
         name: true,
         category: true,
+        module: true,
         description: true,
         version: true,
         questionCount: true,
@@ -348,6 +363,7 @@ export class TestService {
       code: definition.code,
       name: definition.name,
       category: definition.category,
+      module: definition.module,
       description: definition.description,
       version: definition.version,
       questionCount: definition.questionCount,

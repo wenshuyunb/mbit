@@ -24,6 +24,14 @@ export interface TestDefinition {
   code: string;
   name: string;
   category: string;
+  /**
+   * 所属模块（ADR-038）：`PERSONALITY` / `EMOTION` / `MENTAL_HEALTH`
+   *
+   * 前端靠它决定介绍页文案、结果页形态与报告类型。
+   * 用 `string` 而不是联合类型：后端将来加模块时，前端应当**优雅降级**
+   * （按人格模板渲染 + 一个中性标题），而不是编译失败导致整个 H5 构建挂掉。
+   */
+  module: string;
   description: string | null;
   version: string;
   questionCount: number;
@@ -113,8 +121,18 @@ export interface MbtiDimensionResult {
   rightLabel: string;
 }
 
-/** 算分结果（与后端 `SubmitResultView` 严格对齐） */
-export interface TestSessionResult {
+/**
+ * 算分结果（与后端 `SubmitResultView` 严格对齐）
+ *
+ * ⚠ **按 `module` 判别的联合类型**（ADR-038 阶段 3）。不是"一个包含全部可选字段的
+ * 大对象"：那样人格结果页会莫名其妙地暴露情感字段，而情感结果页也会看到
+ * `mbtiType: null` —— 前端只能靠"字段在不在"去猜自己在渲染哪个模块，
+ * 猜错的表现是页面出现一堆 `undefined`，而不是一个明确的类型错误。
+ */
+export type TestSessionResult = PersonalitySessionResult | EmotionSessionResult;
+
+/** 提交结果的外壳（两个模块共用） */
+interface SessionResultEnvelope {
   sessionId: string;
   status: string;
   submittedAt: string;
@@ -126,6 +144,21 @@ export interface TestSessionResult {
   engineVersion: string;
   /** true 表示本次是重复提交，返回的是既有结果（未重新算分） */
   isDuplicate: boolean;
+}
+
+/** 两个模块共用的质量块 */
+export interface SessionQuality {
+  consistencyScore: number;
+  completionRate: number;
+  avgResponseMs: number | null;
+  rushRate: number;
+  /** 置信度偏低时的提示文案；达标时为 null */
+  notice: string | null;
+}
+
+/** 人格测评的算分结果 */
+export interface PersonalitySessionResult extends SessionResultEnvelope {
+  module: 'PERSONALITY';
   result: {
     /** 题量不足等异常情况下可能为 null（正常流程不会出现） */
     mbtiType: string | null;
@@ -133,14 +166,33 @@ export interface TestSessionResult {
     /** 结果置信度 0–100（各维度偏离中位的程度） */
     confidence: number;
     bigFive: Record<string, number>;
-    quality: {
-      consistencyScore: number;
-      completionRate: number;
-      avgResponseMs: number | null;
-      rushRate: number;
-      /** 置信度偏低时的提示文案；达标时为 null */
-      notice: string | null;
+    quality: SessionQuality;
+  };
+}
+
+/** 情感测评的算分结果（依恋双轴 + 爱的语言 + 冲突风格） */
+export interface EmotionSessionResult extends SessionResultEnvelope {
+  module: 'EMOTION';
+  result: {
+    attachment: {
+      style: string;
+      /** 依恋焦虑轴 0–100 */
+      anxiety: number;
+      /** 依恋回避轴 0–100 */
+      avoidance: number;
+      thresholds: { anxiety: number; avoidance: number };
     };
+    loveLanguage: {
+      /** 五项得分（键为 `LOVE_*`） */
+      scores: Record<string, number>;
+      /** 主导项（按分数降序，最多两项） */
+      primary: string[];
+    };
+    conflict: {
+      scores: Record<string, number>;
+      style: string;
+    };
+    quality: SessionQuality;
   };
 }
 
