@@ -129,7 +129,44 @@ export interface MbtiDimensionResult {
  * `mbtiType: null` —— 前端只能靠"字段在不在"去猜自己在渲染哪个模块，
  * 猜错的表现是页面出现一堆 `undefined`，而不是一个明确的类型错误。
  */
-export type TestSessionResult = PersonalitySessionResult | EmotionSessionResult;
+export type TestSessionResult = PersonalitySessionResult | EmotionSessionResult | MentalHealthSessionResult;
+
+/**
+ * 心理健康测评的算分结果（ADR-038 阶段 4）
+ *
+ * ⚠ 这个结果里有**两样别处没有的东西**，都是产品要求：
+ *   · `conclusion` —— 文字结论，服务端用**确定性规则**生成（不是 AI 现编的），
+ *     且**只描述、不建议**；
+ *   · `disclaimer` —— 合规声明（含「本结果仅供参考」），由服务端下发，
+ *     前端**不得**硬编码。
+ *
+ * 本模块**没有**任何报告字段：它不提供 AI 报告
+ * （见 `config/modules.ts` 里 `reportType: null` 的说明）。
+ */
+export interface MentalHealthSessionResult extends SessionResultEnvelope {
+  module: 'MENTAL_HEALTH';
+  result: {
+    /** 六维（按固定顺序，服务端已排好） */
+    dimensions: Array<{
+      key: string;
+      label: string;
+      /** 0–100，越高越值得留意 */
+      score: number;
+      band: string;
+      bandLabel: string;
+      /** 是否为"最值得留意"的项 */
+      isHighlighted: boolean;
+    }>;
+    overallScore: number;
+    overallLevel: string;
+    overallLabel: string;
+    /** 文字结论（只描述、不建议） */
+    conclusion: string;
+    quality: SessionQuality;
+    /** 合规声明（含「本结果仅供参考」） */
+    disclaimer: string;
+  };
+}
 
 /** 提交结果的外壳（两个模块共用） */
 interface SessionResultEnvelope {

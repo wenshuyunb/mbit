@@ -27,17 +27,34 @@ describe('modulePresentation', () => {
   });
 
   it('【关键】未知模块降级为中性配置，而不是抛错', () => {
-    // 后端将来加模块（阶段 4 的心理健康）时，前端应优雅降级
+    // 后端将来加模块时，前端应优雅降级
     const fallback = modulePresentation('SOMETHING_NEW');
 
     expect(fallback.entranceTitle).toBe('测评');
-    expect(fallback.reportType).toBe('MBTI_REPORT');
     expect(fallback.available).toBe(true);
+    // 降级配置**不给报告入口**：未知模块不确定有没有 AI 报告，
+    // 给一个点了会报"尚未生成人格画像"的按钮比不给更糟
+    expect(fallback.reportType).toBeNull();
+    expect(fallback.testCode).toBe('');
   });
 
   it('null / undefined 同样走降级（后端漏下发 module 时不该崩）', () => {
     expect(modulePresentation(null).introTitle).toBe('测评');
     expect(modulePresentation(undefined).introTitle).toBe('测评');
+  });
+
+  it('【关键】人格、情感、心理三个模块的文案两两不同（用户要能分辨）', () => {
+    const titles = (['PERSONALITY', 'EMOTION', 'MENTAL_HEALTH'] as const).map(
+      (module) => modulePresentation(module).introTitle,
+    );
+
+    expect(new Set(titles).size).toBe(3);
+
+    const resultTitles = (['PERSONALITY', 'EMOTION', 'MENTAL_HEALTH'] as const).map(
+      (module) => modulePresentation(module).resultTitle,
+    );
+
+    expect(new Set(resultTitles).size).toBe(3);
   });
 
   it('【关键】人格与情感的文案必须不同（否则用户分不清自己在做哪个模块）', () => {
@@ -60,12 +77,28 @@ describe('modulePresentation', () => {
     ];
 
     for (const module of ['PERSONALITY', 'EMOTION', 'MENTAL_HEALTH'] as const) {
-      expect(backendReportTypes).toContain(modulePresentation(module).reportType);
+      const reportType = modulePresentation(module).reportType;
+
+      // `null` 表示本模块**没有** AI 报告 —— 那不是"漏配"，因此不算错误
+      if (reportType !== null) {
+        expect(backendReportTypes).toContain(reportType);
+      }
     }
 
     // 情感模块**必须**用 EMOTION_REPORT：写死 MBTI_REPORT 会让做完情感测评的用户
     // 点「生成报告」时收到「尚未生成人格画像」—— 一个与该模块毫不相关的错误
     expect(modulePresentation('EMOTION').reportType).toBe('EMOTION_REPORT');
+  });
+
+  it('【关键】心理健康模块没有 AI 报告（这是产品决策，不是漏配）', () => {
+    /**
+     * 该模块的红线是「不给建议、不做干预」，而一份"AI 深度解读"几乎不可能
+     * 只陈述结论而不给建议。它的交付物是**服务端下发的确定性结论文本**。
+     *
+     * 这条断言的价值：将来有人"顺手"给它配一个报告类型时，
+     * 会先在这里被拦住并读到上面这段理由。
+     */
+    expect(modulePresentation('MENTAL_HEALTH').reportType).toBeNull();
   });
 
   it('情感模块的介绍文案不写"心理"与"诊断"（定位是亲密关系，不是临床）', () => {
@@ -75,19 +108,52 @@ describe('modulePresentation', () => {
     expect(emotion.introDesc).not.toContain('诊断');
     expect(emotion.introDesc).not.toContain('心理疾病');
   });
+
+  it('【关键】心理健康模块的文案不做诊断暗示，且明写"仅供参考"与"不给建议"', () => {
+    const mentalHealth = modulePresentation('MENTAL_HEALTH');
+
+    // 不叫"心理健康测评"：那听起来像筛查，而本模块只描述近两周的状态
+    expect(mentalHealth.entranceTitle).toBe('心理状态自评');
+    expect(mentalHealth.introTitle).not.toContain('诊断');
+    expect(mentalHealth.introDesc).not.toContain('诊断');
+
+    // 三条边界都要在文案里说清楚，而不是等用户读完才发现
+    expect(mentalHealth.introDesc).toContain('不给建议');
+    expect(mentalHealth.introDesc).toContain('仅供参考');
+  });
+});
+
+describe('每个模块的入口编码', () => {
+  it('【关键】可展示的模块都配了 testCode（否则入口点进去是另一个测评）', () => {
+    for (const item of availableModules()) {
+      expect(item.testCode.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('三个模块的编码互不相同', () => {
+    const codes = availableModules().map((item) => item.testCode);
+
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  it('编码与后端的 test_definitions.code 一致（写错会在入口处 404）', () => {
+    expect(modulePresentation('PERSONALITY').testCode).toBe('MBTI_LITE');
+    expect(modulePresentation('EMOTION').testCode).toBe('EMOTION_LITE');
+    expect(modulePresentation('MENTAL_HEALTH').testCode).toBe('MENTAL_HEALTH_LITE');
+  });
 });
 
 describe('availableModules', () => {
-  it('已上线的模块都在（人格 + 情感）', () => {
+  it('三个模块都上线了（人格 + 情感 + 心理状态自评）', () => {
     const keys = availableModules().map((item) => item.key);
 
     expect(keys).toContain('PERSONALITY');
     expect(keys).toContain('EMOTION');
+    expect(keys).toContain('MENTAL_HEALTH');
   });
 
-  it('【关键】未上线的模块不出现在入口列表里', () => {
-    // 心理健康模块阶段 4 才落地，现在渲染一个点进去报错的入口是更糟的选择
-    expect(availableModules().map((item) => item.key)).not.toContain('MENTAL_HEALTH');
+  it('入口顺序稳定：人格 → 情感 → 心理状态自评（按"想了解什么"排列）', () => {
+    expect(availableModules().map((item) => item.key)).toEqual(['PERSONALITY', 'EMOTION', 'MENTAL_HEALTH']);
   });
 
   it('每个可展示的模块都有完整的入口文案与图标', () => {

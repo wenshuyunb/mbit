@@ -20,7 +20,7 @@ import { onPullDownRefresh, onShow, onShareAppMessage, onShareTimeline } from '@
 
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
 import { useHome } from '@/composables/use-home';
-import { modulePresentation } from '@/config/modules';
+import { modulePresentation, type ModulePresentation } from '@/config/modules';
 import { useAppStore } from '@/store/app';
 import { useAuthStore } from '@/store/auth';
 
@@ -28,16 +28,17 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 
 /**
- * 情感测评的定义编码
- *
- * 与后端 `test_definitions.code` 对应。放在这里而不是写进 URL 字符串里散落各处：
- * 后端改编码时只需改这一处，且改错了会影响所有引用点（而不是某一条入口静默 404）。
+ * 三个模块的展示文案与题库编码都来自**同一份配置**（`config/modules.ts`），
+ * 不在页面里写死 —— 后端改编码或改文案时只需改那一处，且改错了会影响所有引用点
+ * （而不是某一条入口静默 404）。
  */
-const EMOTION_TEST_CODE = 'EMOTION_LITE';
-
-/** 两个模块的展示文案来自**同一份配置**（`config/modules.ts`），不在页面里写死 */
 const personalityEntry = modulePresentation('PERSONALITY');
 const emotionEntry = modulePresentation('EMOTION');
+const mentalHealthEntry = modulePresentation('MENTAL_HEALTH');
+
+/** 拼出某个模块的介绍页地址（编码为空时退回默认人格入口） */
+const introUrlOf = (entry: ModulePresentation): string =>
+  entry.testCode.length > 0 ? `/pages/test/intro?code=${entry.testCode}` : '/pages/test/intro';
 
 const { hasProfile, profileError, profileBadge, primaryTitle, primaryDesc, reportDesc, loadHomeData } = useHome();
 
@@ -78,8 +79,23 @@ const entrances = computed(() =>
       title: emotionEntry.entranceTitle,
       desc: emotionEntry.entranceDesc,
       icon: emotionEntry.icon,
-      url: `/pages/test/intro?code=${EMOTION_TEST_CODE}`,
+      url: introUrlOf(emotionEntry),
       enabled: emotionEntry.available,
+    },
+    {
+      /**
+       * 心理状态自评入口（ADR-038 阶段 4）
+       *
+       * 与另两个模块同样是**独立入口**。它排在人格局与情感测评之后、报告之前：
+       * 前两者是"了解自己是什么样"，这一项是"看看最近怎么样"，
+       * 放在一起便于用户按"想了解什么"来选。
+       */
+      key: 'mentalHealth',
+      title: mentalHealthEntry.entranceTitle,
+      desc: mentalHealthEntry.entranceDesc,
+      icon: mentalHealthEntry.icon,
+      url: introUrlOf(mentalHealthEntry),
+      enabled: mentalHealthEntry.available,
     },
     {
       key: 'report',

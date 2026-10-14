@@ -17,6 +17,7 @@ import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
 import {
   getSessionResult,
   type EmotionSessionResult,
+  type MentalHealthSessionResult,
   type PersonalitySessionResult,
   type TestSessionResult,
 } from '@/api/test';
@@ -52,12 +53,24 @@ const generateError = ref<string | null>(null);
 /**
  * 当前结果的模块（ADR-038）
  *
- * 页面是**两个模块共用**的：人格结果渲染四维 + 大五，情感结果渲染依恋 + 爱的语言 + 冲突。
+ * 页面是**三个模块共用**的：人格渲染四维 + 大五，情感渲染依恋 + 爱的语言 + 冲突，
+ * 心理健康渲染六维 + 文字结论。
  * 靠 `module` 判别而不是靠"字段在不在"猜 —— 猜错的表现是页面出现一堆 `undefined`。
  */
 const moduleKey = computed(() => result.value?.module ?? 'PERSONALITY');
 const presentation = computed(() => modulePresentation(moduleKey.value));
 const isEmotion = computed(() => result.value?.module === 'EMOTION');
+const isMentalHealth = computed(() => result.value?.module === 'MENTAL_HEALTH');
+
+/**
+ * 本模块是否有 AI 报告
+ *
+ * 心理健康模块**没有**（产品决策：它的红线是不给建议，而 AI 解读几乎必然滑向建议；
+ * 见 `config/modules.ts` 里 `reportType: null` 的说明）。
+ * 因此"生成深度报告"这条动线在这个模块里**整条不渲染** ——
+ * 而不是渲染出来再报错。
+ */
+const hasReport = computed(() => presentation.value.reportType !== null);
 
 /** 人格结果（收窄后的便捷访问；非人格结果时为 null） */
 const personality = computed<PersonalitySessionResult | null>(() =>
@@ -66,6 +79,14 @@ const personality = computed<PersonalitySessionResult | null>(() =>
 
 /** 情感结果（收窄后的便捷访问；非情感结果时为 null） */
 const emotion = computed<EmotionSessionResult | null>(() => (result.value?.module === 'EMOTION' ? result.value : null));
+
+/** 心理健康结果（收窄后的便捷访问；非本模块时为 null） */
+const mentalHealth = computed<MentalHealthSessionResult | null>(() =>
+  result.value?.module === 'MENTAL_HEALTH' ? result.value : null,
+);
+
+/** 心理健康六维（按服务端给的固定顺序；不再前端排序） */
+const mentalHealthDimensions = computed(() => mentalHealth.value?.result.dimensions ?? []);
 
 const summary = computed(() => personality.value?.result ?? null);
 const mbtiType = computed(() => summary.value?.mbtiType ?? null);
@@ -270,13 +291,28 @@ const waitForReport = async (id: string): Promise<boolean> => {
 const generateReport = async (): Promise<void> => {
   if (generating.value) return;
 
+  /**
+   * 本模块没有 AI 报告 → 直接返回
+   *
+   * 这条守卫是**防御性**的（按钮在模板里已经不会渲染），但值得留着：
+   * 一旦将来有人在别的入口调到这里（比如从报告列表页统一给一个"生成报告"按钮），
+   * 没有这道判断就会拿 `null` 去请求，得到一个与用户处境毫不相关的错误。
+   */
+  const reportType = presentation.value.reportType;
+
+  if (reportType === null) {
+    uni.showToast({ title: '本次测评直接给出结论，无需生成报告', icon: 'none' });
+
+    return;
+  }
+
   generating.value = true;
   reportProgress.value = 0;
   reportStatus.value = 'QUEUED';
   generateError.value = null;
 
   try {
-    const created = await createReport({ type: presentation.value.reportType });
+    const created = await createReport({ type: reportType });
     reportId.value = created.reportId;
 
     const finished = await waitForReport(created.reportId);
@@ -307,9 +343,15 @@ const goReportList = (): void => goToPage('/pages/report/list');
 const goChat = (): void => goToPage('/pkgChat/pages/index');
 const goHome = (): void => goToPage('/pages/index/index');
 
-/** 重测**本模块**（人格结果回人格入口，情感结果回情感入口） */
+/**
+ * 重测**本模块**（回该模块自己的介绍页）
+ *
+ * 编码从 `presentation.testCode` 取而不是写死：三个模块各有自己的题库编码，
+ * 写死的话新增模块时这里会静默把人带回人格测评。
+ */
 const goRetake = (): void => {
-  const url = result.value?.module === 'EMOTION' ? '/pages/test/intro?code=EMOTION_LITE' : '/pages/test/intro';
+  const entry = presentation.value;
+  const url = entry.testCode.length > 0 ? `/pages/test/intro?code=${entry.testCode}` : '/pages/test/intro';
 
   goToPage(url);
 };
@@ -437,8 +479,54 @@ const goMyReportDetail = (): void => {
         </view>
       </template>
 
+      <!--
+        心理健康支路（ADR-038 阶段 4）
+        它的交付物是**一段文字结论**，因此版式与另两条支路不同：
+        结论排在六维之前 —— 用户最先要读到的是"这段话"，分数是它的依据。
+      -->
+      <template v-else-if="isMentalHealth">
+        <view class="result__hero">
+          <text class="result__label">你近期的状态</text>
+          <text class="result__emotion-style">{{ mentalHealth?.result.overallLabel ?? '待生成' }}</text>
+          <text class="result__summary">基于你本次的自我报告 · 仅供参考，不构成心理诊断</text>
+        </view>
+
+        <view v-if="qualityNotice" class="result__notice card">
+          <text class="result__notice-text">{{ qualityNotice }}</text>
+        </view>
+
+        <!-- 文字结论：本模块的核心交付物，由**服务端**生成 -->
+        <view v-if="mentalHealth?.result.conclusion" class="card result__section">
+          <text class="result__section-title">给你的结论</text>
+          <text class="result__conclusion">{{ mentalHealth.result.conclusion }}</text>
+        </view>
+
+        <!-- 六个维度：结论的依据 -->
+        <view class="card result__section">
+          <text class="result__section-title">六个维度的得分</text>
+          <view v-for="item in mentalHealthDimensions" :key="item.key" class="result__score-row">
+            <text class="result__score-label" :class="{ 'is-primary': item.isHighlighted }">
+              {{ item.label }}{{ item.isHighlighted ? ' · 值得留意' : '' }}
+            </text>
+            <view class="result__score-track">
+              <view
+                class="result__score-fill"
+                :class="{ 'is-primary': item.isHighlighted }"
+                :style="{ width: `${item.score}%` }"
+              />
+            </view>
+            <text class="result__score-value">{{ item.score }}</text>
+          </view>
+          <text class="result__section-hint"> 分数越高表示这一项越值得留意。六项一起看，比单看某一项更有意义。 </text>
+        </view>
+
+        <!-- 免责声明：由服务端下发，前端只负责展示 -->
+        <view v-if="mentalHealth?.result.disclaimer" class="card result__section result__disclaimer">
+          <text class="result__disclaimer-text">{{ mentalHealth.result.disclaimer }}</text>
+        </view>
+      </template>
+
       <template v-else>
-        <!-- MBTI 四字母 -->
         <view class="result__hero">
           <text class="result__label">你的人格类型</text>
           <view class="result__letters">
@@ -506,7 +594,12 @@ const goMyReportDetail = (): void => {
       <view class="card result__section">
         <text class="result__section-title">接下来可以做什么</text>
 
-        <view class="result__next-item" @tap="generateReport">
+        <!--
+          「生成深度报告」只在**有 AI 报告**的模块里出现（`hasReport`）。
+          心理健康模块整条不渲染：它的交付物就是上面那段服务端下发的结论，
+          再让模型解读一遍必然滑向建议 —— 而那正是该模块的红线。
+        -->
+        <view v-if="hasReport" class="result__next-item" @tap="generateReport">
           <text class="result__next-icon">📄</text>
           <view class="result__next-body">
             <text class="result__next-title">生成深度报告</text>
@@ -546,9 +639,14 @@ const goMyReportDetail = (): void => {
       <!-- 底部行动（固定） -->
       <view class="result__footer">
         <button class="result__button-ghost" @tap="goReportList">我的报告</button>
-        <button class="result__button" :disabled="generating" @tap="generateReport">
+        <!--
+          有报告的模块给「生成深度报告」，没有的（心理健康）给「再测一次」——
+          底部按钮的位置不能空着，但也不能放一个点了报错的按钮
+        -->
+        <button v-if="hasReport" class="result__button" :disabled="generating" @tap="generateReport">
           {{ generating ? generatingText : '生成深度报告' }}
         </button>
+        <button v-else class="result__button" @tap="goRetake">过段时间再测一次</button>
       </view>
     </template>
   </view>
@@ -563,6 +661,37 @@ const goMyReportDetail = (): void => {
   &__hero {
     padding: $space-xl 0;
     text-align: center;
+  }
+
+  /** 情感与心理健康两条支路的"大字结论"共用一种排版（都是"一句话结论"型结果） */
+  &__emotion-style {
+    display: block;
+    margin-top: $space-md;
+    font-size: $font-size-xxl;
+    font-weight: $font-weight-bold;
+    color: $color-primary;
+  }
+
+  /** 心理健康的文字结论（服务端下发，整段展示） */
+  &__conclusion {
+    display: block;
+    margin-top: $space-sm;
+    font-size: $font-size-base;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+  }
+
+  /** 免责声明：弱化但不隐藏（合规文案必须可读） */
+  &__disclaimer {
+    background-color: transparent;
+    border: 2rpx solid $color-border;
+  }
+
+  &__disclaimer-text {
+    display: block;
+    font-size: $font-size-xs;
+    line-height: $line-height-loose;
+    color: $color-text-secondary;
   }
 
   &__label {
