@@ -24,11 +24,8 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
 import { ModuleScoringService } from '../personality/engine/module-scoring.service';
-import type {
-  EngineAnswer,
-  EngineQuestion,
-  RelationshipStyleRule,
-} from '../personality/engine/personality-engine.types';
+import type { EngineAnswer, EngineQuestion } from '../personality/engine/personality-engine.types';
+import { loadRelationshipStyleRules } from '../personality/relationship-style-rules.loader';
 import { buildPaperSnapshot } from './paper-snapshot.builder';
 import type {
   GetSessionQueryDto,
@@ -671,19 +668,9 @@ export class TestService {
     }
 
     // --------------------------------------------------------------- 组装引擎输入
-    const ruleRows = await this.prisma.relationshipStyleRule.findMany({
-      where: { isActive: true, deletedAt: null },
-      orderBy: { priority: 'asc' },
-      select: {
-        code: true,
-        name: true,
-        priority: true,
-        conditions: true,
-        resultAttachment: true,
-        resultLoveLanguages: true,
-        resultConflictStyle: true,
-      },
-    });
+    // 规则读取走共用 loader（ADR-038）：匹配、关系报告、AI 人设都在读同一张表，
+    // 各写一份 `findMany` 会让筛选条件悄悄漂移，导致"同一份数据不同页面结论不同"
+    const relationshipRules = await loadRelationshipStyleRules(this.prisma);
 
     const engineQuestions: EngineQuestion[] = snapshot.questions.map((question) => ({
       id: question.questionId,
@@ -698,16 +685,6 @@ export class TestService {
       questionId: answer.questionId,
       value: this.toEngineValue(answer.rawValue),
       responseMs: answer.responseMs,
-    }));
-
-    const relationshipRules: RelationshipStyleRule[] = ruleRows.map((rule) => ({
-      code: rule.code,
-      name: rule.name,
-      priority: rule.priority,
-      conditions: rule.conditions as unknown as RelationshipStyleRule['conditions'],
-      resultAttachment: rule.resultAttachment,
-      resultLoveLanguages: rule.resultLoveLanguages,
-      resultConflictStyle: rule.resultConflictStyle,
     }));
 
     // ----------------------------------------------------------- 算分（纯函数，<10ms）

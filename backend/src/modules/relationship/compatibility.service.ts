@@ -38,6 +38,12 @@ import {
   type CompatibilityWeights,
 } from '../personality/engine/compatibility-engine.service';
 import {
+  deriveRelationshipStyleFromBigFive,
+  type BigFiveSource,
+} from '../personality/engine/relationship-style.evaluator';
+import type { RelationshipStyleRule } from '../personality/engine/personality-engine.types';
+import { loadRelationshipStyleRules } from '../personality/relationship-style-rules.loader';
+import {
   ACTIVE_COMPATIBILITY_STATUSES,
   buildCompatibilityCacheKey,
   resolveCompatibilityBlocker,
@@ -112,6 +118,42 @@ const ESTIMATED_SECONDS = 5;
 
 /** 无可用权重矩阵时的错误码（属配置事故，不是用户问题） */
 const MISSING_WEIGHTS_MESSAGE = '匹配权重矩阵未配置，请稍后重试';
+
+/**
+ * 画像行 → 匹配引擎要的画像（补上**按需推导**出来的关系风格，ADR-038）
+ *
+ * ## 为什么是"推导"而不是"读列"
+ *
+ * 依恋 / 爱的语言 / 冲突处理原先落库在 `personality_profiles` 的四列上。ADR-038 判定
+ * 情感结论不该存在人格画像里，四列已删。匹配是**付费产品**（`REPORT_COMPATIBILITY_DEEP`），
+ * 不能因为拆模块就停摆，因此改为**在读取时用同一份大五数据现算**：
+ * 同一个 `resolveRelationshipStyle`、同一份规则表、同一个输入 ⇒ **分数完全不变**，
+ * 变的只是"值放在哪"（存储 → 计算）。
+ *
+ * ## 语义变化（已在 `CONTRACT_DRIFT_AUDIT.md` 记录）
+ *
+ * 关系风格从"提交时冻结"变成"读取时计算"：以后改 `relationship_style_rules` 会
+ * 同时改变历史用户的推导值。这是有意接受的代价 —— 规则表是产品配置而非用户数据，
+ * 而"配置改了却对老用户永远不生效"才是更难解释的状态。
+ *
+ * ⚠ 不要把推导结果写回任何表：一旦落库就退回成"第二份真相"，
+ * 与本次整改的目的一模一样地相反。
+ */
+const withDerivedRelationshipStyle = <TRow extends BigFiveSource>(
+  profile: TRow,
+  rules: RelationshipStyleRule[],
+): TRow & { attachmentStyle: string; loveLanguages: string[]; conflictStyle: string | null } => {
+  const style = deriveRelationshipStyleFromBigFive(profile, rules);
+
+  return {
+    ...profile,
+    attachmentStyle: style.attachment,
+    // 直接取用：`resolveRelationshipStyle` 保证 `loveLanguage` 是**新建数组**，
+    // 不与规则对象共享引用（否则匹配流程里任何一次改动都会污染规则表本身）
+    loveLanguages: style.loveLanguage,
+    conflictStyle: style.conflictStyle,
+  };
+};
 
 /** 免责声明（合规要求由服务端下发，前端不得硬编码） */
 const COMPATIBILITY_DISCLAIMER =
@@ -390,13 +432,20 @@ export class CompatibilityService {
     });
 
     try {
-      const [profileA, profileB, weights] = await Promise.all([
+      const [profileA, profileB, weights, relationshipRules] = await Promise.all([
         this.loadProfile(report.profileAId),
         this.loadProfile(report.profileBId),
         this.loadWeightsById(report.weightsId),
+        loadRelationshipStyleRules(this.prisma),
       ]);
 
-      const result = computeCompatibility(profileA, profileB, weights);
+      // 两个画像用**同一份**规则快照推导：分别在各自内部读表的话，两次读取之间
+      // 规则被改动就会算出"A 用新规则、B 用旧规则"的匹配分，且无法复现
+      const result = computeCompatibility(
+        withDerivedRelationshipStyle(profileA, relationshipRules),
+        withDerivedRelationshipStyle(profileB, relationshipRules),
+        weights,
+      );
 
       await this.prisma.$transaction([
         this.prisma.compatibilityReport.update({
@@ -830,8 +879,6 @@ export class CompatibilityService {
         extraversion: true,
         agreeableness: true,
         neuroticism: true,
-        attachmentStyle: true,
-        loveLanguages: true,
       },
     });
 
@@ -841,9 +888,12 @@ export class CompatibilityService {
     // 画像被硬删/清理后报告仍要能打开：对比块缺失而不是整页 500
     if (profileA === undefined || profileB === undefined) return null;
 
+    // 规则表只在"两个画像都在"时才读：画像都缺了就没必要走一次 DB
+    const rules = await loadRelationshipStyleRules(this.prisma);
+
     return buildProfileComparison({
-      profileA: { ...profileA, loveLanguages: profileA.loveLanguages ?? [] },
-      profileB: { ...profileB, loveLanguages: profileB.loveLanguages ?? [] },
+      profileA: withDerivedRelationshipStyle(profileA, rules),
+      profileB: withDerivedRelationshipStyle(profileB, rules),
       attachmentMatrix,
     });
   }
@@ -984,8 +1034,15 @@ export class CompatibilityService {
     return weights as unknown as CompatibilityWeights;
   }
 
-  /** 读取画像（`Json` 字段需要断言成引擎的类型） */
-  private async loadProfile(profileId: string): Promise<CompatibilityProfile> {
+  /**
+   * 读取画像（`Json` 字段需要断言成引擎的类型）
+   *
+   * 返回的是**未含关系风格**的画像行：依恋 / 爱的语言 / 冲突处理由调用方用
+   * {@link withDerivedRelationshipStyle} 现算（ADR-038）。把"读"与"推导"分开，
+   * 是为了让这次读取是一条纯粹的、可缓存的 DB 查询，而推导步骤在一个地方完成 ——
+   * 两个画像必须用**同一份**规则快照推导，否则 A、B 可能落在不同配置版本上。
+   */
+  private async loadProfile(profileId: string): Promise<CompatibilityProfileRow> {
     const profile = await this.prisma.personalityProfile.findUnique({
       where: { id: profileId },
       select: {
@@ -1000,9 +1057,6 @@ export class CompatibilityService {
         extraversion: true,
         agreeableness: true,
         neuroticism: true,
-        attachmentStyle: true,
-        loveLanguages: true,
-        conflictStyle: true,
       },
     });
 
@@ -1010,18 +1064,21 @@ export class CompatibilityService {
       throw new BusinessException(ErrorCode.PERSONALITY_PROFILE_NOT_FOUND, '人格画像不存在');
     }
 
-    return {
-      ...profile,
-      // `Json?` 列进来的类型已是 `JsonValue | null`，直接兜空数组即可 ——
-      // 引擎要的是 `readonly string[]`，而空数组表示"未采集"，与 `null` 等价
-      loveLanguages: profile.loveLanguages ?? [],
-    };
+    return profile;
   }
 }
 
 // ============================================================================
 // 模块级工具
 // ============================================================================
+
+/**
+ * 画像行：匹配引擎要的画像，但**去掉**由推导产生的关系风格三项
+ *
+ * `Omit` 而不是另写一遍字段：这样引擎一旦往 `CompatibilityProfile` 加字段，
+ * 这里会立刻编译失败并提醒"新字段由谁负责填" —— 若各写一份，新增字段会静默缺省。
+ */
+type CompatibilityProfileRow = Omit<CompatibilityProfile, 'attachmentStyle' | 'loveLanguages' | 'conflictStyle'>;
 
 /**
  * `loadOwnedReport` 的返回行

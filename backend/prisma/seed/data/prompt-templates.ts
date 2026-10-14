@@ -29,6 +29,23 @@ export interface SeedPromptSection {
   title: string;
   /** 是否免费预览段 */
   freePreview: boolean;
+  /**
+   * 该段的写作要求（可选，会渲染进提示词的段落清单里）
+   *
+   * ## 为什么需要它
+   *
+   * 只给标题是不够的：模型看到「你的关系模式」就会自己决定"关系模式"是什么，
+   * 而它最容易脱口而出的正是**依恋类型**（"你是安全型依恋"）——
+   * 那是**情感模块**的结论，人格模块没有任何数据支撑它，模型只能凭猜测编。
+   *
+   * 实测（`probe-ai-live.cjs` 的报告输出）就出现过这种情况：人格报告里写着
+   * 「结合安全型依恋与协作式冲突风格来看」——而整份提示词里**根本没有依恋数据**。
+   * 更糟的是，被编出来的那句恰好落在**付费段**里，用户会把它当成测出来的结论。
+   *
+   * 因此需要一种"在这一段里必须只谈 X、不许谈 Y"的表达位。刻意做成**可选的**：
+   * 大多数段落只需要标题，硬给每段都编一条要求反而会让提示词变吵、稀释重点。
+   */
+  hint?: string;
 }
 
 /** Prompt 模板种子 */
@@ -115,7 +132,9 @@ const buildSectionFormatInstruction = (sections: readonly SeedPromptSection[], w
   [
     '输出格式要求：',
     '- 用 Markdown 的二级标题（`## 标题`）分隔段落。标题必须**严格使用**下面给定的标题，顺序也保持一致：',
-    ...sections.map((section) => `  - ${section.title}`),
+    ...sections.map(
+      (section) => `  - ${section.title}${section.hint === undefined ? '' : `（本段要求：${section.hint}）`}`,
+    ),
     '- 不要输出任何其他级别的标题，也不要在正文里再嵌套小标题。',
     '- 第一个标题之前先写一句 30 字以内的全文概括（不带头部标记）。',
     `- 每个段落正文 ${wordRange} 字，分段清晰，不使用列表以外的复杂排版。`,
@@ -148,7 +167,27 @@ const buildSectionFormatInstruction = (sections: readonly SeedPromptSection[], w
 const MBTI_REPORT_SECTIONS: SeedPromptSection[] = [
   { key: 'CORE_PORTRAIT', title: '你的核心画像', freePreview: true },
   { key: 'DIMENSION_ANALYSIS', title: '四维倾向深度解析', freePreview: true },
-  { key: 'RELATIONSHIP_PATTERN', title: '你的关系模式', freePreview: false },
+  {
+    key: 'RELATIONSHIP_PATTERN',
+    title: '你的关系模式',
+    freePreview: false,
+    /**
+     * ⚠ 这一段的 `hint` 是 **ADR-038 模块隔离的落点**，不是修辞
+     *
+     * 「关系模式」这个标题天然会诱使模型给出依恋类型，而依恋类型属于**情感模块**：
+     * 人格模块的输入里只有 MBTI 四维与大五五项，**没有任何依恋数据**。
+     * 不写这条要求时，实测输出里出现了「结合安全型依恋与协作式冲突风格来看」——
+     * 一个凭空编造、却落在付费段里的结论。
+     *
+     * 因此明确划界：这一段只谈**人格特质如何在关系里表现出来**
+     *（内向者的能量分配、判断型对确定性的需求、高神经质对冲突的敏感度……），
+     * 并**显式禁止**给出依恋类型 / 爱的语言 / 冲突风格 ——
+     * 那三项由情感模块用自己的题目直接测量，出现在情感报告里。
+     */
+    hint:
+      '只从 MBTI 与大五特质出发，说明这些特质如何在亲密关系中表现出来（例如能量分配、对确定性的需求、面对分歧时的倾向）。' +
+      '严禁给出依恋类型（安全型/焦虑型/回避型/恐惧型）、爱的语言或冲突处理风格的判断——这三项属于情感测评，本次没有任何相关数据，不要提及也不要暗示。',
+  },
   { key: 'STRENGTHS_AND_SHADOWS', title: '优势与盲点', freePreview: false },
   { key: 'GROWTH_SUGGESTIONS', title: '成长建议', freePreview: false },
   { key: 'ACTION_PLAN', title: '30 天行动清单', freePreview: false },
@@ -232,8 +271,12 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      * v3：**摘掉情感变量**（`{{attachmentStyle}}` / `{{loveLanguages}}` / `{{conflictStyle}}`），
      * 见下方那段说明 —— 模块隔离（ADR-038）。注入的变量变了，报告内容也会变，
      * 因此同样保留 v2 供历史报告对号。
+     *
+     * v4：给「你的关系模式」段补 `hint`，**显式禁止**模型给依恋类型 / 爱的语言 /
+     * 冲突风格。v3 只摘掉了变量却没约束这一段的写法，实测模型会自己编一个依恋类型
+     *（见 `MBTI_REPORT_SECTIONS` 上的说明），编造内容还落在付费段里。
      */
-    version: 3,
+    version: 4,
     systemPrompt: REPORT_SYSTEM_GUARDRAILS,
     userPromptTemplate: [
       '请为下面这位用户撰写人格深度解读报告。',
@@ -277,6 +320,9 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     // 6 段 × 600 字 ≈ 3600 字 ≈ 2100 token，2048 会被截断，故提高到 4096
     maxTokens: 4096,
     changeNote:
+      'v4：为「你的关系模式」段增加写作要求，显式禁止给出依恋类型 / 爱的语言 / 冲突风格 —— ' +
+      'v3 摘掉变量后模型会在该段自行编造依恋类型（实测出现「结合安全型依恋与协作式冲突风格来看」，' +
+      '而提示词里并无此类数据），且该段属付费内容；' +
       'v3：摘掉情感变量（attachmentStyle / loveLanguages / conflictStyle）—— 模块隔离（ADR-038）：' +
       '这三项是情感模块的结论，且当初是从大五推导出来的，不该出现在人格报告里。' +
       'v2 为段落键对齐契约 6 段并补齐关系模式 / 优势与盲点 / 30 天行动清单',

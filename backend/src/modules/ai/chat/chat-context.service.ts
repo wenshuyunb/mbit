@@ -28,6 +28,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
+import { deriveRelationshipStyleFromBigFive } from '../../personality/engine/relationship-style.evaluator';
+import { loadRelationshipStyleRules } from '../../personality/relationship-style-rules.loader';
 import { relationTypeName } from '../../relationship/relationship-view.util';
 import {
   RECENT_MESSAGE_LIMIT,
@@ -271,9 +273,6 @@ const PROFILE_SELECT = {
   extraversion: true,
   agreeableness: true,
   neuroticism: true,
-  attachmentStyle: true,
-  loveLanguages: true,
-  conflictStyle: true,
 } as const;
 
 @Injectable()
@@ -898,13 +897,36 @@ export class ChatContextService {
   // 内部
   // ==========================================================================
 
-  /** 当前生效画像（`isCurrent = true`，取版本最高的一条） */
+  /**
+   * 当前生效画像（`isCurrent = true`，取版本最高的一条）
+   *
+   * 关系风格三项（依恋 / 爱的语言 / 冲突处理）在 ADR-038 后不再落库，这里用
+   * `loadRelationshipStyleRules` + `deriveRelationshipStyleFromBigFive` 现算后补进
+   * `PersonaProfileRow`。**人设渲染函数本身不改**：它要的输入契约没变，
+   * 变的只是"值从哪来"，这样 Prompt 的字面内容与整改前逐字一致。
+   *
+   * 这里不做 try/catch 兜底：规则表与画像表都在同一个库里，能读到画像就说明
+   * 库是通的；真读不到则上面那次查询已经先失败了。加一层"读不到就假装是安全型"
+   * 只会把基础设施故障伪装成一条正常的人设文案，反而更难排查。
+   */
   private async loadCurrentProfile(userId: string): Promise<PersonaProfileRow | null> {
-    return this.prisma.personalityProfile.findFirst({
+    const profile = await this.prisma.personalityProfile.findFirst({
       where: { userId, isCurrent: true, deletedAt: null },
       orderBy: { version: 'desc' },
       select: PROFILE_SELECT,
     });
+
+    if (profile === null) return null;
+
+    const rules = await loadRelationshipStyleRules(this.prisma);
+    const style = deriveRelationshipStyleFromBigFive(profile, rules);
+
+    return {
+      ...profile,
+      attachmentStyle: style.attachment,
+      loveLanguages: style.loveLanguage,
+      conflictStyle: style.conflictStyle,
+    };
   }
 
   /**

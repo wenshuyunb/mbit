@@ -504,6 +504,57 @@ describe('Prompt 模板种子数据契约', () => {
       expect(relationship?.sections[0]?.key).toBe('advantages');
       expect(relationship?.sections[0]?.freePreview).toBe(true);
     });
+
+    /**
+     * 【关键】模块隔离：人格报告不得产情感模块的结论（ADR-038）
+     *
+     * ## 为什么这条必须测
+     *
+     * ADR-038 把 `{{attachmentStyle}}` / `{{loveLanguages}}` / `{{conflictStyle}}`
+     * 从人格报告模板里摘掉了 —— 但那只是"没给数据"，**不等于"不会说"**。
+     * 人格报告里有一段标题叫「你的关系模式」，模型看到它就自己决定"关系模式"是依恋类型。
+     *
+     * 实测证据（`probe-ai-live.cjs` 生成的真实报告）：
+     *   模板已无任何依恋数据，模型仍写出「结合**安全型依恋**与**协作式冲突风格**来看」。
+     * 这句被编出来的结论落在 `RELATIONSHIP_PATTERN` 段 —— 一个**付费段**，
+     * 用户会把它读成"测出来的结果"。
+     *
+     * 因此这里断言两件事，缺一不可：
+     *   ① 提示词里**没有**这三个变量（否则等于人格模块在产情感结论）；
+     *   ② 「关系模式」段有 `hint`，且该 hint 明确禁止依恋 / 爱的语言 / 冲突风格。
+     */
+    it('【关键】人格报告不注入情感变量，且「关系模式」段显式禁止给情感结论', () => {
+      const mbti = PROMPT_TEMPLATES.find((template) => template.key === 'report.mbti');
+      const bigFive = PROMPT_TEMPLATES.find((template) => template.key === 'report.bigfive');
+
+      for (const template of [mbti, bigFive]) {
+        expect(template).toBeDefined();
+        for (const variable of ['{{attachmentStyle}}', '{{loveLanguages}}', '{{conflictStyle}}']) {
+          expect(template?.userPromptTemplate).not.toContain(variable);
+        }
+      }
+
+      const relationshipPattern = mbti?.sections.find((section) => section.key === 'RELATIONSHIP_PATTERN');
+
+      expect(relationshipPattern?.hint).toBeDefined();
+      // 标题里既然有"关系"二字，就必须把边界写死在提示词里，而不是靠模型自觉
+      for (const banned of ['依恋', '爱的语言', '冲突']) {
+        expect(relationshipPattern?.hint).toContain(banned);
+      }
+      expect(relationshipPattern?.hint).toContain('严禁');
+      // hint 必须真的渲染进提示词 —— 否则它只是种子数据里的注释
+      expect(mbti?.userPromptTemplate).toContain(relationshipPattern?.hint);
+    });
+
+    it('段落 hint（若声明）必须落入提示词，不能只写在种子数据里', () => {
+      for (const template of PROMPT_TEMPLATES) {
+        for (const section of template.sections) {
+          if (section.hint === undefined) continue;
+
+          expect(template.userPromptTemplate).toContain(section.hint);
+        }
+      }
+    });
   });
 
   describe('合规与质量底线', () => {

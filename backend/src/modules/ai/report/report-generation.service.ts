@@ -42,6 +42,8 @@ import {
   daysTogether,
   relationTypeName,
 } from '../../relationship/relationship-view.util';
+import { deriveRelationshipStyleFromBigFive } from '../../personality/engine/relationship-style.evaluator';
+import { loadRelationshipStyleRules } from '../../personality/relationship-style-rules.loader';
 import { estimateCostCents } from '../provider/llm-pricing';
 import { LlmProviderFactory } from '../provider/llm-provider.factory';
 import type { LlmCompletionResult } from '../provider/llm-provider.types';
@@ -89,9 +91,6 @@ const PROFILE_SELECT = {
   extraversion: true,
   agreeableness: true,
   neuroticism: true,
-  attachmentStyle: true,
-  loveLanguages: true,
-  conflictStyle: true,
   consistencyScore: true,
   completionRate: true,
   avgResponseMs: true,
@@ -500,7 +499,7 @@ export class ReportGenerationService {
       throw BusinessException.notFound(ErrorCode.RELATIONSHIP_NOT_FOUND);
     }
 
-    const [profiles, compatibility] = await Promise.all([
+    const [profiles, compatibility, relationshipRules] = await Promise.all([
       this.prisma.personalityProfile.findMany({
         where: { userId: { in: [relationship.userAId, relationship.userBId] }, isCurrent: true, deletedAt: null },
         select: { userId: true, ...PROFILE_SELECT },
@@ -517,6 +516,7 @@ export class ReportGenerationService {
           scoreBreakdown: true,
         },
       }),
+      loadRelationshipStyleRules(this.prisma),
     ]);
 
     if (compatibility === null || compatibility.totalScore === null) {
@@ -529,6 +529,11 @@ export class ReportGenerationService {
       const profile = profiles.find((item) => item.userId === sideUserId);
       if (profile === undefined) return null;
 
+      // 关系风格三项在 ADR-038 后不再落库（情感结论不属于人格画像），改为用
+      // 同一份大五数据现算 —— 与匹配算分走同一个 `resolveRelationshipStyle`，
+      // 因此"报告里写的依恋风格"与"匹配分用的依恋风格"必然一致
+      const style = deriveRelationshipStyleFromBigFive(profile, relationshipRules);
+
       return {
         mbtiType: profile.mbtiType,
         eiPercent: profile.eiPercent,
@@ -540,9 +545,9 @@ export class ReportGenerationService {
         extraversion: profile.extraversion,
         agreeableness: profile.agreeableness,
         neuroticism: profile.neuroticism,
-        attachmentStyle: profile.attachmentStyle,
-        loveLanguages: profile.loveLanguages ?? [],
-        conflictStyle: profile.conflictStyle,
+        attachmentStyle: style.attachment,
+        loveLanguages: style.loveLanguage,
+        conflictStyle: style.conflictStyle,
       };
     };
 
