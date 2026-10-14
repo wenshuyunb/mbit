@@ -13,7 +13,7 @@
  *     · 题干质量底线（长度、无指令性措辞、无重复）
  */
 
-import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS } from './index';
+import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './index';
 import type { SeedDimension, SeedQuestion } from '../types';
 
 /** 期望的题量与反向题数（与 seed 内容约定一致） */
@@ -62,7 +62,28 @@ const EXPECTED_EMOTION: Array<{ dimension: SeedDimension; total: number; reverse
   { dimension: 'CONFLICT_COMPETING', total: 4, reverse: 2 },
 ];
 
-const ALL_QUESTIONS: SeedQuestion[] = [...MBTI_QUESTIONS, ...BIG_FIVE_QUESTIONS, ...EMOTION_QUESTIONS];
+const ALL_QUESTIONS: SeedQuestion[] = [
+  ...MBTI_QUESTIONS,
+  ...BIG_FIVE_QUESTIONS,
+  ...EMOTION_QUESTIONS,
+  ...MENTAL_HEALTH_QUESTIONS,
+];
+
+/**
+ * 心理健康模块的期望题量（ADR-038 阶段 4）
+ *
+ * 六个维度每项 4 题（2 正 + 2 反）—— 与情感模块的"四项维度"同一取舍：
+ * 每项只有 1 道反向题时，该维度的一致性评分偏脆，且满足不了下面那条
+ * 「前后半区都要有反向题」的守卫（题量 3 时两个半区互斥，1 道反向题数学上不可能同时在两侧）。
+ */
+const EXPECTED_MENTAL_HEALTH: Array<{ dimension: SeedDimension; total: number; reverse: number }> = [
+  { dimension: 'MH_STRESS', total: 4, reverse: 2 },
+  { dimension: 'MH_MOOD', total: 4, reverse: 2 },
+  { dimension: 'MH_ANXIETY', total: 4, reverse: 2 },
+  { dimension: 'MH_SLEEP', total: 4, reverse: 2 },
+  { dimension: 'MH_ENERGY', total: 4, reverse: 2 },
+  { dimension: 'MH_LONELINESS', total: 4, reverse: 2 },
+];
 
 describe('题库种子数据契约', () => {
   it('MBTI 题量为 32 道', () => {
@@ -99,6 +120,45 @@ describe('题库种子数据契约', () => {
 
     for (const question of EMOTION_QUESTIONS) {
       expect(personalityDimensions).not.toContain(question.dimension);
+    }
+  });
+
+  it('心理健康题量为 24 道（六个维度各 4 题）', () => {
+    expect(MENTAL_HEALTH_QUESTIONS).toHaveLength(24);
+  });
+
+  it.each(EXPECTED_MENTAL_HEALTH)(
+    '心理健康维度 $dimension：$total 题、$reverse 道反向题',
+    ({ dimension, total, reverse }) => {
+      const items = MENTAL_HEALTH_QUESTIONS.filter((question) => question.dimension === dimension);
+
+      expect(items).toHaveLength(total);
+      expect(items.filter((question) => question.reverseScored)).toHaveLength(reverse);
+    },
+  );
+
+  it('心理健康题库只含本模块的六个维度（三套白名单互不重叠）', () => {
+    const otherDimensions = [
+      ...MBTI_QUESTIONS.map((question) => question.dimension),
+      ...BIG_FIVE_QUESTIONS.map((question) => question.dimension),
+      ...EMOTION_QUESTIONS.map((question) => question.dimension),
+    ];
+
+    for (const question of MENTAL_HEALTH_QUESTIONS) {
+      expect(otherDimensions).not.toContain(question.dimension);
+    }
+  });
+
+  it('【关键】心理健康题库的题干不含临床构念（合规底线，比通用黑名单更严）', () => {
+    // 通用黑名单只管"诊断/抑郁症/症状"这类**词**，而心理健康主题的风险更高：
+    // 题目本身不该出现任何导向临床解读的表述（"障碍""治疗""崩溃""绝望"……）。
+    // 这个模块**只做状态描述**，题目也只问近两周的体验。
+    const clinical = ['障碍', '治疗', '疾病', '生病', '崩溃', '绝望', '失眠症', '躯体化'];
+
+    for (const question of MENTAL_HEALTH_QUESTIONS) {
+      for (const word of clinical) {
+        expect(question.content).not.toContain(word);
+      }
     }
   });
 
@@ -160,6 +220,17 @@ describe('题库种子数据契约', () => {
       CONFLICT_ACCOMMODATING: 'Q_CD_',
       CONFLICT_AVOIDING: 'Q_CA_',
       CONFLICT_COMPETING: 'Q_CC_',
+      // 心理健康模块（ADR-038 阶段 4）
+      //
+      // ⚠ 这六条必须与题库文件里的前缀**逐字一致**：spec 的既有守卫在缺映射时
+      // 直接 `throw new Error('维度 X 没有登记编码前缀')` —— 那是"新增了维度但忘了
+      // 登记前缀"的结构性错误，早失败比静默放行好
+      MH_STRESS: 'Q_MS_',
+      MH_MOOD: 'Q_MM_',
+      MH_ANXIETY: 'Q_MX_',
+      MH_SLEEP: 'Q_MZ_',
+      MH_ENERGY: 'Q_ME_',
+      MH_LONELINESS: 'Q_MU_',
     };
 
     for (const question of ALL_QUESTIONS) {

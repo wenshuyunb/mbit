@@ -10,9 +10,12 @@
  *   · 快照固化：复用会话不重新抽题
  */
 
-import type { BusinessException } from '../../common/errors/business.exception';
+// ⚠ 这里需要**值**导入（不只是类型）：下面有一条用例要真的抛一个 BusinessException
+// 来验证"算分阶段出错时 submit 不写任何画像"。原先的 `import type` 只能用于类型标注
+import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { EmotionEngine } from '../emotion/engine/emotion-engine.service';
+import { MentalHealthEngine } from '../mental-health/engine/mental-health-engine.service';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
 import { ModuleScoringService } from './module-scoring.service';
 import type { PrismaService } from '../../infra/prisma/prisma.service';
@@ -119,6 +122,36 @@ const buildEmotionSnapshot = (): PaperSnapshot => ({
   ),
 });
 
+/**
+ * 构造**心理健康测评**的试卷快照（ADR-038 阶段 4）
+ *
+ * 六个维度各一题。引擎的门禁是按维度逐一判定的，缺任何一维都会让结论不完整（`40019`），
+ * 因此夹具必须覆盖全部六维。
+ */
+const MENTAL_HEALTH_DIMENSIONS = [
+  'MH_STRESS',
+  'MH_MOOD',
+  'MH_ANXIETY',
+  'MH_SLEEP',
+  'MH_ENERGY',
+  'MH_LONELINESS',
+] as const;
+
+const buildMentalHealthSnapshot = (): PaperSnapshot => ({
+  snapshotVersion: 'ps-v1',
+  questionsPerPage: 20,
+  shuffled: true,
+  optionShuffled: false,
+  answerScale: {
+    type: 'LIKERT5',
+    labels: ['非常不同意', '不同意', '中立', '同意', '非常同意'],
+    values: [1, 2, 3, 4, 5],
+  },
+  questions: MENTAL_HEALTH_DIMENSIONS.map((dimension, index) =>
+    question({ order: index, questionId: `q-${dimension}`, code: `Q_${dimension}`, dimension }),
+  ),
+});
+
 interface PrismaStub {
   testDefinition: { findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
   question: { findMany: jest.Mock };
@@ -137,6 +170,7 @@ interface PrismaStub {
   personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock; updateMany: jest.Mock; create: jest.Mock };
   personalitySnapshot: { upsert: jest.Mock };
   emotionProfile: { findFirst: jest.Mock; updateMany: jest.Mock; create: jest.Mock };
+  mentalHealthProfile: { findFirst: jest.Mock; updateMany: jest.Mock; create: jest.Mock };
   relationshipStyleRule: { findMany: jest.Mock };
   systemConfig: { findMany: jest.Mock };
   userDeletionRequest: { findFirst: jest.Mock };
@@ -178,6 +212,12 @@ const createPrismaStub = (): PrismaStub => {
       findFirst: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       create: jest.fn().mockResolvedValue({ id: 'emotion-profile-1', version: 1 }),
+    },
+    // 心理健康画像（ADR-038 阶段 4）：与另两套平行的桩
+    mentalHealthProfile: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      create: jest.fn().mockResolvedValue({ id: 'mh-profile-1', version: 1 }),
     },
     relationshipStyleRule: { findMany: jest.fn().mockResolvedValue([]) },
     // 依恋阈值走系统配置；默认返回空 → 引擎回落到中位切分 50
@@ -240,12 +280,13 @@ describe('TestService', () => {
      */
     const engine = new PersonalityEngine();
     const emotionEngine = new EmotionEngine();
+    const mentalHealthEngine = new MentalHealthEngine();
 
     service = new TestService(
       prisma as unknown as PrismaService,
       redis,
       engine,
-      new ModuleScoringService(engine, emotionEngine),
+      new ModuleScoringService(engine, emotionEngine, mentalHealthEngine),
     );
 
     prisma.testSession.findUnique.mockResolvedValue(sessionRow());
@@ -683,53 +724,81 @@ describe('TestService', () => {
       return { code: -1, message: '（没有抛错）', stack: '' };
     };
 
-    it('【关键】会话属于未接入的模块 → 显式报错，且**一行画像都不写**（不产出占位结果）', async () => {
+    it('【关键】算分器抛错时 → 原样上报，且**一行画像都不写**（不产出占位结果）', async () => {
       prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
-      /**
-       * ⚠ 必须用**尚未接入**的模块：阶段 3 起 `EMOTION` 已有算分器，
-       * 拿它测"未接入"就变成在测另一条路径了。
-       * 目前只剩 `MENTAL_HEALTH` 未接入（阶段 4）—— 等它也接上，
-       * 这条用例应改成"临时从注册表摘掉一个模块"，而不是把断言删掉。
-       */
-      prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module: 'MENTAL_HEALTH' } }));
 
-      const error = await submitError(service);
+      /**
+       * ⚠ 这条用例在阶段 4 改写过，说明一下为什么不再是"用未接入的模块测"：
+       *
+       * 阶段 1–3 期间 `MENTAL_HEALTH` 尚未接入调度器，用它就能走到
+       * `dispatch()` 的"模块未接入"抛错分支。**阶段 4 把三个模块都接上了**，
+       * 于是"未接入的模块"在**今天的枚举里一个都不存在**（`TestModule` 只有三个值），
+       * 那条分支再也无法从 `submit()` 走到。
+       *
+       * 与其保留一条靠"某个模块恰好还没做"才成立的用例（下一个人加模块时它会静默失效），
+       * 不如改成测**真正要保证的行为**：算分阶段抛出任何错误时，
+       * `submit()` 都不允许写出任何画像 —— 这才是"不产出占位结果"的不变量。
+       */
+      const engine = new PersonalityEngine();
+      const throwing = {
+        scorePersonality: () => {
+          throw BusinessException.internal(
+            ErrorCode.PERSONALITY_PROFILE_BUILDING,
+            '模块「FUTURE_MODULE」的算分器尚未接入',
+          );
+        },
+      } as unknown as ModuleScoringService;
+      const failing = new TestService(prisma as unknown as PrismaService, redis, engine, throwing);
+
+      const error = await submitError(failing);
 
       expect(error.code).toBe(ErrorCode.PERSONALITY_PROFILE_BUILDING);
       // 报错要点名是哪个模块没接入 —— 否则接入者只能靠猜
-      expect(error.message).toContain('MENTAL_HEALTH');
+      expect(error.message).toContain('FUTURE_MODULE');
 
       // 最关键的一条：绝不能"先把画像写了再说"
       expect(prisma.personalityProfile.create).not.toHaveBeenCalled();
       expect(prisma.personalityProfile.updateMany).not.toHaveBeenCalled();
+      expect(prisma.emotionProfile.create).not.toHaveBeenCalled();
+      expect(prisma.mentalHealthProfile.create).not.toHaveBeenCalled();
     });
 
-    it('【关键·护栏】调度器能算出人格结果、但会话模块不是人格 → 拒绝写入人格画像', async () => {
-      prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
-      prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module: 'MENTAL_HEALTH' } }));
+    /**
+     * 三个模块**各自有落库分支，且互不串台**（ADR-038 的核心不变量）
+     *
+     * 阶段 4 用这条替换掉了原来的"调度器返回人格结果但模块不是人格 → 护栏拦住"用例。
+     * 那条用例在今天是**不可达**的：三个模块各有分支，只有 `PERSONALITY`
+     * 会落到人格落库路径，而它的模块值本来就是 PERSONALITY。
+     * 留一条不可达的用例等于留一条永远绿的假保证 —— 换成这条表驱动的断言，
+     * 它测的是同一个意图（模块隔离），但每一行今天都真的会被执行。
+     */
+    it.each([
+      ['PERSONALITY', 'personalityProfile'],
+      ['EMOTION', 'emotionProfile'],
+      ['MENTAL_HEALTH', 'mentalHealthProfile'],
+    ] as const)('【关键】模块 %s 只写自己的画像表（不碰另外两张）', async (module, ownTable) => {
+      if (module === 'PERSONALITY') {
+        prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
+        prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module } }));
+      } else if (module === 'EMOTION') {
+        seedEmotionSession();
+      } else {
+        seedMentalHealthSession();
+      }
 
-      /**
-       * 模拟"将来某个模块已接入算分、但落库分支还没加"的状态：
-       * 调度器照常返回人格形状的结果，此时**护栏必须拦住它**。
-       * 这道断言在今天是防御性的，但它防的正是"别的模块的结果顶掉用户真实人格画像"
-       * 那个静默错误 —— 用真实调度器测不到（它会在更早处抛错），所以这里替换成透传实现。
-       */
-      const engine = new PersonalityEngine();
-      const passthrough = {
-        // ⚠ 签名必须是 `(module, input)` —— 只写一个参数会让 `input` 接到模块名上，
-        // 报出的错会变成引擎里的 `.map of undefined`，与本测试的意图完全无关
-        scorePersonality: (_module: unknown, input: Parameters<PersonalityEngine['compute']>[0]) =>
-          engine.compute(input),
-      } as unknown as ModuleScoringService;
-      const guarded = new TestService(prisma as unknown as PrismaService, redis, engine, passthrough);
+      await service.submit(USER_ID, SESSION_ID, { confirm: true });
 
-      const error = await submitError(guarded);
+      const allTables = ['personalityProfile', 'emotionProfile', 'mentalHealthProfile'] as const;
 
-      // 字符串断言：失败时会把 message 与 stack 一起打印出来（对象断言不会显示 stack 的值）
-      expect(`${error.message} ← ${error.stack}`).toContain('不应写入人格画像');
-      expect(error.code).toBe(ErrorCode.PERSONALITY_PROFILE_BUILDING);
-      expect(prisma.personalityProfile.create).not.toHaveBeenCalled();
-      expect(prisma.personalityProfile.updateMany).not.toHaveBeenCalled();
+      for (const table of allTables) {
+        const create = prisma[table].create;
+
+        if (table === ownTable) {
+          expect(create).toHaveBeenCalledTimes(1);
+        } else {
+          expect(create).not.toHaveBeenCalled();
+        }
+      }
     });
 
     // ==========================================================================
@@ -760,6 +829,31 @@ describe('TestService', () => {
           questionId: `q-${dimension}`,
           rawValue: { value: 1 + (index % 5) },
           responseMs: 3000,
+        })),
+      );
+    };
+
+    /** 把会话伪装成心理健康测评，并挂上六维试卷 */
+    const seedMentalHealthSession = (dimensions: readonly string[] = MENTAL_HEALTH_DIMENSIONS): void => {
+      const snapshot: PaperSnapshot = {
+        ...buildMentalHealthSnapshot(),
+        questions: dimensions.map((dimension, index) =>
+          question({ order: index, questionId: `q-${dimension}`, code: `Q_${dimension}`, dimension }),
+        ),
+      };
+
+      prisma.testSession.findUnique.mockResolvedValue(
+        sessionRow({
+          testDefinition: { module: 'MENTAL_HEALTH' },
+          definitionCode: 'MENTAL_HEALTH_LITE',
+          paperSnapshot: snapshot,
+        }),
+      );
+      prisma.testAnswer.findMany.mockResolvedValue(
+        dimensions.map((dimension, index) => ({
+          questionId: `q-${dimension}`,
+          rawValue: { value: 1 + (index % 5) },
+          responseMs: 4000,
         })),
       );
     };
@@ -833,6 +927,86 @@ describe('TestService', () => {
 
       // 规则表是"由大五推导关系风格"用的，情感模块是**直接测量**，不需要它。
       // 在读之前就已经 return，因此不该发生这次查询（白读一次配置表）
+      expect(prisma.relationshipStyleRule.findMany).not.toHaveBeenCalled();
+    });
+
+    // ==========================================================================
+    // ADR-038 阶段 4：心理健康模块的提交落库
+    // ==========================================================================
+
+    it('【关键】心理健康提交 → 写入 `mental_health_profiles`，含结论与免责声明', async () => {
+      seedMentalHealthSession();
+
+      const view = await service.submit(USER_ID, SESSION_ID, { confirm: true });
+
+      expect(view.module).toBe('MENTAL_HEALTH');
+
+      const createArgs = prisma.mentalHealthProfile.create.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+      expect(createArgs.data['isCurrent']).toBe(true);
+
+      // 六维按**对象**落库（分数 + 档位 + 是否有数据）
+      const dimensionScores = createArgs.data['dimensionScores'] as Record<string, { score: number; band: string }>;
+      expect(Object.keys(dimensionScores).sort()).toEqual([...MENTAL_HEALTH_DIMENSIONS].sort());
+      for (const dimension of MENTAL_HEALTH_DIMENSIONS) {
+        expect(typeof dimensionScores[dimension].score).toBe('number');
+        expect(typeof dimensionScores[dimension].band).toBe('string');
+      }
+
+      // 【合规】结论文本与免责声明都必须落库 —— 本模块的交付物就是这两段文字
+      expect(typeof createArgs.data['conclusion']).toBe('string');
+      expect((createArgs.data['conclusion'] as string).length).toBeGreaterThan(10);
+
+      const disclaimer = createArgs.data['disclaimer'] as string;
+      expect(disclaimer).toContain('本结果仅供参考');
+      // 产品明确要求：不涉及专业建议与心理干预
+      expect(disclaimer).toContain('不构成心理诊断');
+      expect(disclaimer).toContain('不提供建议或干预方案');
+    });
+
+    it('【合规】结论文本里不出现建议、干预与诊断类措辞', async () => {
+      seedMentalHealthSession();
+
+      const view = await service.submit(USER_ID, SESSION_ID, { confirm: true });
+      const result = view.module === 'MENTAL_HEALTH' ? view.result : null;
+
+      expect(result).not.toBeNull();
+
+      const conclusion = result?.conclusion ?? '';
+      for (const phrase of ['建议', '你可以试试', '干预', '诊断', '症状', '就医', '治疗']) {
+        expect(conclusion).not.toContain(phrase);
+      }
+    });
+
+    it('【关键】心理健康测评的 `test_results` 不借用 MBTI / 大五列', async () => {
+      seedMentalHealthSession();
+
+      await service.submit(USER_ID, SESSION_ID, { confirm: true });
+
+      const args = prisma.testResult.upsert.mock.calls[0]?.[0] as { create: Record<string, unknown> };
+      expect(args.create['mbtiType']).toBeUndefined();
+      expect(args.create['mbtiDimensions']).toBeUndefined();
+      expect(args.create['bigFiveScores']).toBeUndefined();
+      expect(args.create['rawScores']).toBeDefined();
+      expect(args.create['engineVersion']).toBe('mh-v1.0.0');
+    });
+
+    it('【关键】某维度缺题 → 不落库、明确报错（结论不完整就不给结论）', async () => {
+      // 题库里只配了三维：其余三维没有有效作答
+      seedMentalHealthSession(['MH_STRESS', 'MH_MOOD', 'MH_SLEEP']);
+
+      const error = await submitError(service);
+
+      expect(error.code).toBe(ErrorCode.MENTAL_HEALTH_RESULT_INCOMPLETE);
+      expect(error.message).toContain('紧张不安');
+      expect(prisma.mentalHealthProfile.create).not.toHaveBeenCalled();
+      expect(prisma.mentalHealthProfile.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('心理健康测评不读关系风格规则表（它不参与本模块算分）', async () => {
+      seedMentalHealthSession();
+
+      await service.submit(USER_ID, SESSION_ID, { confirm: true });
+
       expect(prisma.relationshipStyleRule.findMany).not.toHaveBeenCalled();
     });
 

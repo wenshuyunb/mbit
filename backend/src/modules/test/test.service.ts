@@ -23,6 +23,14 @@ import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import type { EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
+import {
+  MENTAL_HEALTH_BAND_LABELS,
+  MENTAL_HEALTH_DIMENSION_LABELS,
+  MENTAL_HEALTH_DIMENSIONS,
+  MENTAL_HEALTH_OVERALL_LABELS,
+  type MentalHealthEngineOutput,
+  type MentalHealthLevelThresholds,
+} from '../mental-health/engine/mental-health-engine.types';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
 import type { EngineAnswer, EngineQuestion } from '../personality/engine/personality-engine.types';
 import { loadRelationshipStyleRules } from '../personality/relationship-style-rules.loader';
@@ -192,13 +200,44 @@ export interface EmotionSubmitResultView extends SubmitResultEnvelope {
 }
 
 /**
+ * 心理健康模块的提交结果（ADR-038 阶段 4）
+ *
+ * ⚠ 这个响应里有**两样别处没有的东西**，都是产品要求而非实现细节：
+ *   · `conclusion` —— 文字结论，由**确定性规则**生成（不是 AI 现编的），
+ *     且**只描述、不建议**；
+ *   · `disclaimer` —— 合规声明，**必须**含「本结果仅供参考」，由服务端下发，
+ *     前端不得硬编码。
+ */
+export interface MentalHealthSubmitResultView extends SubmitResultEnvelope {
+  module: 'MENTAL_HEALTH';
+  result: {
+    dimensions: Array<{
+      key: string;
+      label: string;
+      /** 0–100，越高越值得留意 */
+      score: number;
+      /** 档位编码与中文名（与结论文本里的措辞一致，同属一份快照） */
+      band: string;
+      bandLabel: string;
+      isHighlighted: boolean;
+    }>;
+    overallScore: number;
+    overallLevel: string;
+    overallLabel: string;
+    conclusion: string;
+    quality: SubmitQualityView;
+    disclaimer: string;
+  };
+}
+
+/**
  * 提交结果
  *
  * 用 `module` 判别的联合类型而不是"一个包含全部可选字段的大对象"：
  * 后者会让前端必须靠"这个字段在不在"来猜模块，而且人格接口会莫名其妙地
  * 暴露情感字段（正是 ADR-038 阶段 2 刚清掉的那类问题）。
  */
-export type SubmitResultView = PersonalitySubmitResultView | EmotionSubmitResultView;
+export type SubmitResultView = PersonalitySubmitResultView | EmotionSubmitResultView | MentalHealthSubmitResultView;
 
 /** 历史会话列表项 */
 export interface SessionHistoryItem {
@@ -226,6 +265,42 @@ const LOW_CONFIDENCE_THRESHOLD = 60;
 
 /** 会话创建幂等键前缀 */
 const SESSION_IDEMPOTENCY_PREFIX = 'idem:test-session';
+
+/**
+ * 心理健康模块的合规声明（**服务端唯一真相**）
+ *
+ * 用户对该模块的要求是「要写好提示，**本结果仅供参考**的字样，
+ * 不涉及专业建议以及心理干预，只做结论」。这段文案就是那句话的落点，
+ * 它被**落库**而不是在读取时拼出来：合规文案要能独立迭代，且同一份画像
+ * 在任何端看到的必须是同一段话。
+ *
+ * ⚠ 三条边界都写在文案里，缺一条都会让这个模块越界：
+ *   ① 仅供参考、不是诊断；
+ *   ② 不给建议、不做干预 —— 明说"本结果不提供建议或干预方案"，
+ *      这样即使有人后来想往结论里加建议，也会先撞上这段声明；
+ *   ③ 状态是变化的 —— 避免用户把一次作答当成对自己的定性。
+ *
+ * ## 关于最后一句（要留意）⚠
+ *
+ * 「如果这种状态持续了一段时间，可以告诉信任的人」这句是**安全网**，
+ * 不是建议：它不针对用户的分数、不给行动方案、不指向任何机构，
+ * 只是在"心理健康"这个主题上保留一个最低限度的出口。
+ * 产品方若认为它也算"建议"，删掉这一句即可（它不影响任何分数与结论逻辑），
+ * 但**不建议**在没有任何出口的情况下向用户呈现"值得留意"的判断。
+ */
+const MENTAL_HEALTH_DISCLAIMER =
+  '本结果仅供参考，不构成心理诊断或医疗建议，也不提供建议或干预方案。它反映的是你本次作答时的状态，而状态是会变化的。如果这种状态已经持续了一段时间，可以告诉一个你信任的人。';
+
+/**
+ * 数组是否严格递增
+ *
+ * 用于校验档位阈值配置（如 `mh_band_thresholds = "30,50,70"`）。
+ * 不校验的话，配置成 `"50,30,70"` 会让某一段区间**永远不可达**
+ * （分数先撞上更小的上界），而档位只是显示得"有点怪"，没有任何报错 ——
+ * 结论正文里的档位措辞会跟着一起错，且读起来完全通顺。
+ */
+const isStrictlyAscending = (values: readonly number[]): boolean =>
+  values.every((value, index) => index === 0 || value > values[index - 1]);
 
 /** 幂等记录保留时长（秒）—— 覆盖会话有效期即可 */
 const SESSION_IDEMPOTENCY_TTL_SECONDS = 3 * 60 * 60;
@@ -779,6 +854,28 @@ export class TestService {
     }
 
     /**
+     * 心理健康模块同样走**自己的分支**（ADR-038 阶段 4）
+     *
+     * 与情感分支的三点不同：
+     *   · 落库多两样东西 —— `conclusion`（确定性规则生成的结论文本）与
+     *     `disclaimer`（合规声明，**必须**含「本结果仅供参考」）；
+     *   · 完整性门禁按**六个维度**分别判定（缺哪维报哪维），错误码 `40019`；
+     *   · **没有 AI 报告** —— 本模块的红线是不给建议，而 AI 解读几乎必然会滑向建议
+     *     （见 `mental-health.module.ts` 的说明）。
+     */
+    if (session.testDefinition.module === 'MENTAL_HEALTH') {
+      return this.submitMentalHealth({
+        sessionId,
+        userId,
+        testDefinitionId: session.testDefinitionId,
+        definitionCode: session.definitionCode,
+        engineQuestions,
+        engineAnswers,
+        startedAt: scoringStartedAt,
+      });
+    }
+
+    /**
      * 按**模块**分派算分（ADR-038）
      *
      * 此前这里直接调 `this.engine.compute(…)`，等于假设"所有测评都是人格测评" ——
@@ -1161,6 +1258,242 @@ export class TestService {
   }
 
   /**
+   * 心理健康模块的提交落库（ADR-038 阶段 4）
+   *
+   * ## 与另两个分支最本质的差异：这个模块的交付物是**一段文字**
+   *
+   * 人格模块给的是类型与分数分布，情感模块给的是依恋/爱的语言/冲突风格。
+   * 本模块给的是「多维度得分 + 文字结论」，因此 `conclusion` 与 `disclaimer`
+   * 必须**由服务端生成并落库**：
+   *
+   *   · `conclusion` 由引擎的确定性规则产出，**只描述、不建议**。
+   *     不交给模型：一份 AI 解读几乎不可能只陈述结论而不加建议，
+   *     而"不给建议、不做干预"是这个模块的红线（用户原话）。
+   *   · `disclaimer` 含「本结果仅供参考」等合规文案，同样落库 ——
+   *     前端不得硬编码，合规文案要能独立迭代而不发版。
+   *
+   * ## 完整性门禁按**六个维度**逐一判定
+   *
+   * 与情感模块同形（缺哪维报哪维），但语义不同：情感模块的三族各自是一个结论，
+   * 而本模块的六维共同支撑**一段结论**。因此任一维缺数据都会让那段文字不完整 ——
+   * 与其写一段"少了一个维度"的结论，不如明确报错让运营去补题库（`40019`）。
+   */
+  private async submitMentalHealth(params: {
+    sessionId: string;
+    userId: string;
+    testDefinitionId: string;
+    definitionCode: string;
+    engineQuestions: EngineQuestion[];
+    engineAnswers: EngineAnswer[];
+    startedAt: number;
+  }): Promise<SubmitResultView> {
+    const { sessionId, userId, testDefinitionId, definitionCode, engineQuestions, engineAnswers, startedAt } = params;
+
+    const output = this.moduleScoring.scoreMentalHealth('MENTAL_HEALTH', {
+      questions: engineQuestions,
+      answers: engineAnswers,
+      // 档位阈值走系统配置（运营可调，不需要发版）：读不到时用引擎默认值
+      levelThresholds: await this.loadMentalHealthThresholds(),
+    });
+
+    const scoringDurationMs = Date.now() - startedAt;
+
+    if (output.unresolved.length > 0) {
+      this.logger.error(
+        `心理健康结果不完整，拒绝落库 sessionId=${sessionId} unresolved=${output.unresolved.join(',')}`,
+      );
+
+      throw BusinessException.internal(
+        ErrorCode.MENTAL_HEALTH_RESULT_INCOMPLETE,
+        `本次测评的结果不完整（缺少 ${output.unresolved.join('、')} 的有效作答），无法给出结论`,
+        { sessionId, unresolved: output.unresolved },
+      );
+    }
+
+    const now = new Date();
+    const disclaimer = MENTAL_HEALTH_DISCLAIMER;
+
+    /**
+     * 六维结果按**对象**落库（分数 + 档位 + 是否有数据）
+     *
+     * 档位与分数一起快照：`conclusion` 里嵌着档位措辞，若档位在读取时按当前阈值
+     * 重算，阈值一改就会出现"页面标签说平稳、结论正文说比较突出"的自相矛盾。
+     */
+    const dimensionScores = Object.fromEntries(
+      MENTAL_HEALTH_DIMENSIONS.map((dimension) => [
+        dimension,
+        {
+          score: output.dimensions[dimension].score,
+          band: output.dimensions[dimension].band,
+          usable: output.dimensions[dimension].usable,
+        },
+      ]),
+    );
+
+    const persisted = await this.prisma.$transaction(async (tx) => {
+      await tx.testSession.update({
+        where: { id: sessionId },
+        data: {
+          status: 'SCORED',
+          submittedAt: now,
+          scoredAt: now,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+        },
+      });
+
+      const result = await tx.testResult.upsert({
+        where: { sessionId },
+        create: {
+          sessionId,
+          userId,
+          testDefinitionId,
+          definitionCode,
+          engineVersion: output.engineVersion,
+          // MBTI / 大五列留空：它们不属于本模块
+          rawScores: output.rawScores as unknown as Prisma.InputJsonValue,
+          qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+          avgResponseMs: output.quality.avgResponseMs,
+          computedAt: now,
+        },
+        update: {
+          engineVersion: output.engineVersion,
+          rawScores: output.rawScores as unknown as Prisma.InputJsonValue,
+          qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+          avgResponseMs: output.quality.avgResponseMs,
+          computedAt: now,
+        },
+        select: { id: true },
+      });
+
+      const latest = await tx.mentalHealthProfile.findFirst({
+        where: { userId },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      });
+      const nextVersion = (latest?.version ?? 0) + 1;
+
+      await tx.mentalHealthProfile.updateMany({
+        where: { userId, isCurrent: true },
+        data: { isCurrent: false },
+      });
+
+      const profile = await tx.mentalHealthProfile.create({
+        data: {
+          userId,
+          testResultId: result.id,
+          version: nextVersion,
+          isCurrent: true,
+          engineVersion: output.engineVersion,
+          dimensionScores: dimensionScores,
+          overallLevel: output.overallLevel,
+          overallScore: output.overallScore,
+          conclusion: output.conclusion,
+          highlightedDimensions: [...output.highlightedDimensions],
+          consistencyScore: output.quality.consistencyScore,
+          completionRate: output.quality.completionRate,
+          avgResponseMs: output.quality.avgResponseMs,
+          disclaimer,
+          computedAt: now,
+        },
+        select: { id: true, version: true },
+      });
+
+      return { resultId: result.id, profileId: profile.id, profileVersion: profile.version };
+    });
+
+    this.logger.log(
+      `心理健康算分完成 sessionId=${sessionId} 整体=${output.overallLevel}(${output.overallScore}) 高亮=${output.highlightedDimensions.join(',')} profileVersion=${persisted.profileVersion} 耗时=${scoringDurationMs}ms`,
+    );
+
+    return {
+      sessionId,
+      status: 'SCORED',
+      submittedAt: now.toISOString(),
+      scoredAt: now.toISOString(),
+      scoringDurationMs,
+      resultId: persisted.resultId,
+      profileId: persisted.profileId,
+      profileVersion: persisted.profileVersion,
+      engineVersion: output.engineVersion,
+      isDuplicate: false,
+      module: 'MENTAL_HEALTH',
+      result: this.buildMentalHealthResultView(output, disclaimer),
+    };
+  }
+
+  /**
+   * 档位阈值（系统配置，运营可调）
+   *
+   * 三段式配置：单维三个分界 + 整体两个分界。任何一段缺失或非法就整组回落默认值 ——
+   * **不部分采用**：单维用新阈值、整体用旧阈值会让两者不自洽，
+   * 而用户看到的结论正是两者拼起来的。
+   */
+  private async loadMentalHealthThresholds(): Promise<MentalHealthLevelThresholds | undefined> {
+    const keys = ['mh_band_thresholds', 'mh_overall_thresholds'];
+    const rows = await this.prisma.systemConfig.findMany({
+      where: { key: { in: keys }, deletedAt: null },
+      select: { key: true, value: true },
+    });
+
+    const parseList = (key: string): number[] | undefined => {
+      const raw = rows.find((row) => row.key === key)?.value;
+      if (raw === undefined) return undefined;
+
+      const values = raw
+        .split(',')
+        .map((part) => Number(part.trim()))
+        .filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
+
+      return values.length > 0 ? values : undefined;
+    };
+
+    const band = parseList('mh_band_thresholds');
+    const overall = parseList('mh_overall_thresholds');
+
+    // 必须恰好是三段与两段，且严格递增 —— 否则档位判定会出现不可达或重叠的区间
+    if (band === undefined || band.length !== 3 || !isStrictlyAscending(band)) return undefined;
+    if (overall === undefined || overall.length !== 2 || !isStrictlyAscending(overall)) return undefined;
+
+    return { band: [band[0], band[1], band[2]], overall: [overall[0], overall[1]] };
+  }
+
+  /** 从引擎输出组装心理健康提交响应 */
+  private buildMentalHealthResultView(
+    output: MentalHealthEngineOutput,
+    disclaimer: string,
+  ): MentalHealthSubmitResultView['result'] {
+    const highlighted = new Set(output.highlightedDimensions);
+
+    return {
+      dimensions: MENTAL_HEALTH_DIMENSIONS.map((dimension) => ({
+        key: dimension,
+        label: MENTAL_HEALTH_DIMENSION_LABELS[dimension],
+        score: output.dimensions[dimension].score,
+        band: output.dimensions[dimension].band,
+        bandLabel: MENTAL_HEALTH_BAND_LABELS[output.dimensions[dimension].band],
+        isHighlighted: highlighted.has(dimension),
+      })),
+      overallScore: output.overallScore,
+      overallLevel: output.overallLevel,
+      overallLabel: MENTAL_HEALTH_OVERALL_LABELS[output.overallLevel],
+      conclusion: output.conclusion,
+      quality: {
+        consistencyScore: output.quality.consistencyScore,
+        completionRate: output.quality.completionRate,
+        avgResponseMs: output.quality.avgResponseMs,
+        rushRate: output.quality.rushRate,
+        notice: this.buildQualityNotice(output.quality.consistencyScore),
+      },
+      disclaimer,
+    };
+  }
+
+  /**
    * 依恋两轴的判定阈值（系统配置，运营可调）
    *
    * 读不到或值非法时返回 `undefined`，由引擎回落到 ECR 惯例的中位切分 50。
@@ -1306,6 +1639,12 @@ export class TestService {
       return this.buildEmotionResultFromExisting({ userId, sessionId, session });
     }
 
+    // 心理健康模块同理：结果落在 `mental_health_profiles`，
+    // 而不是 `test_results` 的 MBTI / 大五列（那些列对它留空）
+    if (session.testDefinition.module === 'MENTAL_HEALTH') {
+      return this.buildMentalHealthResultFromExisting({ userId, sessionId, session });
+    }
+
     /**
      * 画像同时提供 `mbtiConfidence`
      *
@@ -1429,6 +1768,98 @@ export class TestService {
           rushRate: await this.readRushRate(session.result.id),
           notice: this.buildQualityNotice(profile.consistencyScore ?? 0),
         },
+      },
+    };
+  }
+
+  /**
+   * 心理健康会话的既有结果（幂等返回路径）
+   *
+   * 数据来源是 `mental_health_profiles` 那一行 —— 六维分数、档位、**结论文本**与
+   * 免责声明都在那里。结论从落库值读而不是现算：它是用户当时看到的那段话，
+   * 属于历史快照，算法或阈值升级都不该改写它。
+   */
+  private async buildMentalHealthResultFromExisting(params: {
+    userId: string;
+    sessionId: string;
+    session: {
+      status: string;
+      submittedAt: Date | null;
+      scoredAt: Date | null;
+      result: { id: string; engineVersion: string } | null;
+    };
+  }): Promise<MentalHealthSubmitResultView> {
+    const { userId, sessionId, session } = params;
+
+    if (session.result === null) {
+      throw BusinessException.notFound(ErrorCode.TEST_SESSION_NOT_FOUND);
+    }
+
+    const profile = await this.prisma.mentalHealthProfile.findFirst({
+      where: { userId, testResultId: session.result.id, deletedAt: null },
+      select: {
+        id: true,
+        version: true,
+        dimensionScores: true,
+        overallLevel: true,
+        overallScore: true,
+        conclusion: true,
+        highlightedDimensions: true,
+        consistencyScore: true,
+        completionRate: true,
+        avgResponseMs: true,
+        disclaimer: true,
+      },
+    });
+
+    if (profile === null) {
+      throw BusinessException.notFound(ErrorCode.MENTAL_HEALTH_PROFILE_NOT_FOUND);
+    }
+
+    const stored = (profile.dimensionScores ?? {}) as Record<string, unknown>;
+    const highlighted = new Set(profile.highlightedDimensions);
+    const overallLevel = profile.overallLevel as keyof typeof MENTAL_HEALTH_OVERALL_LABELS;
+
+    return {
+      sessionId,
+      status: session.status,
+      submittedAt: session.submittedAt ? session.submittedAt.toISOString() : new Date().toISOString(),
+      scoredAt: session.scoredAt ? session.scoredAt.toISOString() : new Date().toISOString(),
+      scoringDurationMs: 0,
+      resultId: session.result.id,
+      profileId: profile.id,
+      profileVersion: profile.version,
+      engineVersion: session.result.engineVersion,
+      isDuplicate: true,
+      module: 'MENTAL_HEALTH',
+      result: {
+        dimensions: MENTAL_HEALTH_DIMENSIONS.map((dimension) => {
+          // 分数与档位都读**落库快照**：结论文本里嵌着档位措辞，
+          // 在此按当前阈值重算会出现"标签与正文不一致"
+          const item = (stored[dimension] ?? {}) as { score?: unknown; band?: unknown };
+          const band = typeof item.band === 'string' ? item.band : 'MILD';
+
+          return {
+            key: dimension,
+            label: MENTAL_HEALTH_DIMENSION_LABELS[dimension],
+            score: typeof item.score === 'number' ? item.score : 0,
+            band,
+            bandLabel: MENTAL_HEALTH_BAND_LABELS[band as keyof typeof MENTAL_HEALTH_BAND_LABELS] ?? band,
+            isHighlighted: highlighted.has(dimension),
+          };
+        }),
+        overallScore: profile.overallScore,
+        overallLevel: profile.overallLevel,
+        overallLabel: MENTAL_HEALTH_OVERALL_LABELS[overallLevel] ?? profile.overallLevel,
+        conclusion: profile.conclusion,
+        quality: {
+          consistencyScore: profile.consistencyScore ?? 0,
+          completionRate: profile.completionRate ?? 0,
+          avgResponseMs: profile.avgResponseMs,
+          rushRate: await this.readRushRate(session.result.id),
+          notice: this.buildQualityNotice(profile.consistencyScore ?? 0),
+        },
+        disclaimer: profile.disclaimer,
       },
     };
   }

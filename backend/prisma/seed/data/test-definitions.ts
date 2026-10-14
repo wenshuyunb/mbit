@@ -82,4 +82,30 @@ export const TEST_DEFINITIONS: SeedTestDefinition[] = [
     sortOrder: 40,
     requiredEntitlement: null,
   },
+  {
+    /**
+     * ⚠ 这是**心理健康模块**的测评（ADR-038 阶段 4），不是人格也不是情感测评
+     *
+     * 产品形态由用户拍板：「多维度得分 + 文字结论，要写好提示，**本结果仅供参考**的字样，
+     * 不涉及专业建议以及心理干预，**只做结论**」。因此：
+     *   · 没有"类型"、没有分级判定 —— 只有六个维度的分数与一段描述性结论；
+     *   · 结论由**确定性规则**生成（不是 AI 写的，AI 解读几乎必然会滑向建议）；
+     *   · **没有 AI 报告**（这是本模块与另两个模块最大的差别）。
+     *
+     * 描述里同样**不出现**任何诊断类表述：这个模块不做诊断，文案也不该暗示。
+     */
+    code: 'MENTAL_HEALTH_LITE',
+    name: '心理健康测评（近期状态自评）',
+    category: 'MENTAL_HEALTH',
+    module: 'MENTAL_HEALTH',
+    description:
+      '从压力、情绪、紧张、睡眠、精力、支持感六个方面，看看你近期（近两周）的状态，并给出一段文字结论。约 4 分钟完成。本结果仅供参考。',
+    version: '1.0.0',
+    status: 'ACTIVE',
+    isActive: true,
+    estimatedMinutes: 4,
+    selectionMode: 'STATIC_SET',
+    sortOrder: 50,
+    requiredEntitlement: null,
+  },
 ];

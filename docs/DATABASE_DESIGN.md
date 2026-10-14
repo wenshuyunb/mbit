@@ -33,7 +33,7 @@
 
 | 覆盖内容             | 说明                                                                  |
 | -------------------- | --------------------------------------------------------------------- |
-| 全部物理表结构       | 7 个域、**47 张表**，每张表给出完整字段表、类型、可空性、默认值、说明 |
+| 全部物理表结构       | 7 个域、**48 张表**，每张表给出完整字段表、类型、可空性、默认值、说明 |
 | 全部索引与约束       | 主键、唯一约束、普通索引、外键与 `onDelete` 级联策略                  |
 | 全部状态机与业务规则 | 测试会话、报告生成、关系、订单、支付、退款、会员、权益、注销          |
 | 完整 Prisma 模型     | 第 6 章，可整体落地为 `backend/prisma/schema.prisma`                  |
@@ -117,7 +117,7 @@ JSONB 字段的写入必须经过 Prisma 的 `InputJsonValue` 类型，且**每�
 
 ## 2. ER 关系总览
 
-下图覆盖全部 47 张表与全部外键关系。为可读性，实体只列出主键、核心外键、状态字段；完整字段见第 5 章。
+下图覆盖全部 48 张表与全部外键关系。为可读性，实体只列出主键、核心外键、状态字段；完整字段见第 5 章。
 
 ```mermaid
 erDiagram
@@ -604,7 +604,7 @@ erDiagram
 
 ## 3. 领域模型速查表
 
-共 **47 张表**，分为 7 个域。数据量级按「3 年、100 万注册用户、5% 付费转化」的业务假设估算，用于容量规划与分区/归档决策。
+共 **48 张表**，分为 7 个域。数据量级按「3 年、100 万注册用户、5% 付费转化」的业务假设估算，用于容量规划与分区/归档决策。
 
 ### 3.1 身份域（Identity，5 张）
 
@@ -4117,6 +4117,13 @@ enum TestCategory {
   BIG_FIVE
   RELATIONSHIP_STYLE
   COMPREHENSIVE
+  // 心理健康模块的算分口径（ADR-038 阶段 4）。
+  //
+  // ⚠ `category` 与 `module` 是**两层**概念，不要合并：本值的测评
+  // `module` 也是 `MENTAL_HEALTH`（模块内目前只有一个 category），
+  // 但人格模块下就有 MBTI / BIG_FIVE / COMPREHENSIVE 三个 category ——
+  // 合并会让"模块内再加一种量表"无处表达。
+  MENTAL_HEALTH
 
   @@map("test_category")
 }
@@ -4209,6 +4216,22 @@ enum Dimension {
   CONFLICT_COMPROMISING // 冲突风格·妥协型
   CONFLICT_AVOIDING // 冲突风格·回避型
   CONFLICT_ACCOMMODATING // 冲突风格·迁就型
+  // ===== 心理健康模块的计分维度（ADR-038 阶段 4）=====
+  //
+  // ⚠ **六个维度的方向必须一致：分数越高 = 越值得留意**。
+  // 这一条不是风格问题，是正确性问题：整体档位由六维聚合得出，
+  // 混进一个"越高越好"的维度（例如"社会支持"）会让聚合结果**静默反向** ——
+  // 支持越多的人反而被判成越需要留意，而报告读起来毫无破绽。
+  // 因此这里用「缺少支持」而不是「社会支持」。
+  //
+  // 命名一律用**体验/状态**词（压力、低落、不安、睡眠困扰、精力不足、缺少支持），
+  // 不用临床构念（抑郁、焦虑障碍等）—— 合规要求，见 seed-data.spec.ts 的敏感词表。
+  MH_STRESS // 压力感受
+  MH_MOOD // 情绪低落
+  MH_ANXIETY // 紧张不安
+  MH_SLEEP // 睡眠困扰
+  MH_ENERGY // 精力不足
+  MH_LONELINESS // 缺少支持
 
   @@map("dimension")
 }
@@ -4642,6 +4665,7 @@ model User {
   testResults             TestResult[]
   profiles                PersonalityProfile[]
   emotionProfiles         EmotionProfile[]
+  mentalHealthProfiles    MentalHealthProfile[]
   snapshots               PersonalitySnapshot[]
   aiConversations         AiConversation[]
   aiMessages              AiMessage[]
@@ -4951,6 +4975,7 @@ model TestResult {
 
   profiles          PersonalityProfile[]
   emotionProfiles   EmotionProfile[]
+  mentalHealthProfiles MentalHealthProfile[]
 
   @@index([userId, computedAt(sort: Desc)])
   @@index([mbtiType])
@@ -5058,6 +5083,71 @@ model EmotionProfile {
   @@unique([userId, version])
   @@index([userId, isCurrent])
   @@map("emotion_profiles")
+}
+
+/// 心理健康画像（ADR-038 阶段 4）
+///
+/// ## 这个模块的产品形态（用户拍板）
+///
+/// 「**多维度得分 + 文字结论**，只做结论、**不给建议**、不做心理干预」，
+/// 且「本结果仅供参考」必须由服务端下发。因此：
+///   · 六维得分是**测量值**；
+///   · `conclusion` 是**确定性规则**生成的结论文本（不是 AI 写的）——
+///     交给模型必然滑向"你可以试试……"这类建议，正是用户明确排除的东西；
+///   · `disclaimer` 由服务端下发并允许合规文案独立迭代，前端不得硬编码。
+///
+/// ## 为什么没有 AI 报告
+///
+/// 其它两个模块都有 `*_REPORT`（AI 逐段解读）。本模块**刻意不做**：
+/// 一份"AI 深度解读"几乎不可能只陈述结论而不给建议，而给建议是这个模块的红线。
+/// 深挖解读的需求由「AI 助手」承担（阶段 5，读三模块报告后对话），
+/// 那里用户可以主动追问，而不是被动收到一份越界的建议清单。
+///
+/// ## ⚠ 六个维度的方向必须一致（越高越值得留意）
+///
+/// `overallLevel` 由六维聚合得出。混进一个"越高越好"的维度会让聚合**静默反向**：
+/// 状态越好的人反而被判成越值得留意，而报告读起来毫无破绽。
+/// 因此用「缺少支持」而不是「社会支持」—— 见 `Dimension` 枚举处的说明。
+model MentalHealthProfile {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  userId            String          @map("user_id") @db.Uuid
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testResultId      String          @map("test_result_id") @db.Uuid
+  testResult        TestResult      @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  version           Int             @default(1)
+  isCurrent         Boolean         @default(true) @map("is_current")
+  engineVersion     String          @map("engine_version") @db.VarChar(16)
+  /// 六维完整结果：`{ "MH_STRESS": { "score": 72, "band": "NOTABLE", "usable": true }, … }`
+  ///
+  /// ⚠ 存**对象**而不是裸数字，是为了让档位与结论文本**同生共死**：
+  /// `conclusion` 里嵌着档位措辞（「这一项比较突出」），若档位在读取时按当前阈值重算，
+  /// 阈值一改就会出现"页面标签说平稳、结论正文说比较突出"的自相矛盾。
+  /// 结论是**历史快照**（算法与阈值升级都不该改写用户当时看到的话），
+  /// 档位就必须与它一起快照。
+  dimensionScores   Json            @map("dimension_scores") @db.JsonB
+  /// 整体档位：`GOOD`（平稳）/ `MILD`（有些起伏）/ `NOTABLE`（值得留意）
+  ///
+  /// ⚠ 这是**描述性档位**，不是诊断分级，也不对应任何临床量表的分界。
+  overallLevel      String          @map("overall_level") @db.VarChar(16)
+  /// 整体得分（六维均值，0–100，越高越值得留意）——冗余列，便于排序与统计
+  overallScore      Float           @map("overall_score")
+  /// 文字结论（**确定性规则生成，不含建议**）
+  conclusion        String          @db.Text
+  /// 高亮维度（最值得留意的 1–2 项，数组顺序即关注优先级）
+  highlightedDimensions String[]    @default([]) @map("highlighted_dimensions")
+  consistencyScore  Float?          @map("consistency_score")
+  completionRate    Float?          @map("completion_rate")
+  avgResponseMs     Int?            @map("avg_response_ms")
+  /// 合规声明（服务端下发，前端不得硬编码；**必须**含「本结果仅供参考」）
+  disclaimer        String          @db.Text
+  computedAt        DateTime        @default(now()) @map("computed_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?       @map("deleted_at") @db.Timestamptz(3)
+
+  @@unique([userId, version])
+  @@index([userId, isCurrent])
+  @@map("mental_health_profiles")
 }
 
 /// 关系风格推导规则（Big Five 组合 → 依恋/爱的语言/冲突风格）
@@ -6558,7 +6648,7 @@ model UserPhoneHistory {
 
 | #   | 取舍                                                                                                                                       | 代价                                                            | 为什么仍然这样选                                                                                                                                                                                                                                                                                                                          |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | 10 张核心表规范化为 47 张表                                                                                                                | JOIN 数量增加，部分查询需要组合 Read Model                      | 写入特征（配置/过程/结果/计量）截然不同，合并会带来锁竞争、索引冗余与归档困难；用**受控冗余列**（`test_answers.userId`、`payments.userId`、`refunds.userId`、`test_results.consistencyScore`）抵消高频 JOIN。其中 47 = 45（由 10 张核心表规范化而来）+ 2（`stored_files` / `user_phone_history`，由接口契约要求补充，见 §3.7 与 ADR-029） |
+| 1   | 10 张核心表规范化为 48 张表                                                                                                                | JOIN 数量增加，部分查询需要组合 Read Model                      | 写入特征（配置/过程/结果/计量）截然不同，合并会带来锁竞争、索引冗余与归档困难；用**受控冗余列**（`test_answers.userId`、`payments.userId`、`refunds.userId`、`test_results.consistencyScore`）抵消高频 JOIN。其中 48 = 46（由 10 张核心表规范化而来）+ 2（`stored_files` / `user_phone_history`，由接口契约要求补充，见 §3.7 与 ADR-029） |
 | 2   | 关键算分与画像数据用 JSONB 承载                                                                                                            | 无法用 FK/CHECK 约束内部结构；查询需 GIN 索引                   | 半结构化数据演化快（新增维度、改权重矩阵），硬列化需要频繁迁移；通过「写入前 DTO 校验 + 键必须来自枚举集合」保证质量                                                                                                                                                                                                                      |
 | 3   | 冗余聚合字段（`ai_conversations.messageCount`、`relationships.reportCount`、`entitlements.remainingQuota`、`test_sessions.answeredCount`） | 存在漂移风险                                                    | 列表页与配额判定是最高频查询，实时聚合不可接受；由「同事务更新 + 每日对账任务修正 + 差异告警」控制                                                                                                                                                                                                                                        |
 | 4   | `share_records.targetId` 为多态逻辑引用（无外键）                                                                                          | 失去引用完整性，可能出现指向已删除对象的记录                    | 分享目标类型会持续增加（未来可能有「成长曲线图」「AI 对话片段」），为每种类型加一个可空外键列会让表结构持续膨胀；分析数据允许「孤儿记录」                                                                                                                                                                                                 |

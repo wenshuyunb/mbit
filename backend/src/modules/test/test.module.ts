@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { EmotionModule } from '../emotion/emotion.module';
+import { MentalHealthModule } from '../mental-health/mental-health.module';
 import { PersonalityModule } from '../personality/personality.module';
 import { ModuleScoringService } from './module-scoring.service';
 import { TestController } from './test.controller';
@@ -22,7 +23,7 @@ import { TestService } from './test.service';
  * 通过 `prisma/seed` 灌入，生产环境可在后台增删改 —— 题目**不写死在代码里**。
  */
 @Module({
-  imports: [ConfigModule, PersonalityModule, EmotionModule],
+  imports: [ConfigModule, PersonalityModule, EmotionModule, MentalHealthModule],
   controllers: [TestController],
   providers: [TestService, ModuleScoringService],
   exports: [TestService],

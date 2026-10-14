@@ -40,6 +40,11 @@ import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { EmotionEngine } from '../emotion/engine/emotion-engine.service';
 import type { EmotionEngineInput, EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
+import { MentalHealthEngine } from '../mental-health/engine/mental-health-engine.service';
+import type {
+  MentalHealthEngineInput,
+  MentalHealthEngineOutput,
+} from '../mental-health/engine/mental-health-engine.types';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
 import type { PersonalityEngineInput, PersonalityEngineOutput } from '../personality/engine/personality-engine.types';
 
@@ -47,16 +52,16 @@ import type { PersonalityEngineInput, PersonalityEngineOutput } from '../persona
  * 模块算分结果 —— **按模块区分的联合类型**
  *
  * 阶段 1 时这里只是 `PersonalityEngineOutput`，注释写着"等有第二个实现再扩成联合类型，
- * 那时有真实的实现来驱动形状，而不是凭空设计"。现在情感模块落地，正是那个时候：
+ * 那时有真实的实现来驱动形状，而不是凭空设计"。现在三个模块齐了：
  *
  *   · `PERSONALITY`   → `PersonalityEngineOutput`（MBTI + 大五 + 关系风格）
  *   · `EMOTION`       → `EmotionEngineOutput`（依恋双轴 + 爱的语言排序 + 冲突风格）
- *   · `MENTAL_HEALTH` → 待阶段 4 接入（现在没有这个成员，漏了会被编译器抓住）
+ *   · `MENTAL_HEALTH` → `MentalHealthEngineOutput`（六维得分 + 确定性文字结论）
  *
- * 判别靠**在分派处收窄**（见 `score()`）：调用方本来就按 `session.testDefinition.module`
+ * 判别靠**在分派处收窄**：调用方本来就按 `session.testDefinition.module`
  * 走各自的落库分支，因此不需要在类型里再挂一个 `module` 字段来运行时判别。
  */
-export type ModuleScoringResult = PersonalityEngineOutput | EmotionEngineOutput;
+export type ModuleScoringResult = PersonalityEngineOutput | EmotionEngineOutput | MentalHealthEngineOutput;
 
 /** 一个模块的算分器（`input` 的具体形状由实现自己收窄） */
 export interface ModuleScorer {
@@ -73,7 +78,11 @@ export class ModuleScoringService {
   /** 模块 → 算分器。**显式表**，不用运行期注册（见文件头） */
   private readonly scorers: ReadonlyMap<TestModule, ModuleScorer>;
 
-  constructor(personalityEngine: PersonalityEngine, emotionEngine: EmotionEngine) {
+  constructor(
+    personalityEngine: PersonalityEngine,
+    emotionEngine: EmotionEngine,
+    mentalHealthEngine: MentalHealthEngine,
+  ) {
     this.scorers = new Map<TestModule, ModuleScorer>([
       [
         'PERSONALITY',
@@ -94,6 +103,14 @@ export class ModuleScoringService {
           module: 'EMOTION',
           label: '情感测评',
           score: (input: EmotionEngineInput) => emotionEngine.compute(input),
+        },
+      ],
+      [
+        'MENTAL_HEALTH',
+        {
+          module: 'MENTAL_HEALTH',
+          label: '心理健康测评',
+          score: (input: MentalHealthEngineInput) => mentalHealthEngine.compute(input),
         },
       ],
     ]);
@@ -144,15 +161,30 @@ export class ModuleScoringService {
     return result;
   }
 
+  /** 按模块算分，**心理健康模块**的结果 */
+  scoreMentalHealth(module: TestModule, input: MentalHealthEngineInput): MentalHealthEngineOutput {
+    const result = this.dispatch(module, input);
+
+    if (!isMentalHealthOutput(result)) {
+      throw BusinessException.internal(
+        ErrorCode.MENTAL_HEALTH_PROFILE_BUILDING,
+        `模块「${module}」的结果不是心理健康结果，不能写入心理健康画像`,
+        { module },
+      );
+    }
+
+    return result;
+  }
+
   /**
-   * 按模块分派（**类型不安全的底层入口**，业务代码请用 `scorePersonality` / `scoreEmotion`）
+   * 按模块分派（**类型不安全的底层入口**，业务代码请用三个具名入口）
    *
    * 之所以把它暴露出来：`supports()` 与错误信息需要它，
-   * 而两个具名入口在拿到结果后必须做运行时判别（联合类型收窄），
+   * 而具名入口在拿到结果后必须做运行时判别（联合类型收窄），
    * 那一步无法在类型层面完成 —— 分派表里的 `score` 是异质函数，
    * TypeScript 无法从 `module` 推出 `input`/输出类型。
    *
-   * @throws BusinessException 该模块的算分器尚未接入（`40011`）——
+   * @throws BusinessException 该模块的算分器尚未接入 ——
    *         绝不返回空结果或占位画像，理由见文件头
    */
   dispatch(module: TestModule, input: unknown): ModuleScoringResult {
@@ -173,6 +205,10 @@ export class ModuleScoringService {
 /** 运行时判别：人格输出（有 `mbti` 与 `bigFive`） */
 export const isPersonalityOutput = (result: ModuleScoringResult): result is PersonalityEngineOutput =>
   'mbti' in result && 'bigFive' in result;
+
+/** 运行时判别：心理健康输出（有 `conclusion` 与 `overallLevel`） */
+export const isMentalHealthOutput = (result: ModuleScoringResult): result is MentalHealthEngineOutput =>
+  'conclusion' in result && 'overallLevel' in result;
 
 /** 运行时判别：情感输出（有 `attachment` 与 `loveLanguage`） */
 export const isEmotionOutput = (result: ModuleScoringResult): result is EmotionEngineOutput =>

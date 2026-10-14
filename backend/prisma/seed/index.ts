@@ -22,7 +22,7 @@ import {
   ADMIN_ROLE_PERMISSIONS,
   ALL_ADMIN_PERMISSIONS,
 } from '../../src/modules/admin/rbac/admin-permission.constants';
-import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS } from './data';
+import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './data';
 import { MEMBERSHIP_PLANS, PRODUCTS } from './data/catalog';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
@@ -47,6 +47,8 @@ const QUESTION_SETS: Array<{ definitionCode: string; questions: SeedQuestion[] }
   { definitionCode: 'BIG_FIVE_50', questions: BIG_FIVE_QUESTIONS },
   // ADR-038 阶段 3：情感模块的题库（42 题，三个族）
   { definitionCode: 'EMOTION_LITE', questions: EMOTION_QUESTIONS },
+  // ADR-038 阶段 4：心理健康模块的题库（24 题，六个维度）
+  { definitionCode: 'MENTAL_HEALTH_LITE', questions: MENTAL_HEALTH_QUESTIONS },
 ];
 
 interface SeedSummary {

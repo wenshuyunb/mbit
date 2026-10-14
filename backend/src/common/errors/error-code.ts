@@ -110,6 +110,12 @@ export const ErrorCode = {
   EMOTION_PROFILE_NOT_FOUND: 40014,
   EMOTION_PROFILE_BUILDING: 40015,
   EMOTION_RESULT_INCOMPLETE: 40016,
+  // 心理健康模块（ADR-038 阶段 4）——每个模块都有自己的三个码，不复用：
+  // 复用会让前端分不清是哪个模块没画像，而三者的引导文案完全不同
+  // （一个引导做人格测试、一个引导做情感测评、一个引导做心理状态自评）
+  MENTAL_HEALTH_PROFILE_NOT_FOUND: 40017,
+  MENTAL_HEALTH_PROFILE_BUILDING: 40018,
+  MENTAL_HEALTH_RESULT_INCOMPLETE: 40019,
 
   // ------------------------------------------------------------------ AI 50
   AI_PROVIDER_UNAVAILABLE: 50000,
@@ -286,6 +292,10 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   40014: 404,
   40015: 409,
   40016: 409,
+  // 心理健康模块：同样平行的三个码
+  40017: 404,
+  40018: 409,
+  40019: 409,
 
   50000: 503,
   50001: 504,
@@ -454,6 +464,10 @@ export const ERROR_MESSAGE: Record<number, string> = {
   40014: '尚未生成情感画像，请先完成情感测评',
   40015: '情感画像正在生成中，请稍候',
   40016: '本次情感测评的结果不完整，无法生成画像',
+  // 心理健康模块同样要说清是哪个模块；文案里**不出现**任何诊断类表述
+  40017: '尚未生成心理状态评估结果，请先完成心理健康测评',
+  40018: '评估结果正在生成中，请稍候',
+  40019: '本次测评的结果不完整，无法给出结论',
 
   50000: 'AI 服务暂时不可用，请稍后重试',
   50001: 'AI 服务响应超时，请稍后重试',

@@ -56,7 +56,13 @@ export type TestScoringModel = (typeof TEST_SCORING_MODELS)[number];
 export const TEST_ENTITLEMENT_TYPES = ['REPORT_UNLOCK', 'MEMBERSHIP_ACTIVE', 'AI_CREDITS', 'PDF_EXPORT'] as const;
 export type TestEntitlementType = (typeof TEST_ENTITLEMENT_TYPES)[number];
 
-/** 全部计分维度（与 Prisma `Dimension` 对齐，供配额项校验） */
+/**
+ * 全部计分维度（与 Prisma `Dimension` 对齐，供配额项校验）
+ *
+ * ⚠ 与 `admin/question/dto` 的 `QUESTION_DIMENSIONS` 必须**逐字同步**。
+ * 两份是拆模块时留下的独立定义；只改一份会让"题目能建、但定义的配额项填不了"
+ * （或反过来），而两边都不会报错。
+ */
 export const SCORING_DIMENSIONS = [
   'EI',
   'SN',
@@ -67,9 +73,30 @@ export const SCORING_DIMENSIONS = [
   'EXTRAVERSION',
   'AGREEABLENESS',
   'NEUROTICISM',
+  // 情感模块的族级值（后台归类用）
   'ATTACHMENT',
   'LOVE_LANGUAGE',
   'CONFLICT_STYLE',
+  // 情感模块的计分维度（ADR-038 阶段 3）
+  'ATTACH_ANXIETY',
+  'ATTACH_AVOIDANCE',
+  'LOVE_WORDS',
+  'LOVE_TIME',
+  'LOVE_GIFTS',
+  'LOVE_SERVICE',
+  'LOVE_TOUCH',
+  'CONFLICT_COMPETING',
+  'CONFLICT_COLLABORATING',
+  'CONFLICT_COMPROMISING',
+  'CONFLICT_AVOIDING',
+  'CONFLICT_ACCOMMODATING',
+  // 心理健康模块的计分维度（ADR-038 阶段 4）
+  'MH_STRESS',
+  'MH_MOOD',
+  'MH_ANXIETY',
+  'MH_SLEEP',
+  'MH_ENERGY',
+  'MH_LONELINESS',
 ] as const;
 export type ScoringDimension = (typeof SCORING_DIMENSIONS)[number];
 

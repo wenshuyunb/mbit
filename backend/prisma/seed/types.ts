@@ -45,7 +45,17 @@ export type SeedDimension =
   | 'CONFLICT_COMPROMISING'
   | 'CONFLICT_ACCOMMODATING'
   | 'CONFLICT_AVOIDING'
-  | 'CONFLICT_COMPETING';
+  | 'CONFLICT_COMPETING'
+  // 心理健康模块（ADR-038 阶段 4）
+  //
+  // ⚠ 六个维度方向一致：**分数越高 = 状态越值得留意**。
+  // 混进一个"越高越好"的维度（如直觉上更顺口的「社会支持」）会让整体档位静默反向。
+  | 'MH_STRESS'
+  | 'MH_MOOD'
+  | 'MH_ANXIETY'
+  | 'MH_SLEEP'
+  | 'MH_ENERGY'
+  | 'MH_LONELINESS';
 
 /** 种子题目 */
 export interface SeedQuestion {
@@ -77,7 +87,7 @@ export interface SeedTestDefinition {
   code: string;
   name: string;
   /** 与 Prisma TestCategory 对齐：模块内的细分，决定用哪套算分逻辑 */
-  category: 'MBTI' | 'BIG_FIVE' | 'RELATIONSHIP_STYLE' | 'COMPREHENSIVE';
+  category: 'MBTI' | 'BIG_FIVE' | 'RELATIONSHIP_STYLE' | 'COMPREHENSIVE' | 'MENTAL_HEALTH';
   /**
    * 所属模块（ADR-038），与 Prisma `TestModule` 对齐
    *

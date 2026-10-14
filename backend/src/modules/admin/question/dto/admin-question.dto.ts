@@ -55,7 +55,16 @@ import { parseQueryBoolean as toBoolean } from '../../../../common/utils/query-b
 export const QUESTION_TYPES = ['LIKERT5', 'BINARY', 'FORCED_CHOICE', 'RANK'] as const;
 export type QuestionTypeValue = (typeof QUESTION_TYPES)[number];
 
-/** 计分维度（与 Prisma `Dimension` 对齐） */
+/**
+ * 计分维度（与 Prisma `Dimension` 对齐）
+ *
+ * ⚠ 这份白名单**必须与 `Dimension` 枚举逐字同步**，而且它在管理端有**两处**
+ * （本文件与 `admin/test-definition/dto`）。漏登记某个维度不会报错，
+ * 只表现为"后台建题时选不到这个维度" —— 而运营会以为这个维度不存在。
+ *
+ * 族级值（`ATTACHMENT` / `LOVE_LANGUAGE` / `CONFLICT_STYLE`）保留用于后台归类；
+ * 真正参与算分的是各自模块的细粒度维度。
+ */
 export const QUESTION_DIMENSIONS = [
   'EI',
   'SN',
@@ -66,9 +75,30 @@ export const QUESTION_DIMENSIONS = [
   'EXTRAVERSION',
   'AGREEABLENESS',
   'NEUROTICISM',
+  // 情感模块的族级值（后台归类用）
   'ATTACHMENT',
   'LOVE_LANGUAGE',
   'CONFLICT_STYLE',
+  // 情感模块的计分维度（ADR-038 阶段 3）
+  'ATTACH_ANXIETY',
+  'ATTACH_AVOIDANCE',
+  'LOVE_WORDS',
+  'LOVE_TIME',
+  'LOVE_GIFTS',
+  'LOVE_SERVICE',
+  'LOVE_TOUCH',
+  'CONFLICT_COMPETING',
+  'CONFLICT_COLLABORATING',
+  'CONFLICT_COMPROMISING',
+  'CONFLICT_AVOIDING',
+  'CONFLICT_ACCOMMODATING',
+  // 心理健康模块的计分维度（ADR-038 阶段 4）
+  'MH_STRESS',
+  'MH_MOOD',
+  'MH_ANXIETY',
+  'MH_SLEEP',
+  'MH_ENERGY',
+  'MH_LONELINESS',
 ] as const;
 export type QuestionDimensionValue = (typeof QUESTION_DIMENSIONS)[number];
 
