@@ -36,11 +36,6 @@ export interface ProfileBlock {
   version: number;
   confidence: number;
   bigFive: Record<string, number>;
-  relationshipStyle: {
-    attachment: string;
-    loveLanguage: string[];
-    conflictStyle: string | null;
-  };
   generatedAt: string;
 }
 

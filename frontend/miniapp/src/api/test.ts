@@ -133,11 +133,6 @@ export interface TestSessionResult {
     /** 结果置信度 0–100（各维度偏离中位的程度） */
     confidence: number;
     bigFive: Record<string, number>;
-    relationshipStyle: {
-      attachment: string;
-      loveLanguage: string[];
-      conflictStyle: string | null;
-    };
     quality: {
       consistencyScore: number;
       completionRate: number;

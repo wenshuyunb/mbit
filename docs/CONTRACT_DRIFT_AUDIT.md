@@ -533,9 +533,131 @@ ADR-038 判定依恋风格 / 爱的语言 / 冲突处理是**情感模块**的�
 
 - **四列还没删**：本步只把读者搬走，写入方（`test.service.ts` 画像创建）与
   只读暴露（`GET /personality/me`、`GET /users/me?include=profile`、管理端用户详情）
-  仍在读写这四列 —— 删除是**下一步**，顺序不能反（先删列会让上面四处直接编译失败）。
+  仍在读写这四列 —— 删除是**下一步**（见 §11），顺序不能反（先删列会让上面四处直接编译失败）。
 - **匹配链路的运行期路径未被端到端跑过**：库里没有任何 `relationships` 行，
   `POST /relationships/{id}/compatibility` 无法真实调用。因此"匹配报告能生成"这一点
   目前只有**合成对照**（10.3）与单元测试支撑，**没有**真实的"发起匹配 → 轮询 → 拿到报告"证据。
   演示用户与真实微信用户之间**没有**建立关系，是刻意不做的 ——
   在用户手机上凭空多出一个"伴侣"比留一个未验证项更糟。
+
+---
+
+## 11. 2026-10-14（续）：ADR-038 阶段 2 之三 —— 情感结论彻底离开人格域
+
+### 11.1 删了什么（7 列，3 张表）
+
+| 表                      | 列                                                       | 性质                                     |
+| ----------------------- | -------------------------------------------------------- | ---------------------------------------- |
+| `personality_profiles`  | `attachment_style` / `love_languages` / `conflict_style` | 画像上的**直接字段**                     |
+| `personality_profiles`  | `relationship_style`                                     | 同一份数据的完整 JSON（含命中规则 code） |
+| `test_results`          | `relationship_style`                                     | 算分结果里的**第二份副本**               |
+| `personality_snapshots` | `relationship_style`                                     | 时间序列里的**第三份副本**               |
+
+迁移：`20261015000000_drop_emotion_columns_from_personality`
+（DDL 由 `prisma migrate diff` 生成，未手写；`docs/DATABASE_DESIGN.md` 是权威源，
+`backend/prisma/schema.prisma` 由 `node scripts/extract-prisma-schema.mjs` 重新生成）。
+
+### 11.2 ⚠ 为什么 `test_results` / `personality_snapshots` 也必须删（不只是"顺手清理"）
+
+这两列在**新语义下会变成"陈旧的第二真相"**：
+
+关系风格现在是**读取时**用当前规则表现算的，而这两列存的是**当时**算出来的值。
+留着的直接后果是：匹配算分用新规则、快照里躺着旧规则的结果，两者**静默分叉**，
+且没有任何机制会发现。而且它们是**冗余**的 —— 大五五列
+（`test_results.big_five_scores` / `personality_snapshots.big_five`）都在，
+配合当时的规则表可以完整复算，**ADR-005 的可复现性承诺不受影响**。
+
+### 11.3 ⚠ 一处必须记录的副作用：`mbtiConfidence` 换了存放处
+
+`test_results.relationship_style` 里除了关系风格，还被**塞进了置信度**
+（`test.service.ts` 写入 `{ ...relationshipStyle, mbtiConfidence }`）。
+删列后重复提交路径改为读 `personality_profiles.mbti_confidence`。
+
+这不是"顺手改"，而是**本来就不该那样放**：置信度是人格指标，
+`personality_profiles` 一直有 `mbti_confidence` 列，没必要借道一个情感结论字段。
+已由 spec 断言（`test.service.spec.ts` 的"结果查询"与"重复提交"两处用例）。
+
+### 11.4 同时撤掉的只读暴露（4 个接口）
+
+| 接口                              | 撤掉的字段                                             |
+| --------------------------------- | ------------------------------------------------------ |
+| `GET /personality/me`             | `relationshipStyle`                                    |
+| `GET /users/me?include=profile`   | `profile.relationshipStyle`                            |
+| `GET /tests/sessions/{id}/result` | `result.relationshipStyle`（与提交响应同构，故一并撤） |
+| `GET /admin/users/{id}`           | `profile.attachment`                                   |
+
+契约 `docs/API_DESIGN.md` 已同步，包括管理端 Prompt 示例里残留的
+`{{attachment}}` / `{{loveLanguage}}` / `{{conflictStyle}}` 占位符与
+`relationshipStyle` 变量声明 —— 那些是 v3 之前的历史模板形态，
+留着会让人以为这些变量仍然存在。
+
+**前端影响为零**：小程序 `pages/` 与后台前端**从未渲染过**这些字段
+（只有 `api/*.ts` 的类型声明提到过），因此类型一并删掉即可，**不改任何页面**。
+
+### 11.5 活体验证（`.runlogs/probe-emotion-removal.cjs`，**13/13 通过**）
+
+- **A 数据库层**：直接问 `information_schema`，四类列在 `public` schema 中 **0 行**；
+  删除迁移已 `finished_at` 落库（不信 Prisma 类型，信数据库自己说的）；
+- **B–E 接口层**：四个接口全 200，且**递归遍历响应体**确认 `relationshipStyle` /
+  `attachmentStyle` / `loveLanguages` / `conflictStyle` / `attachment`
+  这些**键名**一处都不出现（用递归找键而不是 `JSON.stringify().includes()`：
+  后者会把值里恰好同名的字符串也算进来，产生假失败）；
+  其中 `GET /tests/sessions/{id}/result` 的 `confidence=25` 仍正确返回，
+  证明 11.3 的存放处迁移没有丢数据；
+- **F 全库扫描**：除**规则表的配置字段**与**匹配域自己的打分/配置列**
+  （`compatibility_reports.attachment_score`、`compatibility_weights.attachment_matrix`、
+  `compatibility_reports.conflicts` —— 它们描述的是一**对关系**的兼容性，不是某个用户画像上的情感类型）
+  之外，没有其它含 `attach` / `love_lang` / `conflict` 的列；
+  **用户域五张表（`users` / `personality_profiles` / `personality_snapshots` /
+  `test_results` / `test_sessions`）一列都不剩**。
+
+### 11.6 端到端复验（`.runlogs/e2e-smoke.cjs`）
+
+新建临时用户 → 建会话 → 分两批作答 32 题 → **提交算分 200**（`profileId` 正常返回、
+`result` 里已无 `relationshipStyle`）→ `GET /personality/me` 200 → 报告列表 / 会员 / 商品全 200
+→ 清理临时用户。
+
+这条证明的是**删列之后画像写入仍然成功**：`personalityProfile.create` 不再写那四列，
+而库上它们已不存在 —— 若 DDL 与代码不同步，这里会以 Prisma 的
+"Unknown argument / 必填字段缺失"当场失败。**单元测试看不出来这一点**
+（spec 全量 mock 了 Prisma，列级约束全被 mock 掉了）。
+
+随后 `probe-ai-live.cjs` 复跑 **14/14 通过**：报告 6 段正常生成、AI 对话正常，
+且报告正文里不再出现依恋 / 爱的语言 / 冲突风格。
+
+### 11.7 ⚠ 一次"假绿"：幂等复用让报告验证失效（新增 `probe-fresh-report.cjs`）
+
+上一条的"报告 14/14 通过"**当时并不成立**，是排查中才发现的：
+
+改动过程中为了跑 `prisma generate`（引擎 DLL 被占用会 EPERM）停掉了 worker，
+**之后没有启回来**。而 `POST /reports` 是**幂等**的：同一份画像 + 同一 Prompt 版本
+
+- 同一模型已有成功报告时**直接复用**（`isReused: true`）。
+
+于是 `probe-ai-live.cjs` 仍然全绿 —— 它拿到的是十几分钟前那份报告的**复用结果**，
+而队列里**根本没有消费者**。这正是"绿着但不生效"的典型形态：
+探针验证的是"这份报告存在"，而它本该验证的是"这次请求能被生成"。
+
+**修法**：新增 `.runlogs/probe-fresh-report.cjs`，它做三件普通探针不会做的事：
+
+1. **前置检查**：先查该用户是否已有该类型的成功报告，有就直接**失败退出**
+   （而不是照常跑一遍、拿个复用结果报绿）；
+2. **显式断言 `isReused !== true`** —— 复用即失败；
+3. 请求一个**此前从未生成过**的类型（`BIG_FIVE_REPORT`），断言终态 `SUCCEEDED`
+   - 有真实 token 用量 + 每段有正文 + 不含情感模块措辞。
+
+实测 **5/5 通过**：`isReused=false`、`GENERATING → SUCCEEDED`、
+4 段落库（341 / 318 / 296 / 324 字）、1720 tokens。
+
+> **教训（写下来避免重犯）**：任何"异步 + 幂等"的链路，
+> 只断言"最终有个成功结果"是**不足以**证明链路可用的 ——
+> 必须断言"**这一次**确实做了工作"。凡是带 `isReused` / `cacheHit` / `skipped`
+> 这类标志的接口，探针都要显式检查它，否则就会出现"后端全绿、用户点下去没反应"。
+
+### 11.8 仍然没有验证的部分（诚实边界）
+
+- **匹配链路仍未被真实跑过**（同 10.6）：库里 0 行 `relationships`，
+  `POST /relationships/{id}/compatibility` 与匹配报告的运行期路径只有合成对照与单测支撑；
+- **历史报告没有回填**：`ai_reports` 里此前生成的报告（v1/v2/v3 模板产物）
+  正文中可能含旧模板产出的情感措辞。本次**没有**重新生成或清洗 ——
+  那是数据迁移决策（要不要动用户已付过费的报告），不在本轮范围内。

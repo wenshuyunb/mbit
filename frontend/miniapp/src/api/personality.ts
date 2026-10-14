@@ -82,25 +82,6 @@ export const BIG_FIVE_LABELS: Record<BigFiveDimensionKey, string> = {
   neuroticism: '神经质',
 };
 
-/** 依恋类型（引擎定义的四值联合） */
-export type AttachmentStyle = 'SECURE' | 'ANXIOUS' | 'AVOIDANT' | 'FEARFUL';
-
-/** 依恋类型中文名（后端不提供标签） */
-export const ATTACHMENT_LABELS: Record<AttachmentStyle, string> = {
-  SECURE: '安全型',
-  ANXIOUS: '焦虑型',
-  AVOIDANT: '回避型',
-  FEARFUL: '恐惧型',
-};
-
-/** 关系风格（由 Big Five 组合规则推导） */
-export interface RelationshipStyle {
-  attachment: AttachmentStyle;
-  loveLanguage: string[];
-  /** 后端可为 null（规则未命中时不编造文案） */
-  conflictStyle: string | null;
-}
-
 // ============================================================================
 // 质量指标
 // ============================================================================
@@ -168,7 +149,6 @@ export interface PersonalityProfile {
   generatedAt: string;
   mbti: MbtiBlock;
   bigFive: Record<string, number>;
-  relationshipStyle: RelationshipStyle;
   quality: QualityBlock;
   /** 无上一版本时为 null */
   trend: ProfileTrend | null;

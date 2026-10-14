@@ -40,9 +40,6 @@ const profileRow = (overrides: Record<string, unknown> = {}): Record<string, unk
   extraversion: 34.5,
   agreeableness: 88,
   neuroticism: 56.5,
-  attachmentStyle: 'ANXIOUS',
-  loveLanguages: ['QUALITY_TIME', 'WORDS_OF_AFFIRMATION'],
-  conflictStyle: 'ACCOMMODATING',
   consistencyScore: 82.1,
   completionRate: 100,
   avgResponseMs: 10132,
@@ -95,7 +92,7 @@ describe('PersonalityService', () => {
   // ==========================================================================
 
   describe('getProfile', () => {
-    it('返回完整画像（MBTI / 大五 / 关系风格 / 质量）', async () => {
+    it('返回完整画像（MBTI / 大五 / 质量），且**不含**情感结论（ADR-038）', async () => {
       const view = await service.getProfile(USER_ID);
 
       expect(view.profileId).toBe('profile-3');
@@ -104,8 +101,15 @@ describe('PersonalityService', () => {
       expect(view.mbti.type).toBe('INFJ');
       expect(view.mbti.confidence).toBe(78.4);
       expect(view.bigFive.openness).toBe(82.5);
-      expect(view.relationshipStyle.attachment).toBe('ANXIOUS');
       expect(view.quality.consistencyScore).toBe(82.1);
+
+      // 人格画像接口只讲人格：依恋 / 爱的语言 / 冲突处理属情感模块，
+      // 在情感测评（阶段 3）落地前，这个接口一个都不该给
+      expect(view).not.toHaveProperty('relationshipStyle');
+
+      // 连"顺手带上"都不允许：出现任何情感字段都说明有人又把列接回来了
+      expect(JSON.stringify(view)).not.toContain('attachment');
+      expect(JSON.stringify(view)).not.toContain('loveLanguage');
     });
 
     it('维度视图包含对立极与强度档位，且二者自洽', async () => {

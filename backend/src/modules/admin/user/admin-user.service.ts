@@ -190,7 +190,6 @@ export interface AdminUserProfileBlock {
     agreeableness: number;
     neuroticism: number;
   };
-  attachment: string;
   generatedAt: string;
 }
 
@@ -1168,7 +1167,6 @@ export class AdminUserService {
         extraversion: true,
         agreeableness: true,
         neuroticism: true,
-        attachmentStyle: true,
         computedAt: true,
       },
     });
@@ -1188,7 +1186,6 @@ export class AdminUserService {
         agreeableness: profile.agreeableness,
         neuroticism: profile.neuroticism,
       },
-      attachment: profile.attachmentStyle,
       generatedAt: profile.computedAt.toISOString(),
     };
   }

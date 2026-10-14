@@ -1430,7 +1430,6 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 | `mbtiDimensions`          | `Json @db.JsonB`              | 是   | `—`                    | 四维百分比与极性，如 `{"EI":{"percent":72,"pole":"E"}}`           |
 | `bigFiveScores`           | `Json @db.JsonB`              | 是   | `—`                    | Big Five 五维 0–100 分（含可选 T 分）                             |
 | `rawScores`               | `Json @db.JsonB`              | 否   | `—`                    | 维度原始累加分（审计与复算的唯一依据）                            |
-| `relationshipStyle`       | `Json @db.JsonB`              | 是   | `—`                    | 关系风格推导结果（依恋/爱的语言/冲突风格）                        |
 | `qualityMetrics`          | `Json @db.JsonB`              | 是   | `—`                    | 质量指标：`consistencyScore`、`responseTimeStats`、`skippedCount` |
 | `consistencyScore`        | `Float`                       | 是   | `—`                    | 冗余一致性分数（便于排序与筛选）                                  |
 | `completionRate`          | `Float`                       | 是   | `—`                    | 完成率                                                            |
@@ -1480,11 +1479,6 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
     "neuroticism": 52
   },
   "rawScores": { "EI": 18, "SN": 22, "TF": 21, "JP": 25, "EI_reverse": 6 },
-  "relationshipStyle": {
-    "attachment": "ANXIOUS",
-    "loveLanguages": ["WORDS", "TIME"],
-    "conflictStyle": "AVOIDANT_WITHDRAW"
-  },
   "qualityMetrics": {
     "consistencyScore": 0.82,
     "skippedCount": 0,
@@ -1501,7 +1495,7 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 
 #### 5.2.7 `personality_profiles`（PersonalityProfile — 人格画像）
 
-**用途**：跨测试整合的**人格画像**（MBTI + Big Five + 关系风格），版本化保存历史（架构 §11.4：旧画像不重算，新测试生成新版本）。
+**用途**：跨测试整合的**人格画像**（MBTI + Big Five），版本化保存历史（架构 §11.4：旧画像不重算，新测试生成新版本）。
 
 | 字段名                                                                              | 类型                          | 可空     | 默认值                       | 说明                                                                                      |
 | ----------------------------------------------------------------------------------- | ----------------------------- | -------- | ---------------------------- | ----------------------------------------------------------------------------------------- |
@@ -1515,10 +1509,6 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 | `mbtiConfidence`                                                                    | `Float`                       | 否       | `0`                          | MBTI 置信度（各维度偏离 50 的加权平均，架构 §11.3）                                       |
 | `eiPercent` / `snPercent` / `tfPercent` / `jpPercent`                               | `Float`                       | 否       | `—`                          | 四维倾向百分比（0–100），前端画倾向条                                                     |
 | `openness` / `conscientiousness` / `extraversion` / `agreeableness` / `neuroticism` | `Float`                       | 否       | `—`                          | Big Five 五维分数（0–100），前端画雷达图                                                  |
-| `attachmentStyle`                                                                   | `enum AttachmentStyle`        | 否       | `—`                          | 依恋类型                                                                                  |
-| `loveLanguages`                                                                     | `String[]`                    | 否       | `[]`                         | 爱的语言（可多项）                                                                        |
-| `conflictStyle`                                                                     | `String @db.VarChar(32)`      | 是       | `—`                          | 冲突风格                                                                                  |
-| `relationshipStyle`                                                                 | `Json @db.JsonB`              | 是       | `—`                          | 关系风格完整 JSON（含命中规则 code，便于解释「为什么是这个风格」）                        |
 | `traits`                                                                            | `Json @db.JsonB`              | 是       | `—`                          | 画像扩展特征（如 Big Five 子面），供 AI 上下文装配使用                                    |
 | `consistencyScore`                                                                  | `Float`                       | 是       | `—`                          | 来源测试的一致性分数                                                                      |
 | `completionRate`                                                                    | `Float`                       | 是       | `—`                          | 来源测试完成率                                                                            |
@@ -1543,6 +1533,13 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 1. 新画像写入时必须同事务：把该用户旧的 `isCurrent` 置 false → 插入新行 `isCurrent = true`。
 2. `version` 自增由 `SELECT COALESCE(MAX(version),0)+1` 在同一事务内完成；并发下由 `UNIQUE(userId, version)` 兜底重试。
 3. **本表的 `version` 是画像版本号，不是乐观锁**（该表追加写，不参与并发更新）。详见第 11 章取舍 2。
+4. **本表只存人格模块的数据**（ADR-038）：依恋风格 / 爱的语言 / 冲突处理四项
+   （`attachment_style` / `love_languages` / `conflict_style` / `relationship_style`）
+   已随迁移 `20261015000000_drop_emotion_columns_from_personality` **删除**。
+   那三项是**情感模块**的结论，原先是"由人格模块的答题数据经 `relationship_style_rules`
+   推导"出来的 —— 等于用 A 模块的数据产 B 模块的结论，并印在 A 模块的画像上。
+   需要的消费方（情侣匹配、关系报告、AI 人设）改为在读取时用本表的大五五列
+   **现算**（`deriveRelationshipStyleFromBigFive`），值不变，只是把"存储"换成"计算"。
 
 **示例数据**
 
@@ -1565,10 +1562,6 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
   "extraversion": 35,
   "agreeableness": 71,
   "neuroticism": 52,
-  "attachmentStyle": "ANXIOUS",
-  "loveLanguages": ["WORDS", "TIME"],
-  "conflictStyle": "AVOIDANT_WITHDRAW",
-  "relationshipStyle": { "matchedRules": ["RS_ANX_01"], "ruleVersion": "1.0.0" },
   "traits": { "bigFiveSubfacets": { "openness.ideas": 82 } },
   "consistencyScore": 0.82,
   "completionRate": 1.0,
@@ -1593,7 +1586,6 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
 | `capturedAt`        | `DateTime @db.Timestamptz(3)` | 否   | `now()`   | 快照时间（曲线 X 轴）                            |
 | `mbtiType`          | `String @db.VarChar(4)`       | 否   | `—`       | 当时的 MBTI                                      |
 | `bigFive`           | `Json @db.JsonB`              | 否   | `—`       | 当时五维分数（曲线数据点）                       |
-| `relationshipStyle` | `Json @db.JsonB`              | 是   | `—`       | 当时的关系风格                                   |
 | `completenessScore` | `Float`                       | 是   | `—`       | 画像完整度（用于曲线提示「数据不足」）           |
 | `moodScore`         | `Float`                       | 是   | `—`       | 情绪自评（若对话中采集），为未来「情绪趋势」预留 |
 | `note`              | `String @db.VarChar(256)`     | 是   | `—`       | 备注（如「第 3 次测试」）                        |
@@ -1627,7 +1619,6 @@ CREATED ──取卷──► IN_PROGRESS ──提交全部答案──► SUBM
     "agreeableness": 71,
     "neuroticism": 52
   },
-  "relationshipStyle": { "attachment": "ANXIOUS", "loveLanguages": ["WORDS", "TIME"] },
   "completenessScore": 0.9,
   "moodScore": null,
   "note": "第 2 次测试",
@@ -4793,7 +4784,6 @@ model TestResult {
   mbtiDimensions    Json?        @map("mbti_dimensions") @db.JsonB
   bigFiveScores     Json?        @map("big_five_scores") @db.JsonB
   rawScores         Json         @map("raw_scores") @db.JsonB
-  relationshipStyle Json?        @map("relationship_style") @db.JsonB
   qualityMetrics    Json?        @map("quality_metrics") @db.JsonB
   consistencyScore  Float?       @map("consistency_score")
   completionRate    Float?       @map("completion_rate")
@@ -4830,10 +4820,6 @@ model PersonalityProfile {
   extraversion      Float
   agreeableness     Float
   neuroticism       Float
-  attachmentStyle   AttachmentStyle @map("attachment_style")
-  loveLanguages     String[]        @default([]) @map("love_languages")
-  conflictStyle     String?         @map("conflict_style") @db.VarChar(32)
-  relationshipStyle Json?           @map("relationship_style") @db.JsonB
   traits            Json?           @db.JsonB
   consistencyScore  Float?          @map("consistency_score")
   completionRate    Float?          @map("completion_rate")
@@ -4866,7 +4852,6 @@ model PersonalitySnapshot {
   capturedAt        DateTime            @default(now()) @map("captured_at") @db.Timestamptz(3)
   mbtiType          String              @map("mbti_type") @db.VarChar(4)
   bigFive           Json                @map("big_five") @db.JsonB
-  relationshipStyle Json?               @map("relationship_style") @db.JsonB
   completenessScore Float?              @map("completeness_score")
   moodScore         Float?              @map("mood_score")
   note              String?             @db.VarChar(256)

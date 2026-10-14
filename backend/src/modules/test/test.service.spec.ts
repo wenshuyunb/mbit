@@ -538,7 +538,7 @@ describe('TestService', () => {
       });
     });
 
-    it('质量指标与关系风格一并落库', async () => {
+    it('质量指标一并落库，且画像里**不含**情感结论（ADR-038）', async () => {
       prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
 
       await service.submit(USER_ID, SESSION_ID, { confirm: true });
@@ -549,7 +549,13 @@ describe('TestService', () => {
 
       expect(createArgs.data['consistencyScore']).toBeGreaterThanOrEqual(0);
       expect(createArgs.data['completionRate']).toBe(100);
-      expect(typeof createArgs.data['attachmentStyle']).toBe('string');
+
+      // 依恋 / 爱的语言 / 冲突处理是**情感模块**的结论：四列已随
+      // `20261015000000_drop_emotion_columns_from_personality` 删除。
+      // 这里断言"没有写回去" —— 光靠类型系统挡不住 `as never` 之类的绕过
+      for (const field of ['attachmentStyle', 'loveLanguages', 'conflictStyle', 'relationshipStyle']) {
+        expect(createArgs.data).not.toHaveProperty(field);
+      }
     });
 
     it('关系风格规则从数据库读入并参与推导', async () => {
@@ -568,8 +574,11 @@ describe('TestService', () => {
 
       const result = await service.submit(USER_ID, SESSION_ID, { confirm: true });
 
-      expect(result.result.relationshipStyle.attachment).toBe('SECURE');
-      expect(result.result.relationshipStyle.loveLanguage).toEqual(['QUALITY_TIME']);
+      // ADR-038 后规则**仍在参与算分**（引擎输出里保留，供内部与历史复算），
+      // 但不再出现在提交响应里 —— 人格测评的结果不该带情感模块的结论。
+      // 规则读取本身仍必须发生：情侣匹配等消费方依赖同一套推导口径
+      expect(prisma.relationshipStyleRule.findMany).toHaveBeenCalledTimes(1);
+      expect(result.result).not.toHaveProperty('relationshipStyle');
     });
 
     // ==========================================================================
@@ -653,11 +662,12 @@ describe('TestService', () => {
           mbtiType: 'ESTJ',
           mbtiDimensions: { EI: 100, SN: 100, TF: 100, JP: 100 },
           bigFiveScores: { openness: 50 },
-          relationshipStyle: { attachment: 'SECURE', loveLanguage: [], conflictStyle: null },
           qualityMetrics: { consistencyScore: 100, completionRate: 100, avgResponseMs: 3000, rushRate: 0 },
         },
       });
-      prisma.personalityProfile.findFirst.mockResolvedValue({ id: 'profile-1', version: 1 });
+      // 重复提交路径的 `mbtiConfidence` 从画像读（此前塞在 relationshipStyle 这个 Json 里，
+      // 该列已随 ADR-038 删除）
+      prisma.personalityProfile.findFirst.mockResolvedValue({ id: 'profile-1', version: 1, mbtiConfidence: 78 });
 
       const result = await service.submit(USER_ID, SESSION_ID, { confirm: true });
 
@@ -764,16 +774,13 @@ describe('TestService', () => {
           mbtiType: 'ISTJ',
           mbtiDimensions: { EI: 34.5, SN: 68.2, TF: 61.4, JP: 72.8 },
           bigFiveScores: { openness: 82.5 },
-          relationshipStyle: {
-            attachment: 'ANXIOUS',
-            loveLanguage: ['QUALITY_TIME'],
-            conflictStyle: 'ACCOMMODATING',
-            mbtiConfidence: 78.4,
-          },
           qualityMetrics: { consistencyScore: 82.1, completionRate: 100, avgResponseMs: 10132, rushRate: 0 },
         },
       });
-      prisma.personalityProfile.findFirst.mockResolvedValue({ id: 'profile-3', version: 3 });
+      // ADR-038 后置信度从**画像**读：它此前被塞在 `test_results.relationship_style`
+      // 这个 Json 里（`{ ...relationshipStyle, mbtiConfidence }`），而那列已删。
+      // 置信度本来就该在画像的 `mbti_confidence` 列上，不必借道一个情感结论字段。
+      prisma.personalityProfile.findFirst.mockResolvedValue({ id: 'profile-3', version: 3, mbtiConfidence: 78.4 });
 
       const result = await service.getSessionResult(USER_ID, SESSION_ID);
 

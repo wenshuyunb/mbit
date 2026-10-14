@@ -56,11 +56,6 @@ export interface ProfileBlock {
     agreeableness: number;
     neuroticism: number;
   };
-  relationshipStyle: {
-    attachment: string;
-    loveLanguage: string[];
-    conflictStyle: string | null;
-  };
   generatedAt: string;
 }
 
@@ -1271,9 +1266,6 @@ export class UserService {
         extraversion: true,
         agreeableness: true,
         neuroticism: true,
-        attachmentStyle: true,
-        loveLanguages: true,
-        conflictStyle: true,
         computedAt: true,
       },
     });
@@ -1292,11 +1284,6 @@ export class UserService {
         extraversion: profile.extraversion,
         agreeableness: profile.agreeableness,
         neuroticism: profile.neuroticism,
-      },
-      relationshipStyle: {
-        attachment: profile.attachmentStyle,
-        loveLanguage: profile.loveLanguages,
-        conflictStyle: profile.conflictStyle,
       },
       generatedAt: profile.computedAt.toISOString(),
     };

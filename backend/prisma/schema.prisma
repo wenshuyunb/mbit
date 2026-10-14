@@ -878,7 +878,6 @@ model TestResult {
   mbtiDimensions    Json?        @map("mbti_dimensions") @db.JsonB
   bigFiveScores     Json?        @map("big_five_scores") @db.JsonB
   rawScores         Json         @map("raw_scores") @db.JsonB
-  relationshipStyle Json?        @map("relationship_style") @db.JsonB
   qualityMetrics    Json?        @map("quality_metrics") @db.JsonB
   consistencyScore  Float?       @map("consistency_score")
   completionRate    Float?       @map("completion_rate")
@@ -915,10 +914,6 @@ model PersonalityProfile {
   extraversion      Float
   agreeableness     Float
   neuroticism       Float
-  attachmentStyle   AttachmentStyle @map("attachment_style")
-  loveLanguages     String[]        @default([]) @map("love_languages")
-  conflictStyle     String?         @map("conflict_style") @db.VarChar(32)
-  relationshipStyle Json?           @map("relationship_style") @db.JsonB
   traits            Json?           @db.JsonB
   consistencyScore  Float?          @map("consistency_score")
   completionRate    Float?          @map("completion_rate")
@@ -951,7 +946,6 @@ model PersonalitySnapshot {
   capturedAt        DateTime            @default(now()) @map("captured_at") @db.Timestamptz(3)
   mbtiType          String              @map("mbti_type") @db.VarChar(4)
   bigFive           Json                @map("big_five") @db.JsonB
-  relationshipStyle Json?               @map("relationship_style") @db.JsonB
   completenessScore Float?              @map("completeness_score")
   moodScore         Float?              @map("mood_score")
   note              String?             @db.VarChar(256)

@@ -1117,14 +1117,36 @@ node .runlogs\endpoint-inventory.cjs     # 契约 vs 实际注册路由的差集
 
 ---
 
-### 3.18 🔄 ADR-038 三模块重构（**进行中**，2026-10-14）
+### 3.18 ✅ ADR-038 阶段 1–2 完成（**阶段 3–6 待开工**，2026-10-14）
 
 **用户拍板的定位**：项目有三个**互不干扰**的模块 —— MBTI 人格测试、情感测评、
 心理健康测评。三者各出各的用户画像，模块之间不互相产结论。
 AI 助手改为「能读取三个模块报告」的管家角色，**需要会员才可使用**。
 用户原话：「既然现在明确了，就干脆一次性改好，不要怕删功能」。
 
-#### 已完成（阶段 1 + 阶段 2 第一步）
+#### 阶段 2 的三步（**顺序不能反**，已全部完成）
+
+1. ✅ **把读者搬走**：四处消费方（情侣匹配 ×2、关系报告、AI 人设）改为
+   用同一份大五现算，不再读画像列 —— 见 `CONTRACT_DRIFT_AUDIT.md` §10；
+2. ✅ **停写 + 去掉只读暴露**：画像创建不再写那四列；
+   `GET /personality/me`、`GET /users/me?include=profile`、
+   `GET /tests/sessions/{id}/result`、管理端用户详情不再返回该字段
+   （契约 `API_DESIGN.md` 与小程序 `api/*.ts` 类型同步）；
+3. ✅ **删列**：`DATABASE_DESIGN.md` → `schema.prisma`（**由文档生成**）→ 迁移。
+
+> ⚠ **为什么必须先搬读者再删列**：反过来做，上面四处会在编译期直接爆掉一片，
+> 而其中情侣匹配（`REPORT_COMPATIBILITY_DEEP`）是**付费产品**，不能停摆。
+
+#### 阶段 2 的两条硬约束（改动时别踩）
+
+- **语义变化必须记住**：关系风格从「提交时冻结」变成「读取时计算」。
+  运营改 `relationship_style_rules` 会**同时改变历史用户**的推导值。这是有意接受的
+  （规则表是产品配置而非用户数据），已记入 `CONTRACT_DRIFT_AUDIT.md` §10.2。
+- **推导值不是测量值**：阶段 3 的情感模块会用**自己的题目直接测量**依恋与爱的语言，
+  那才是真实观测。当前推导只是"用户没做过情感测评"时的兜底，
+  文案上不得说成"你测出来是……"。
+
+#### 已完成（阶段 1 + 阶段 2 全部）
 
 | 阶段 | 内容                                                                       | 关键产物                                                                   |
 | ---- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -1134,19 +1156,22 @@ AI 助手改为「能读取三个模块报告」的管家角色，**需要会员
 | 1    | `submit()` 按模块分派 + 假画像护栏                                         | `test.service.ts`                                                          |
 | 2a   | 人格报告不再携带情感结论                                                   | commit `f38cb5e`                                                           |
 | 2b   | 关系风格改为**读取时按需推导**                                             | `relationship-style-rules.loader.ts`、`deriveRelationshipStyleFromBigFive` |
+| 2c   | **停写 + 撤掉只读暴露 + 删列**（7 列 / 3 表）                              | 迁移 `20261015000000_drop_emotion_columns_from_personality`                |
 
-#### 阶段 2 正在做的三件事（**顺序不能反**）
+#### 阶段 2c 删掉的 7 列（**用户域一列不剩**）
 
-1. ✅ **把读者搬走**：四处消费方（情侣匹配 ×2、关系报告、AI 人设）已改为
-   用同一份大五现算，不再读画像列 —— 见 `CONTRACT_DRIFT_AUDIT.md` §10；
-2. ⏳ **停写 + 去掉只读暴露**：`test.service.ts` 仍在画像创建时写那四列；
-   `GET /personality/me`、`GET /users/me?include=profile`、管理端用户详情仍在返回
-   `relationshipStyle` / `attachmentStyle` 等 —— 需连同契约 `API_DESIGN.md` 与小程序
-   `api/*.ts` 的类型一起改；
-3. ⏳ **删列**：`DATABASE_DESIGN.md` → `schema.prisma`（**由文档生成**）→ 迁移。
+`personality_profiles` 的 `attachment_style` / `love_languages` / `conflict_style` /
+`relationship_style`，以及 `test_results` 与 `personality_snapshots` 各自那一个
+`relationship_style`。
 
-> ⚠ **为什么必须先搬读者再删列**：反过来做，上面四处会在编译期直接爆掉一片，
-> 而其中情侣匹配（`REPORT_COMPATIBILITY_DEEP`）是**付费产品**，不能停摆。
+顺序是「先搬读者 → 再停写与撤暴露 → 最后删列」，**不能反**：先删列会让四处消费方
+（含**付费**的情侣匹配 `REPORT_COMPATIBILITY_DEEP`）在编译期直接爆掉。
+详见 `CONTRACT_DRIFT_AUDIT.md` §10–§11。
+
+> ⚠ 后两处 Json 列必须删、不只是清理：新语义下关系风格是**读取时**算的，
+> 留着的副本会立刻变成"陈旧的第二真相"（匹配用新规则、快照里是旧规则的结果，
+> 静默分叉）。且它们是冗余的 —— 大五五列都在，配合当时的规则表可完整复算，
+> ADR-005 的可复现性承诺不受影响。
 
 #### 阶段 2 的两条硬约束（改动时别踩）
 
@@ -1166,9 +1191,20 @@ AI 助手改为「能读取三个模块报告」的管家角色，**需要会员
   总分 + 四个子项**两条路径完全一致**；
 - `relationship-style-derivation.spec.ts`：以 `PersonalityEngine.compute()` 为唯一权威，
   钉死 `derive(compute().bigFive) === compute().relationshipStyle`（含 `matchedRuleCode`）；
-- 活体（`probe-ai-live.cjs`，真实 DeepSeek）：报告 6 段 / AI 对话 **14/14 通过**。
+- `.runlogs/probe-emotion-removal.cjs`：**13/13 通过** —— 列在数据库里真的没了、
+  四个接口的响应体递归扫描无情感字段、全库扫描用户域五张表一列不剩；
+- `.runlogs/e2e-smoke.cjs`：临时用户走完「建会话 → 32 题作答 → **提交算分 200** →
+  画像 → 报告/会员/商品」全链路 —— 证明 **DDL 与代码同步**（这一点单测看不出来，
+  因为 spec 全量 mock 了 Prisma）；
+- 活体（`probe-ai-live.cjs`，真实 DeepSeek）：报告 6 段 / AI 对话 **14/14 通过**；
+- `.runlogs/probe-fresh-report.cjs`：**5/5 通过** —— 断言 `isReused=false`
+  并拿到全新的 `BIG_FIVE_REPORT`（4 段 / 1720 tokens）。
+  **为什么单列这一条**：改动中为跑 `prisma generate` 停掉了 worker 却忘了启回来，
+  而 `POST /reports` 是幂等的 → `probe-ai-live.cjs` 复用了旧报告、**照样全绿**。
+  「异步 + 幂等」的链路必须断言"**这一次**真的做了工作"，
+  不能只断言"最终有个成功结果"。已记入 `CONTRACT_DRIFT_AUDIT.md` §11.7。
 
-#### 本轮顺带修掉的两个真实缺陷
+#### 本轮顺带修掉的三个真实缺陷
 
 1. **规则数组的别名共享**（`relationship-style.evaluator.ts`）：
    `resolveRelationshipStyle` 此前直接返回规则对象的数组，未命中时返回的
@@ -1179,15 +1215,20 @@ AI 助手改为「能读取三个模块报告」的管家角色，**需要会员
    「结合**安全型依恋**与**协作式冲突风格**来看」，而提示词里根本没有这类数据，
    且该段是**付费段**。修法：给段落声明加可选 `hint`（渲染进提示词），
    写死"只从 MBTI / 大五谈关系表现，严禁给依恋类型 / 爱的语言 / 冲突风格"。
-   修复后复测：6 段**全部**无情感模块措辞，该段改为完全从 MBTI 四维展开。
+   修复后复测：6 段**全部**无情感模块措辞，该段改为完全从 MBTI 四维展开；
+3. **置信度借道情感字段落库**：`test_results.relationship_style` 里被塞进了
+   `mbtiConfidence`（`{ ...relationshipStyle, mbtiConfidence }`）。删列后重复提交
+   路径改读 `personality_profiles.mbti_confidence` —— 置信度本来就该在那儿。
 
 #### 阶段 2 尚未验证的部分（诚实边界）
 
-库里**没有任何 `relationships` 行**，因此
-`POST /relationships/{id}/compatibility` 这条运行期路径**没有被真实跑过**：
-"匹配报告能生成"目前只有**合成对照**（上面的 87.4 / 86.6）与单元测试支撑。
-演示用户与真实微信用户之间**刻意没有**建立关系 ——
-在用户手机上凭空多出一个"伴侣"比留一个未验证项更糟。
+- 库里**没有任何 `relationships` 行**，因此
+  `POST /relationships/{id}/compatibility` 这条运行期路径**没有被真实跑过**：
+  "匹配报告能生成"目前只有**合成对照**（上面的 87.4 / 86.6）与单元测试支撑。
+  演示用户与真实微信用户之间**刻意没有**建立关系 ——
+  在用户手机上凭空多出一个"伴侣"比留一个未验证项更糟；
+- **历史报告没有回填**：`ai_reports` 里 v1/v2/v3 模板产出的报告正文可能含旧的
+  情感措辞。要不要动用户已付过费的报告是一次数据迁移决策，不在本轮范围。
 
 #### 后续阶段（阶段 3–6，尚未开工）
 
@@ -1202,6 +1243,19 @@ AI 助手改为「能读取三个模块报告」的管家角色，**需要会员
 - **阶段 6 前端**：三个模块各自的入口、结果页与报告页
   （`pages/test/intro.vue:24` 目前把 `MBTI_LITE` 写死）。
 
-当前门禁状态（阶段 2 第一步收尾）：`tsc` 0 错 / `eslint` 0 警告 /
-**jest 127 套 2799 例全过** / `prettier` 干净 / `node dist/main.js` 启动正常且
-`/health/ready` 返回 200。
+当前门禁状态（阶段 2 收尾）：`tsc` 0 错 / `eslint` 0 警告 /
+**jest 127 套 2799 例全过** / 小程序 vitest **14 套 189 例全过** /
+`prettier` 干净 / `node dist/main.js` 启动正常且 `/health/ready` 返回 200。
+
+#### ⚠ 本轮遇到的一次环境故障（记录一下，别再当成代码问题排查）
+
+改动进行到一半时 **Docker Desktop 的引擎（VM）崩了**：`com.docker.backend.exe`
+还在监听 5452/6391，但 `/health/ready` 直接**超时**、`docker ps` 报
+`Docker Desktop is unable to start`、`prisma migrate` 报 `P1001 无法连接 127.0.0.1:5452`。
+现象很像"数据库挂了/端口被占"，实际是 **WSL 里的 `docker-desktop` 发行版已停止**。
+
+恢复步骤（有效）：`wsl --shutdown` → 停掉 `Docker Desktop` /
+`com.docker.backend` / `com.docker.build` / `docker-sandbox` 进程 →
+重新启动 `Docker Desktop.exe` → 约 6 秒后引擎就绪，
+`soulmap-postgres` 与 `soulmap-redis` 自动拉起且都是 healthy，
+后端与 worker 无需重启即自动重连（Prisma 会重连，健康检查随即恢复 200）。

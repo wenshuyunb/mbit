@@ -122,11 +122,6 @@ export interface SubmitResultView {
     dimensions: Record<string, { percent: number; pole: string; leftLabel: string; rightLabel: string }>;
     confidence: number;
     bigFive: Record<string, number>;
-    relationshipStyle: {
-      attachment: string;
-      loveLanguage: string[];
-      conflictStyle: string | null;
-    };
     quality: {
       consistencyScore: number;
       completionRate: number;
@@ -764,10 +759,6 @@ export class TestService {
           mbtiDimensions: output.mbti.dimensions,
           bigFiveScores: output.bigFive as unknown as Prisma.InputJsonValue,
           rawScores: output.rawScores,
-          relationshipStyle: {
-            ...output.relationshipStyle,
-            mbtiConfidence,
-          },
           qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
           consistencyScore: output.quality.consistencyScore,
           completionRate: output.quality.completionRate,
@@ -780,10 +771,6 @@ export class TestService {
           mbtiDimensions: output.mbti.dimensions,
           bigFiveScores: output.bigFive as unknown as Prisma.InputJsonValue,
           rawScores: output.rawScores,
-          relationshipStyle: {
-            ...output.relationshipStyle,
-            mbtiConfidence,
-          },
           qualityMetrics: output.quality as unknown as Prisma.InputJsonValue,
           consistencyScore: output.quality.consistencyScore,
           completionRate: output.quality.completionRate,
@@ -844,10 +831,6 @@ export class TestService {
           extraversion: output.bigFive.extraversion,
           agreeableness: output.bigFive.agreeableness,
           neuroticism: output.bigFive.neuroticism,
-          attachmentStyle: output.relationshipStyle.attachment,
-          loveLanguages: output.relationshipStyle.loveLanguage,
-          conflictStyle: output.relationshipStyle.conflictStyle,
-          relationshipStyle: output.relationshipStyle as unknown as Prisma.InputJsonValue,
           traits: output.rawScores,
           consistencyScore: output.quality.consistencyScore,
           completionRate: output.quality.completionRate,
@@ -867,14 +850,12 @@ export class TestService {
           capturedAt: now,
           mbtiType,
           bigFive: output.bigFive as unknown as Prisma.InputJsonValue,
-          relationshipStyle: output.relationshipStyle as unknown as Prisma.InputJsonValue,
           completenessScore: output.quality.completionRate,
         },
         update: {
           profileId: profile.id,
           mbtiType,
           bigFive: output.bigFive as unknown as Prisma.InputJsonValue,
-          relationshipStyle: output.relationshipStyle as unknown as Prisma.InputJsonValue,
           completenessScore: output.quality.completionRate,
         },
       });
@@ -1000,7 +981,6 @@ export class TestService {
             mbtiType: true,
             mbtiDimensions: true,
             bigFiveScores: true,
-            relationshipStyle: true,
             qualityMetrics: true,
           },
         },
@@ -1011,14 +991,21 @@ export class TestService {
       throw BusinessException.notFound(ErrorCode.TEST_SESSION_NOT_FOUND);
     }
 
+    /**
+     * 画像同时提供 `mbtiConfidence`
+     *
+     * ⚠ 此前置信度是**塞在 `test_results.relationship_style` 这个 Json 里**的
+     * （写入时 `{ ...relationshipStyle, mbtiConfidence }`）。ADR-038 删掉该列后，
+     * 置信度必须回到它本来该在的地方 —— 它是**人格**指标，`personality_profiles`
+     * 本来就有 `mbti_confidence` 这一列，没必要借道一个情感结论的字段。
+     */
     const profile = await this.prisma.personalityProfile.findFirst({
       where: { userId, testResultId: session.result.id },
-      select: { id: true, version: true },
+      select: { id: true, version: true, mbtiConfidence: true },
     });
 
     const dimensions = (session.result.mbtiDimensions ?? {}) as Record<string, number>;
     const bigFive = (session.result.bigFiveScores ?? {}) as Record<string, number>;
-    const style = (session.result.relationshipStyle ?? {}) as Record<string, unknown>;
     const quality = (session.result.qualityMetrics ?? {}) as Record<string, unknown>;
 
     return {
@@ -1035,15 +1022,8 @@ export class TestService {
       result: {
         mbtiType: session.result.mbtiType,
         dimensions: this.buildDimensionView(dimensions),
-        confidence: typeof style['mbtiConfidence'] === 'number' ? style['mbtiConfidence'] : 0,
+        confidence: profile?.mbtiConfidence ?? 0,
         bigFive,
-        relationshipStyle: {
-          // 用显式类型守卫而不是 String(...)：JSONB 里可能是任意结构，
-          // 直接 String() 会把对象变成 '[object Object]' 并静默污染响应
-          attachment: this.readString(style['attachment']) ?? 'SECURE',
-          loveLanguage: this.readStringArray(style['loveLanguage']),
-          conflictStyle: this.readString(style['conflictStyle']),
-        },
         quality: {
           consistencyScore: Number(quality['consistencyScore'] ?? 0),
           completionRate: Number(quality['completionRate'] ?? 0),
@@ -1062,11 +1042,6 @@ export class TestService {
       dimensions: this.buildDimensionView(output.mbti.dimensions),
       confidence: output.mbti.confidence,
       bigFive: output.bigFive as unknown as Record<string, number>,
-      relationshipStyle: {
-        attachment: output.relationshipStyle.attachment,
-        loveLanguage: output.relationshipStyle.loveLanguage,
-        conflictStyle: output.relationshipStyle.conflictStyle,
-      },
       quality: {
         consistencyScore: output.quality.consistencyScore,
         completionRate: output.quality.completionRate,
@@ -1096,17 +1071,6 @@ export class TestService {
     }
 
     return view;
-  }
-
-  /** 从 JSONB 读取字符串（类型守卫，避免把对象 String 化成 '[object Object]'） */
-  private readString(value: unknown): string | null {
-    return typeof value === 'string' && value.length > 0 ? value : null;
-  }
-
-  /** 从 JSONB 读取字符串数组（过滤掉非字符串元素） */
-  private readStringArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return value.filter((item): item is string => typeof item === 'string');
   }
 
   /** 质量提示文案（不阻断流程，仅提示） */

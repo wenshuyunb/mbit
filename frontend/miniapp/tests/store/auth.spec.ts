@@ -102,7 +102,6 @@ const ME_VIEW = {
     version: 1,
     confidence: 25,
     bigFive: { openness: 72.5, conscientiousness: 48, extraversion: 35.5, agreeableness: 66, neuroticism: 55 },
-    relationshipStyle: { attachment: 'ANXIOUS', loveLanguage: ['肯定的言辞'], conflictStyle: null },
     generatedAt: '2026-10-12T00:00:00.000Z',
   },
   membership: {

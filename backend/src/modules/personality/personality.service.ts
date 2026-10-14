@@ -63,13 +63,6 @@ export interface MbtiBlockView {
   dimensions: Record<string, MbtiDimensionView>;
 }
 
-/** 关系风格块 */
-export interface RelationshipStyleView {
-  attachment: string;
-  loveLanguage: string[];
-  conflictStyle: string | null;
-}
-
 /** 质量块 */
 export interface QualityBlockView {
   consistencyScore: number;
@@ -99,7 +92,6 @@ export interface ProfileView {
   generatedAt: string;
   mbti: MbtiBlockView;
   bigFive: Record<string, number>;
-  relationshipStyle: RelationshipStyleView;
   quality: QualityBlockView;
   trend: ProfileTrend | null;
   summary: SummaryView;
@@ -210,9 +202,6 @@ export class PersonalityService {
         extraversion: true,
         agreeableness: true,
         neuroticism: true,
-        attachmentStyle: true,
-        loveLanguages: true,
-        conflictStyle: true,
         consistencyScore: true,
         completionRate: true,
         avgResponseMs: true,
@@ -279,11 +268,6 @@ export class PersonalityService {
         extraversion: round1(profile.extraversion),
         agreeableness: round1(profile.agreeableness),
         neuroticism: round1(profile.neuroticism),
-      },
-      relationshipStyle: {
-        attachment: profile.attachmentStyle,
-        loveLanguage: profile.loveLanguages,
-        conflictStyle: profile.conflictStyle,
       },
       quality: {
         consistencyScore: round1(profile.consistencyScore ?? 0),

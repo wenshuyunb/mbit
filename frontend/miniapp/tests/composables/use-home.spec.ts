@@ -72,7 +72,6 @@ const PROFILE = {
     dimensions: {},
   },
   bigFive: {},
-  relationshipStyle: { attachment: 'ANXIOUS', loveLanguage: [], conflictStyle: null },
   quality: { consistencyScore: 62, completionRate: 100, avgResponseMs: null, confidenceLevel: 'MEDIUM', notice: null },
   trend: null,
   summary: { headline: 'h', strengths: [], watchouts: [], isAiGenerated: false },

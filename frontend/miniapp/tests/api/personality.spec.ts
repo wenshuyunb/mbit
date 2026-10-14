@@ -15,7 +15,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  ATTACHMENT_LABELS,
   BIG_FIVE_DIMENSIONS,
   BIG_FIVE_LABELS,
   MBTI_DIMENSIONS,
@@ -94,7 +93,6 @@ const REAL_PROFILE: PersonalityProfile = {
     },
   },
   bigFive: { openness: 72.5, conscientiousness: 48, extraversion: 35.5, agreeableness: 66, neuroticism: 55 },
-  relationshipStyle: { attachment: 'ANXIOUS', loveLanguage: ['肯定的言辞'], conflictStyle: null },
   quality: {
     consistencyScore: 62,
     completionRate: 100,
@@ -213,22 +211,27 @@ describe('响应结构：与后端实际字段对齐（契约错位回归）', (
     expect(profile?.summary.isAiGenerated).toBe(false);
   });
 
-  it('置信度档位在 quality.confidenceLevel，关系风格不再有 attachmentLabel', async () => {
+  it('置信度档位在 quality.confidenceLevel', async () => {
     respondWith(200, envelope(REAL_PROFILE));
 
     const profile = await getMyProfile();
 
     expect(profile?.quality.confidenceLevel).toBe('MEDIUM');
-    expect(profile?.relationshipStyle.attachment).toBe('ANXIOUS');
-    expect(profile?.relationshipStyle).not.toHaveProperty('attachmentLabel');
   });
 
-  it('conflictStyle 允许为 null（规则未命中时后端不编造文案）', async () => {
+  /**
+   * ADR-038：人格画像不再带情感结论
+   *
+   * 依恋 / 爱的语言 / 冲突处理是**情感模块**的结论，后端已在阶段 2 从
+   * `personality_profiles` 删列、并从 `GET /personality/me` 撤掉该字段。
+   * 前端若还留着这个属性，只能是从别处拼出来的假数据。
+   */
+  it('人格画像不含 relationshipStyle（情感结论属情感模块）', async () => {
     respondWith(200, envelope(REAL_PROFILE));
 
     const profile = await getMyProfile();
 
-    expect(profile?.relationshipStyle.conflictStyle).toBeNull();
+    expect(profile).not.toHaveProperty('relationshipStyle');
   });
 
   it('disclaimer 由服务端下发，用于合规展示', async () => {
@@ -354,9 +357,5 @@ describe('展示用常量表', () => {
 
   it('MBTI 维度顺序固定为 EI / SN / TF / JP', () => {
     expect([...MBTI_DIMENSIONS]).toEqual(['EI', 'SN', 'TF', 'JP']);
-  });
-
-  it('四种依恋类型都有中文名', () => {
-    expect(Object.keys(ATTACHMENT_LABELS).sort()).toEqual(['ANXIOUS', 'AVOIDANT', 'FEARFUL', 'SECURE']);
   });
 });
