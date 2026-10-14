@@ -1,0 +1,263 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`人格引擎输出回归锁（ADR-038 阶段 1） 【关键】不含关系规则时（回落默认风格分支）与快照一致 1`] = `
+{
+  "bigFive": {
+    "agreeableness": 75,
+    "conscientiousness": 75,
+    "extraversion": 75,
+    "neuroticism": 75,
+    "openness": 75,
+  },
+  "engineVersion": "pe-v1.0.0",
+  "mbti": {
+    "confidence": 75,
+    "dimensions": {
+      "EI": 75,
+      "JP": 100,
+      "SN": 100,
+      "TF": 75,
+    },
+    "type": "ESTJ",
+  },
+  "quality": {
+    "answeredCount": 22,
+    "avgResponseMs": 2990,
+    "completionRate": 100,
+    "consistencyScore": 100,
+    "rushRate": 0.0455,
+    "skippedCount": 0,
+    "totalCount": 22,
+  },
+  "rawScores": {
+    "dimensions": {
+      "AGREEABLENESS": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "CONSCIENTIOUSNESS": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "EI": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 16,
+      },
+      "EXTRAVERSION": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "JP": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 20,
+      },
+      "NEUROTICISM": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "OPENNESS": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "SN": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 20,
+      },
+      "TF": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 16,
+      },
+    },
+  },
+  "relationshipStyle": {
+    "attachment": "SECURE",
+    "conflictStyle": null,
+    "loveLanguage": [],
+    "matchedRuleCode": null,
+  },
+}
+`;
+
+exports[`人格引擎输出回归锁（ADR-038 阶段 1） 【关键】只有 MBTI 题时与快照一致（大五走"无数据占位 50"分支） 1`] = `
+{
+  "bigFive": {
+    "agreeableness": 50,
+    "conscientiousness": 50,
+    "extraversion": 50,
+    "neuroticism": 50,
+    "openness": 50,
+  },
+  "engineVersion": "pe-v1.0.0",
+  "mbti": {
+    "confidence": 75,
+    "dimensions": {
+      "EI": 75,
+      "JP": 100,
+      "SN": 100,
+      "TF": 75,
+    },
+    "type": "ESTJ",
+  },
+  "quality": {
+    "answeredCount": 12,
+    "avgResponseMs": 2845,
+    "completionRate": 100,
+    "consistencyScore": 100,
+    "rushRate": 0.0833,
+    "skippedCount": 0,
+    "totalCount": 12,
+  },
+  "rawScores": {
+    "dimensions": {
+      "EI": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 16,
+      },
+      "JP": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 20,
+      },
+      "SN": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 20,
+      },
+      "TF": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 16,
+      },
+    },
+  },
+  "relationshipStyle": {
+    "attachment": "SECURE",
+    "conflictStyle": "COLLABORATING",
+    "loveLanguage": [
+      "QUALITY_TIME",
+    ],
+    "matchedRuleCode": "REGRESSION_MATCH",
+  },
+}
+`;
+
+exports[`人格引擎输出回归锁（ADR-038 阶段 1） 【关键】含关系规则的完整输出与快照逐字段一致 1`] = `
+{
+  "bigFive": {
+    "agreeableness": 75,
+    "conscientiousness": 75,
+    "extraversion": 75,
+    "neuroticism": 75,
+    "openness": 75,
+  },
+  "engineVersion": "pe-v1.0.0",
+  "mbti": {
+    "confidence": 75,
+    "dimensions": {
+      "EI": 75,
+      "JP": 100,
+      "SN": 100,
+      "TF": 75,
+    },
+    "type": "ESTJ",
+  },
+  "quality": {
+    "answeredCount": 22,
+    "avgResponseMs": 2990,
+    "completionRate": 100,
+    "consistencyScore": 100,
+    "rushRate": 0.0455,
+    "skippedCount": 0,
+    "totalCount": 22,
+  },
+  "rawScores": {
+    "dimensions": {
+      "AGREEABLENESS": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "CONSCIENTIOUSNESS": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "EI": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 16,
+      },
+      "EXTRAVERSION": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "JP": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 20,
+      },
+      "NEUROTICISM": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "OPENNESS": {
+        "answeredCount": 2,
+        "weightedMax": 10,
+        "weightedMin": 2,
+        "weightedScore": 8,
+      },
+      "SN": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 20,
+      },
+      "TF": {
+        "answeredCount": 3,
+        "weightedMax": 20,
+        "weightedMin": 4,
+        "weightedScore": 16,
+      },
+    },
+  },
+  "relationshipStyle": {
+    "attachment": "SECURE",
+    "conflictStyle": "COLLABORATING",
+    "loveLanguage": [
+      "QUALITY_TIME",
+    ],
+    "matchedRuleCode": "REGRESSION_MATCH",
+  },
+}
+`;
