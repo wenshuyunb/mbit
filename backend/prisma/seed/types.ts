@@ -54,8 +54,15 @@ export interface SeedTestDefinition {
   /** 定义编码（对外接口路径参数） */
   code: string;
   name: string;
-  /** 与 Prisma TestCategory 对齐 */
+  /** 与 Prisma TestCategory 对齐：模块内的细分，决定用哪套算分逻辑 */
   category: 'MBTI' | 'BIG_FIVE' | 'RELATIONSHIP_STYLE' | 'COMPREHENSIVE';
+  /**
+   * 所属模块（ADR-038），与 Prisma `TestModule` 对齐
+   *
+   * 决定**结果写进哪份画像、出哪种报告**；三个模块互不干扰。
+   * 与 `category` 是两层概念：一个模块下可以有多个 category。
+   */
+  module: 'PERSONALITY' | 'EMOTION' | 'MENTAL_HEALTH';
   description: string;
   version: string;
   /** 与 Prisma TestDefinitionStatus 对齐 */

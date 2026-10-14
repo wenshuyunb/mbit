@@ -196,6 +196,7 @@ const seedDefinitions = async (): Promise<number> => {
         code: definition.code,
         name: definition.name,
         category: definition.category,
+        module: definition.module,
         description: definition.description,
         version: definition.version,
         status: definition.status,
@@ -205,8 +206,17 @@ const seedDefinitions = async (): Promise<number> => {
         dimensionQuotas: definition.dimensionQuotas ?? undefined,
         sortOrder: definition.sortOrder,
       },
+      /**
+       * ⚠ 这里**包含** `module`，而 `category` 是刻意不更新的（见下）
+       *
+       * 两者的差别在于"改错了会怎样"：
+       *   · `category` 决定算分逻辑，改它会让**存量画像**的来源与定义不符，故只在创建时写；
+       *   · `module` 决定**结果写进哪份画像**（ADR-038）。若某个定义被误挂在错误的模块下，
+       *     重跑种子应当能把它改回来 —— 否则只能手工改库，而"模块隔离"恰恰最怕挂错。
+       */
       update: {
         name: definition.name,
+        module: definition.module,
         description: definition.description,
         version: definition.version,
         status: definition.status,

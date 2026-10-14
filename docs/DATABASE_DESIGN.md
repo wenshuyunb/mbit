@@ -1082,7 +1082,8 @@ CANCELLED                  PROCESSING（保留 status，写 failureReason，等�
 | `id`                                    | `String @db.Uuid`             | 否       | `uuid(7)`                    | 主键                                                                              |
 | `code`                                  | `String @db.VarChar(32)`      | 否       | `—`                          | 业务唯一编码（UNIQUE）                                                            |
 | `name`                                  | `String @db.VarChar(64)`      | 否       | `—`                          | 展示名称，如「MBTI 完整版」                                                       |
-| `category`                              | `enum TestCategory`           | 否       | `—`                          | 测试大类，决定算分引擎分支                                                        |
+| `category`                              | `enum TestCategory`           | 否       | `—`                          | 测试大类，决定模块内用哪套算分逻辑                                                |
+| `module`                                | `enum TestModule`             | 否       | `PERSONALITY`                | 所属模块（ADR-038）：决定结果写进哪份画像、出哪种报告；三个模块互不干扰           |
 | `description`                           | `String @db.VarChar(512)`     | 是       | `—`                          | 用户可见的测试说明                                                                |
 | `version`                               | `String @db.VarChar(16)`      | 否       | `"1.0.0"`                    | 量表版本（题目集变更时升版本，写进 `test_sessions.definitionVersion` 保证复现）   |
 | `status`                                | `enum TestDefinitionStatus`   | 否       | `DRAFT`                      | 生命周期状态                                                                      |
@@ -4011,6 +4012,25 @@ enum TestCategory {
   @@map("test_category")
 }
 
+/// 测评模块（ADR-038：三个模块互不干扰）
+///
+/// 与 `TestCategory` 是**两层**概念，不要合并：
+///   · `TestModule` 决定「这份测评属于哪个模块、结果写进哪份画像、出哪种报告」；
+///   · `TestCategory` 决定「模块内用哪套算分逻辑」。
+/// 一个模块下可以有多个 category（如人格模块含 MBTI / BIG_FIVE / COMPREHENSIVE）。
+enum TestModule {
+  /// MBTI 人格测试（画像表 `personality_profiles`）
+  PERSONALITY
+
+  /// 情感测评（含情侣匹配）
+  EMOTION
+
+  /// 心理健康测评 —— **只给结论，不给建议**
+  MENTAL_HEALTH
+
+  @@map("test_module")
+}
+
 /// 测试定义生命周期
 enum TestDefinitionStatus {
   DRAFT
@@ -4611,6 +4631,8 @@ model TestDefinition {
   code               String                @unique @db.VarChar(32)
   name               String                @db.VarChar(64)
   category           TestCategory
+  /// 所属模块（ADR-038）：结果写进哪份画像、出哪种报告都由它决定
+  module             TestModule            @default(PERSONALITY)
   description        String?               @db.VarChar(512)
   version            String                @default("1.0.0") @db.VarChar(16)
   status             TestDefinitionStatus  @default(DRAFT)
@@ -4634,6 +4656,7 @@ model TestDefinition {
   results            TestResult[]
 
   @@index([category, isActive])
+  @@index([module, isActive])
   @@index([isActive, sortOrder])
   @@map("test_definitions")
 }
@@ -6289,6 +6312,7 @@ model UserPhoneHistory {
 | 4   | `ConsentType`               | `consent_type`                | `PRIVACY_POLICY`=隐私政策；`TERMS_OF_SERVICE`=服务协议；`AGE_DECLARATION`=年龄声明；`AI_CONTENT_NOTICE`=AI 内容提示；`MARKETING`=营销授权                                                                                                                                                                        |
 | 5   | `DeletionRequestStatus`     | `deletion_request_status`     | `PENDING`=冷静期待执行；`PROCESSING`=正在匿名化；`COMPLETED`=已完成；`CANCELLED`=用户取消                                                                                                                                                                                                                        |
 | 6   | `TestCategory`              | `test_category`               | `MBTI`=MBTI 类型论；`BIG_FIVE`=大五人格；`RELATIONSHIP_STYLE`=关系风格；`COMPREHENSIVE`=综合（多引擎合并）                                                                                                                                                                                                       |
+| 6.1 | `TestModule`                | `test_module`                 | `PERSONALITY`=MBTI 人格测试；`EMOTION`=情感测评（含情侣匹配）；`MENTAL_HEALTH`=心理健康测评（**只给结论、不给建议**）。由 ADR-038 引入：三个模块各自独立画像、互不干扰                                                                                                                                           |
 | 7   | `TestDefinitionStatus`      | `test_definition_status`      | `DRAFT`=草稿；`ACTIVE`=已发布；`ARCHIVED`=已归档                                                                                                                                                                                                                                                                 |
 | 8   | `QuestionSelectionMode`     | `question_selection_mode`     | `STATIC_SET`=固定题目集合；`DIMENSION_QUOTA`=按维度配额动态抽取                                                                                                                                                                                                                                                  |
 | 9   | `QuestionType`              | `question_type`               | `LIKERT5`=5 点李克特量表；`BINARY`=二选一；`FORCED_CHOICE`=迫选；`RANK`=排序                                                                                                                                                                                                                                     |

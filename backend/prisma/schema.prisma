@@ -97,6 +97,25 @@ enum TestCategory {
   @@map("test_category")
 }
 
+/// 测评模块（ADR-038：三个模块互不干扰）
+///
+/// 与 `TestCategory` 是**两层**概念，不要合并：
+///   · `TestModule` 决定「这份测评属于哪个模块、结果写进哪份画像、出哪种报告」；
+///   · `TestCategory` 决定「模块内用哪套算分逻辑」。
+/// 一个模块下可以有多个 category（如人格模块含 MBTI / BIG_FIVE / COMPREHENSIVE）。
+enum TestModule {
+  /// MBTI 人格测试（画像表 `personality_profiles`）
+  PERSONALITY
+
+  /// 情感测评（含情侣匹配）
+  EMOTION
+
+  /// 心理健康测评 —— **只给结论，不给建议**
+  MENTAL_HEALTH
+
+  @@map("test_module")
+}
+
 /// 测试定义生命周期
 enum TestDefinitionStatus {
   DRAFT
@@ -697,6 +716,8 @@ model TestDefinition {
   code               String                @unique @db.VarChar(32)
   name               String                @db.VarChar(64)
   category           TestCategory
+  /// 所属模块（ADR-038）：结果写进哪份画像、出哪种报告都由它决定
+  module             TestModule            @default(PERSONALITY)
   description        String?               @db.VarChar(512)
   version            String                @default("1.0.0") @db.VarChar(16)
   status             TestDefinitionStatus  @default(DRAFT)
@@ -720,6 +741,7 @@ model TestDefinition {
   results            TestResult[]
 
   @@index([category, isActive])
+  @@index([module, isActive])
   @@index([isActive, sortOrder])
   @@map("test_definitions")
 }

@@ -15,6 +15,7 @@ export const TEST_DEFINITIONS: SeedTestDefinition[] = [
     code: 'MBTI_LITE',
     name: '人格速测（MBTI 精简版）',
     category: 'MBTI',
+    module: 'PERSONALITY',
     description:
       '基于荣格类型学的四维度人格速测，32 道题覆盖能量来源、信息获取、决策方式与生活态度四个维度，约 5 分钟完成。',
     version: '1.0.0',
@@ -29,6 +30,7 @@ export const TEST_DEFINITIONS: SeedTestDefinition[] = [
     code: 'BIG_FIVE_50',
     name: '大五人格测评（50 题）',
     category: 'BIG_FIVE',
+    module: 'PERSONALITY',
     description:
       '基于五因素人格理论（Big Five）的标准测评，50 道题覆盖开放性、尽责性、外向性、宜人性与神经质五个特质，约 8 分钟完成。',
     version: '1.0.0',
@@ -43,6 +45,7 @@ export const TEST_DEFINITIONS: SeedTestDefinition[] = [
     code: 'MBTI_FULL',
     name: '人格深度测评（MBTI 完整版）',
     category: 'COMPREHENSIVE',
+    module: 'PERSONALITY',
     description: '在精简版基础上扩展的深度测评，包含 MBTI 四维度与大五人格的联合评估，用于生成更精细的画像与报告。',
     version: '1.0.0',
     // 尚未灌入配套题库（64 题），保持 DRAFT + isActive=false，避免被误用
