@@ -93,6 +93,80 @@ describe('请求层', () => {
     });
   });
 
+  /**
+   * 冷启动鉴权竞态（**真实事故**）
+   *
+   * `App.vue` 的 `onLaunch` 把 `silentLogin()` 与系统配置**并行**发起，而首页 setup 会立刻取数。
+   * `wx.login` → 换令牌是一次网络往返，必然晚于首屏请求，于是首页在"还没有令牌"时发出一串请求
+   * —— 实测在微信开发者工具里表现为 `personality/me` / `reports` / `tests` **三个 401**，
+   * 而首轮登录还没有 refresh token，401 续期也救不回来，首页就停在游客态。
+   */
+  describe('冷启动：鉴权请求先等首轮静默登录', () => {
+    it('【关键】没有令牌时先等登录结束，并用登录后拿到的令牌发请求', async () => {
+      let token: string | null = null;
+      const ensureAuthReady = vi.fn(async () => {
+        token = 'token-after-silent-login';
+      });
+
+      registerRequestHooks({ getAccessToken: () => token, ensureAuthReady });
+      enqueue(okBody({ ok: true }));
+
+      await request({ url: '/personality/me' });
+
+      expect(ensureAuthReady).toHaveBeenCalledTimes(1);
+      expect(captured[0]?.header['Authorization']).toBe('Bearer token-after-silent-login');
+    });
+
+    it('已有令牌时不做任何等待（否则每个请求都要多挂一次 promise 链）', async () => {
+      const ensureAuthReady = vi.fn(async () => undefined);
+
+      registerRequestHooks({ getAccessToken: () => 'existing-token', ensureAuthReady });
+      enqueue(okBody({ ok: true }));
+
+      await request({ url: '/personality/me' });
+
+      expect(ensureAuthReady).not.toHaveBeenCalled();
+      expect(captured[0]?.header['Authorization']).toBe('Bearer existing-token');
+    });
+
+    it('并发请求只等待一次（single-flight，不会重复 wx.login）', async () => {
+      let token: string | null = null;
+      const ensureAuthReady = vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        token = 't';
+      });
+
+      registerRequestHooks({ getAccessToken: () => token, ensureAuthReady });
+      enqueue(okBody({ a: 1 }), okBody({ b: 2 }));
+
+      await Promise.all([request({ url: '/a' }), request({ url: '/b' })]);
+
+      expect(ensureAuthReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('公开接口（needAuth=false）不被登录阻塞', async () => {
+      const ensureAuthReady = vi.fn(async () => undefined);
+
+      registerRequestHooks({ getAccessToken: () => null, ensureAuthReady });
+      enqueue(okBody({ ok: true }));
+
+      await request({ url: '/tests', needAuth: false });
+
+      expect(ensureAuthReady).not.toHaveBeenCalled();
+    });
+
+    it('登录失败不阻断请求（游客仍可继续浏览，与设计一致）', async () => {
+      const ensureAuthReady = vi.fn(async () => {
+        throw new Error('登录失败');
+      });
+
+      registerRequestHooks({ getAccessToken: () => null, ensureAuthReady });
+      enqueue(okBody({ ok: true }));
+
+      await expect(request({ url: '/tests' })).resolves.toEqual({ ok: true });
+    });
+  });
+
   describe('响应解包', () => {
     it('成功响应只返回 data 字段', async () => {
       enqueue(okBody({ id: 'u1', mbti: 'INTJ' }));

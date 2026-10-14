@@ -201,10 +201,20 @@ describe('fetchUserInfo：把 MeView 归一化为统一用户形状', () => {
 
     await store.fetchUserInfo();
 
-    expect(urls[0]).toContain('/users/me');
-    expect(urls[0]).toContain('include=');
-    expect(urls[0]).toContain('profile');
-    expect(urls[0]).toContain('membership');
+    /**
+     * ⚠ 这里**不能断言 `urls[0]`**。
+     *
+     * 请求层在"还没有令牌"时会先等首轮静默登录结束（冷启动竞态修复），
+     * 因此未登录状态下**第一个请求是 `/auth/wechat/login`**，`/users/me` 在其后。
+     * 原来的 `urls[0]` 写法在修复前恰好成立 —— 因为那时 `fetchUserInfo` 会在
+     * **没有令牌**的情况下直接打 `/users/me`（真实环境就是一次 401，只是被 mock 盖住了）。
+     */
+    const meUrl = urls.find((url) => url.includes('/users/me'));
+
+    expect(meUrl).toBeDefined();
+    expect(meUrl).toContain('include=');
+    expect(meUrl).toContain('profile');
+    expect(meUrl).toContain('membership');
   });
 
   it('归一化后的会员摘要与登录响应同形（isActive / expiresAt / planCode）', async () => {

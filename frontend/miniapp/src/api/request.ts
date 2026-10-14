@@ -27,6 +27,15 @@ interface RequestHooks {
   getAccessToken: () => string | null;
   /** 刷新登录态；返回新的 accessToken，失败返回 null */
   refreshAccessToken: () => Promise<string | null>;
+  /**
+   * 确保「首轮静默登录」已经结束（可选；未注册则视为无需等待）
+   *
+   * 存在的理由是**冷启动竞态**：`App.vue` 的 `onLaunch` 把 `silentLogin()` 与系统配置
+   * **并行**发起，而首页 setup 会立刻取数。`wx.login` → 换令牌是一次网络往返，
+   * 必然晚于首屏请求，于是首页会在"还没有令牌"时打出一串 401
+   *（开发者工具实测：`personality/me` / `reports` / `tests` 三个 401）。
+   */
+  ensureAuthReady?: () => Promise<unknown>;
   /** 登录态彻底失效时的回调（跳转登录页、清理状态） */
   onUnauthorized: () => void;
 }
@@ -105,6 +114,37 @@ const refreshOnce = async (): Promise<string | null> => {
       });
   }
   return refreshPromise;
+};
+
+// ============================================================================
+// 首轮静默登录就绪：single-flight，避免首屏一串 401
+// ============================================================================
+
+let authReadyPromise: Promise<unknown> | null = null;
+
+/**
+ * 等首轮静默登录结束
+ *
+ * **只在"当前还没有令牌"时才等待**：已登录的情况下这里直接返回，
+ * 不会给每个请求都挂一次 promise 链（这是它敢放在请求主路径上的原因）。
+ *
+ * 没有令牌又有登录在途时不等待的话，首屏那几个鉴权请求必然 401 ——
+ * 而 401 之后虽然有续期重放逻辑，但**首轮登录还没有 refresh token**，
+ * 续期无从谈起，结果是首页停在游客态、用户以为"没登录"。
+ */
+const ensureAuthReadyOnce = async (): Promise<void> => {
+  if (hooks.ensureAuthReady === undefined || hooks.getAccessToken()) return;
+
+  if (authReadyPromise === null) {
+    authReadyPromise = hooks
+      .ensureAuthReady()
+      .catch(() => undefined)
+      .finally(() => {
+        authReadyPromise = null;
+      });
+  }
+
+  await authReadyPromise;
 };
 
 // ============================================================================
@@ -300,6 +340,15 @@ const execute = async (options: RequestOptions): Promise<unknown> => {
    * hooks 里的 token 已经变了，此时应当**直接复用新凭证重放**，而不是再发起一次续期。
    * 这既避免了续期风暴，也修复了「续期比 401 到达更快时重复刷新」的真实竞态。
    */
+  /**
+   * 鉴权请求先等首轮静默登录就绪（没令牌时才等，详见 `ensureAuthReadyOnce`）
+   *
+   * 必须在 `tokenUsed` 取值**之前** await —— 否则拿到的仍是登录前的空令牌。
+   */
+  if (options.needAuth !== false) {
+    await ensureAuthReadyOnce();
+  }
+
   let tokenUsed: string | null | undefined = options.needAuth === false ? null : hooks.getAccessToken();
 
   try {

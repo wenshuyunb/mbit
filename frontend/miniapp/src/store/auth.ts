@@ -236,6 +236,13 @@ export const useAuthStore = defineStore('auth', () => {
   registerRequestHooks({
     getAccessToken: () => accessToken.value,
     refreshAccessToken: refresh,
+    /**
+     * 供请求层在「还没有令牌」时等待首轮静默登录结束
+     *
+     * 直接复用 `silentLogin()` —— 它内部本来就有 `loginPromise` single-flight，
+     * 所以首屏多个并发请求只会触发**一次** `wx.login`，不会重复换码。
+     */
+    ensureAuthReady: silentLogin,
     onUnauthorized: () => {
       clearSession();
     },
