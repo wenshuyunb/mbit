@@ -16,12 +16,14 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { TestModule } from '@prisma/client';
 
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
+import { ModuleScoringService } from '../personality/engine/module-scoring.service';
 import type {
   EngineAnswer,
   EngineQuestion,
@@ -189,6 +191,13 @@ export class TestService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly engine: PersonalityEngine,
+    /**
+     * 按模块分派算分（ADR-038）
+     *
+     * `engine` 仍然保留：结果视图组装（`buildResultView`）等地方按人格模块的结构取数，
+     * 那些是**展示层**的需要，与"用哪个算分器"是两件事。
+     */
+    private readonly moduleScoring: ModuleScoringService,
   ) {}
 
   // ==========================================================================
@@ -704,7 +713,17 @@ export class TestService {
     // ----------------------------------------------------------- 算分（纯函数，<10ms）
     const scoringStartedAt = Date.now();
 
-    const output = this.engine.compute({
+    /**
+     * 按**模块**分派算分（ADR-038）
+     *
+     * 此前这里直接调 `this.engine.compute(…)`，等于假设"所有测评都是人格测评" ——
+     * 后果是新增任何一类测评都会走进下面那道 `mbti.type === null` 门禁，
+     * 以 `40011`（HTTP 500）收场并**把用户已答的数据作废**。
+     *
+     * 调度器对**尚未接入**的模块显式抛错（同样 `40011`），而不是返回占位结果 ——
+     * 见 `module-scoring.service.ts` 文件头。
+     */
+    const output = this.moduleScoring.score(session.testDefinition.module, {
       questions: engineQuestions,
       answers: engineAnswers,
       relationshipRules,
@@ -712,7 +731,13 @@ export class TestService {
 
     const scoringDurationMs = Date.now() - scoringStartedAt;
 
-    // 契约规则 7：算分异常时**不产生半成品画像**
+    /**
+     * 契约规则 7：算分异常时**不产生半成品画像**
+     *
+     * ⚠ 这道门禁是**人格模块专属**的：人格画像以 MBTI 四字母为骨架，算不出类型就没有意义。
+     * 情感与心理健康模块接入时（阶段 3 / 4）各自需要自己的完整性门禁 ——
+     * 不要把它当成通用校验照搬过去（情绪量表本来就没有"类型"这个概念）。
+     */
     if (output.mbti.type === null) {
       this.logger.error(
         `算分后 MBTI 类型为空，题库维度配置异常 sessionId=${sessionId} rawScores=${JSON.stringify(output.rawScores.dimensions)}`,
@@ -792,6 +817,25 @@ export class TestService {
       });
 
       // 画像版本：每次完成测试生成**新版本**，旧版本不重算（架构 §11.4 / ADR-018）
+      /**
+       * ADR-038 护栏：**只有人格模块的结果才写人格画像**
+       *
+       * 三个模块各自独立画像。把别的模块的结果写成人格画像、并翻转 `isCurrent`，
+       * 会**顶掉用户真实的人格画像** —— 而报告链路读的正是 `isCurrent` 那一份，
+       * 于是用户会看到一份归属错误的画像，且没有任何报错。
+       *
+       * 现阶段调度器只登记了 PERSONALITY，所以这是一道**防御性断言**：
+       * 将来有人给新模块接入算分、却忘了给落库加分支时，这里会立刻失败。
+       * 宁可让接入者当场看到错误，也不要静默写出一份归属错误的画像。
+       */
+      if (session.testDefinition.module !== 'PERSONALITY') {
+        throw BusinessException.internal(
+          ErrorCode.PERSONALITY_PROFILE_BUILDING,
+          `模块「${session.testDefinition.module}」的结果不应写入人格画像（落库分支尚未接入）`,
+          { sessionId, module: session.testDefinition.module },
+        );
+      }
+
       const latest = await tx.personalityProfile.findFirst({
         where: { userId },
         orderBy: { version: 'desc' },
@@ -1116,6 +1160,13 @@ export class TestService {
     definitionCode: string;
     definitionVersion: string;
     testDefinitionId: string;
+    /**
+     * 所属模块（ADR-038）
+     *
+     * 随会话一起取出，是因为 `submit()` 必须**按模块**决定用哪个算分器、
+     * 以及结果该写进哪份画像；单独再查一次会多一次往返，且容易漏。
+     */
+    testDefinition: { module: TestModule };
     paperSnapshot: unknown;
     startedAt: Date | null;
     expiredAt: Date | null;
@@ -1130,6 +1181,7 @@ export class TestService {
         definitionCode: true,
         definitionVersion: true,
         testDefinitionId: true,
+        testDefinition: { select: { module: true } },
         paperSnapshot: true,
         startedAt: true,
         expiredAt: true,

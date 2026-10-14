@@ -13,6 +13,7 @@
 import type { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PersonalityEngine } from '../personality/engine/personality-engine.service';
+import { ModuleScoringService } from '../personality/engine/module-scoring.service';
 import type { PrismaService } from '../../infra/prisma/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
 import { TestService, type SaveAnswersResult } from './test.service';
@@ -138,6 +139,8 @@ const sessionRow = (overrides: Record<string, unknown> = {}): Record<string, unk
   definitionCode: 'MBTI_LITE',
   definitionVersion: '1.0.0',
   testDefinitionId: DEFINITION_ID,
+  /** ADR-038：`submit()` 按模块分派算分，因此会话行必须带出模块 */
+  testDefinition: { module: 'PERSONALITY' },
   paperSnapshot: buildSnapshot(),
   startedAt: new Date(Date.now() - 60_000),
   expiredAt: new Date(Date.now() + 3_600_000),
@@ -158,7 +161,15 @@ describe('TestService', () => {
   beforeEach(() => {
     prisma = createPrismaStub();
     redis = createRedisStub();
-    service = new TestService(prisma as unknown as PrismaService, redis, new PersonalityEngine());
+    /**
+     * 用**真实的** `ModuleScoringService` 而不是 mock
+     *
+     * 分派本身（模块 → 算分器）是被测行为的一部分：mock 掉它，就等于把
+     * "submit 到底用哪个算分器算分"这件事从测试里挖掉了。
+     */
+    const engine = new PersonalityEngine();
+
+    service = new TestService(prisma as unknown as PrismaService, redis, engine, new ModuleScoringService(engine));
 
     prisma.testSession.findUnique.mockResolvedValue(sessionRow());
   });
@@ -559,6 +570,73 @@ describe('TestService', () => {
 
       expect(result.result.relationshipStyle.attachment).toBe('SECURE');
       expect(result.result.relationshipStyle.loveLanguage).toEqual(['QUALITY_TIME']);
+    });
+
+    // ==========================================================================
+    // ADR-038：按模块分派算分 + 画像归属护栏
+    // ==========================================================================
+
+    /** 提交并取回错误（`BusinessException` 是 type-only 导入，不能 instanceof，按码与文案断言） */
+    const submitError = async (target: TestService): Promise<{ code: number; message: string; stack: string }> => {
+      try {
+        await target.submit(USER_ID, SESSION_ID, { confirm: true });
+      } catch (error) {
+        const thrown = error as { code?: number; message?: string; stack?: string };
+
+        return {
+          code: thrown.code ?? -1,
+          message: thrown.message ?? '',
+          /**
+           * 带上栈：非业务异常（如 TypeError）没有 `code`，
+           * 只报一个 `-1` 会让人只能靠猜 —— 这在"护栏没被走到"这类问题上代价很高。
+           */
+          stack: (thrown.stack ?? '').split('\n').slice(0, 4).join(' ← '),
+        };
+      }
+
+      return { code: -1, message: '（没有抛错）', stack: '' };
+    };
+
+    it('【关键】会话属于未接入的模块 → 显式报错，且**一行画像都不写**（不产出占位结果）', async () => {
+      prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
+      prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module: 'EMOTION' } }));
+
+      const error = await submitError(service);
+
+      expect(error.code).toBe(ErrorCode.PERSONALITY_PROFILE_BUILDING);
+      // 报错要点名是哪个模块没接入 —— 否则接入者只能靠猜
+      expect(error.message).toContain('EMOTION');
+
+      // 最关键的一条：绝不能"先把画像写了再说"
+      expect(prisma.personalityProfile.create).not.toHaveBeenCalled();
+      expect(prisma.personalityProfile.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('【关键·护栏】调度器能算出人格结果、但会话模块不是人格 → 拒绝写入人格画像', async () => {
+      prisma.testAnswer.findMany.mockResolvedValue(fullAnswers);
+      prisma.testSession.findUnique.mockResolvedValue(sessionRow({ testDefinition: { module: 'MENTAL_HEALTH' } }));
+
+      /**
+       * 模拟"将来某个模块已接入算分、但落库分支还没加"的状态：
+       * 调度器照常返回人格形状的结果，此时**护栏必须拦住它**。
+       * 这道断言在今天是防御性的，但它防的正是"别的模块的结果顶掉用户真实人格画像"
+       * 那个静默错误 —— 用真实调度器测不到（它会在更早处抛错），所以这里替换成透传实现。
+       */
+      const engine = new PersonalityEngine();
+      const passthrough = {
+        // ⚠ 签名必须是 `(module, input)` —— 只写一个参数会让 `input` 接到模块名上，
+        // 报出的错会变成引擎里的 `.map of undefined`，与本测试的意图完全无关
+        score: (_module: unknown, input: Parameters<PersonalityEngine['compute']>[0]) => engine.compute(input),
+      } as unknown as ModuleScoringService;
+      const guarded = new TestService(prisma as unknown as PrismaService, redis, engine, passthrough);
+
+      const error = await submitError(guarded);
+
+      // 字符串断言：失败时会把 message 与 stack 一起打印出来（对象断言不会显示 stack 的值）
+      expect(`${error.message} ← ${error.stack}`).toContain('不应写入人格画像');
+      expect(error.code).toBe(ErrorCode.PERSONALITY_PROFILE_BUILDING);
+      expect(prisma.personalityProfile.create).not.toHaveBeenCalled();
+      expect(prisma.personalityProfile.updateMany).not.toHaveBeenCalled();
     });
 
     it('【幂等】重复提交返回既有结果且不重复递增画像版本', async () => {
