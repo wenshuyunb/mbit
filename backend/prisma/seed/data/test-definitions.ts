@@ -56,4 +56,30 @@ export const TEST_DEFINITIONS: SeedTestDefinition[] = [
     sortOrder: 30,
     requiredEntitlement: null,
   },
+  {
+    /**
+     * ⚠ 这是**情感模块**的测评（ADR-038 阶段 3），不是人格测评
+     *
+     * `module: 'EMOTION'` 决定三件事，全部由代码强制而不靠约定：
+     *   ① `submit()` 走情感落库分支 → 写 `emotion_profiles`（**不碰**人格画像）
+     *   ② `ModuleScoringService` 用它自己的算分器（依恋双轴 / 爱的语言 / 冲突风格）
+     *   ③ 结果接口只返回情感字段，不含 `mbtiType` / `bigFive`
+     *
+     * `category` 用 `RELATIONSHIP_STYLE`：它衡量的是**关系中的风格**，
+     * 与模块是两个层次的概念（见 `TestModule` 枚举的注释）。
+     */
+    code: 'EMOTION_LITE',
+    name: '情感测评（亲密关系风格）',
+    category: 'RELATIONSHIP_STYLE',
+    module: 'EMOTION',
+    description:
+      '基于依恋理论（ECR 双轴）、爱的语言与冲突处理风格（TKI）三个成熟模型，52 道题看清你在亲密关系中的依恋类型、最在意的被爱方式与冲突时的反应，约 8 分钟完成。',
+    version: '1.0.0',
+    status: 'ACTIVE',
+    isActive: true,
+    estimatedMinutes: 8,
+    selectionMode: 'STATIC_SET',
+    sortOrder: 40,
+    requiredEntitlement: null,
+  },
 ];

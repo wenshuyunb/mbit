@@ -23,7 +23,29 @@ export type SeedRelationshipRule = RelationshipStyleRule & { description?: strin
 
 /** 可计分维度（与 Prisma Dimension 枚举对齐） */
 export type SeedDimension =
-  'EI' | 'SN' | 'TF' | 'JP' | 'OPENNESS' | 'CONSCIENTIOUSNESS' | 'EXTRAVERSION' | 'AGREEABLENESS' | 'NEUROTICISM';
+  // 人格模块
+  | 'EI'
+  | 'SN'
+  | 'TF'
+  | 'JP'
+  | 'OPENNESS'
+  | 'CONSCIENTIOUSNESS'
+  | 'EXTRAVERSION'
+  | 'AGREEABLENESS'
+  | 'NEUROTICISM'
+  // 情感模块（ADR-038 阶段 3）：依恋 ECR 双轴 / 爱的语言五项 / 冲突风格五项 TKI
+  | 'ATTACH_ANXIETY'
+  | 'ATTACH_AVOIDANCE'
+  | 'LOVE_WORDS'
+  | 'LOVE_TIME'
+  | 'LOVE_GIFTS'
+  | 'LOVE_SERVICE'
+  | 'LOVE_TOUCH'
+  | 'CONFLICT_COLLABORATING'
+  | 'CONFLICT_COMPROMISING'
+  | 'CONFLICT_ACCOMMODATING'
+  | 'CONFLICT_AVOIDING'
+  | 'CONFLICT_COMPETING';
 
 /** 种子题目 */
 export interface SeedQuestion {
