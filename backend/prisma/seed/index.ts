@@ -23,6 +23,7 @@ import {
   ALL_ADMIN_PERMISSIONS,
 } from '../../src/modules/admin/rbac/admin-permission.constants';
 import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './data';
+import { ALL_EMOTION_SCENARIOS, PENDING_AUDIENCES } from './data/questions.emotion-scenarios';
 import { MEMBERSHIP_PLANS, PRODUCTS } from './data/catalog';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
@@ -72,6 +73,8 @@ interface SeedSummary {
   adminRoles?: number;
   /** 角色-权限映射数 */
   adminRolePermissions?: number;
+  /** 场景题数（ADR-039；见 `seedEmotionScenarios` 的说明） */
+  scenarioQuestions?: number;
 }
 
 // ============================================================================
@@ -299,6 +302,85 @@ const seedQuestionsFor = async (definitionCode: string, questions: SeedQuestion[
   });
 
   return { definitions: 0, questions: questions.length, options: optionCount, rules: 0 };
+};
+
+/**
+ * 灌入沉浸式场景题（ADR-039）
+ *
+ * ## 为什么它**暂时**写成 `isActive: false`
+ *
+ * 场景题按适用人群分三套（`audience`），而**抽题时的性别过滤属于下一步**
+ * （ADR-039 第四步）。过滤没接上之前，如果这些题是启用状态，
+ * `EMOTION_LITE` 的试卷会同时抽到 52 道量表题 + 所有已灌入的场景题 ——
+ * 一次"只改题库"的提交会把线上测评直接弄坏。
+ *
+ * 因此本步先**只把内容灌进去**（真实数据、真实分值、真实反馈），
+ * 等性别过滤与量表题退役一起上线时，把这里的 `isActive` 翻成 `true` 即可。
+ * 这样每一步提交都是可用状态，而不是"半截改到一半"。
+ *
+ * ## 选项为什么必须带 `scoreMap` 与 `feedback`
+ *
+ * 场景题的分值挂在**选项**上（量表题的分值是用户所选的值）。少写 `scoreMap`
+ * 会让该选项的所有维度都是 0 分；少写 `feedback` 则用户选完什么都不发生 ——
+ * 沉浸感正是靠这句即时反馈撑起来的。
+ */
+const seedEmotionScenarios = async (): Promise<{ questions: number; options: number }> => {
+  if (ALL_EMOTION_SCENARIOS.length === 0) return { questions: 0, options: 0 };
+
+  const definition = await prisma.testDefinition.findUnique({
+    where: { code: 'EMOTION_LITE' },
+    select: { id: true },
+  });
+
+  if (!definition) {
+    throw new Error('未找到测试定义 EMOTION_LITE（请先执行 seedDefinitions）');
+  }
+
+  let optionCount = 0;
+
+  for (const scenario of ALL_EMOTION_SCENARIOS) {
+    const questionData = {
+      testDefinitionId: definition.id,
+      content: scenario.content,
+      scenarioPrompt: scenario.prompt,
+      audience: scenario.audience,
+      type: 'FORCED_CHOICE' as QuestionType,
+      // 主维度取第一个键：只用于后台展示与"没有 scoreMap 时"的兜底，
+      // 真正的计分按所选选项的 scoreMap 走（可同时命中多个维度）
+      dimension: Object.keys(scenario.options[0]?.scores ?? {})[0] as Dimension,
+      weight: 1,
+      reverseScored: false,
+      order: Number.parseInt(scenario.code.slice(-2), 10),
+      isActive: false,
+      tags: scenario.tags,
+    };
+
+    const saved = await prisma.question.upsert({
+      where: { code: scenario.code },
+      create: { code: scenario.code, ...questionData },
+      update: questionData,
+      select: { id: true },
+    });
+
+    for (const [index, option] of scenario.options.entries()) {
+      const optionData = {
+        label: option.label,
+        value: index + 1,
+        scoreMap: option.scores as Prisma.InputJsonValue,
+        feedback: option.feedback,
+        isActive: true,
+      };
+
+      await prisma.questionOption.upsert({
+        where: { questionId_order: { questionId: saved.id, order: index } },
+        create: { questionId: saved.id, order: index, ...optionData },
+        update: optionData,
+      });
+      optionCount += 1;
+    }
+  }
+
+  return { questions: ALL_EMOTION_SCENARIOS.length, options: optionCount };
 };
 
 const seedRelationshipRules = async (): Promise<number> => {
@@ -737,6 +819,7 @@ async function main(): Promise<void> {
   summary.promptTemplates = await seedPromptTemplates();
   summary.systemConfigs = await seedSystemConfigs();
   summary.compatibilityWeights = await seedCompatibilityWeights();
+  summary.scenarioQuestions = (await seedEmotionScenarios()).questions;
 
   // 顺序不可颠倒：商品通过 membershipPlanId 引用套餐
   summary.membershipPlans = await seedMembershipPlans();
@@ -749,6 +832,13 @@ async function main(): Promise<void> {
 
   const elapsed = Date.now() - started;
 
+  if (PENDING_AUDIENCES.length > 0) {
+    console.warn(
+      `⚠ 场景题库尚未交付齐全：还差 ${PENDING_AUDIENCES.join(' / ')} 三套中的 ${PENDING_AUDIENCES.length} 套。` +
+        '这三套（男 / 女 / 中性）必须同等完整 —— 只交付一部分时，选到缺失那套的用户会拿到空试卷。',
+    );
+  }
+
   console.log(
     [
       '种子数据灌入完成：',
@@ -759,6 +849,7 @@ async function main(): Promise<void> {
       `  Prompt   : ${summary.promptTemplates ?? 0}`,
       `  系统配置 : ${summary.systemConfigs ?? 0}`,
       `  匹配权重 : ${summary.compatibilityWeights ?? 0}`,
+      `  场景题   : ${summary.scenarioQuestions ?? 0}（未启用：等性别过滤与量表题退役一起上线）`,
       `  会员套餐 : ${summary.membershipPlans ?? 0}`,
       `  商品     : ${summary.products ?? 0}`,
       `  权限点   : ${summary.adminPermissions ?? 0}`,

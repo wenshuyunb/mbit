@@ -57,6 +57,50 @@ export type SeedDimension =
   | 'MH_ENERGY'
   | 'MH_LONELINESS';
 
+/** 适用人群（与 Prisma `QuestionAudience` 对齐；ADR-039） */
+export type SeedAudience = 'ALL' | 'MALE' | 'FEMALE' | 'NEUTRAL';
+
+/**
+ * 场景题的一个选项（沉浸式情感测评专用；ADR-039）
+ *
+ * ⚠ `scores` 是**计分依据**：量表题的分值就是用户所选的值，而场景题的一个选择
+ * 会同时透露多个维度（依恋 + 冲突风格 + 爱的语言），分值必须挂在选项上。
+ * 键必须用**维度枚举名**（`ATTACH_ANXIETY` 等），大小写不敏感。
+ */
+export interface SeedScenarioOption {
+  /** 选项文案，即"你会怎么做"的一种做法（12–24 字，动词开头更自然） */
+  label: string;
+  /** 该做法在各维度上的分值（0–5，与选项分值的量纲一致） */
+  scores: Partial<Record<SeedDimension, number>>;
+  /**
+   * 选中后的**即时反馈**（一句话，14–30 字）
+   *
+   * ⚠ 只描述"这样做常见的后续"，🚫 不评判对错、不给建议。
+   * 这是情感模块的红线：本模块做的是测量，不是指导。
+   */
+  feedback: string;
+}
+
+/** 沉浸式场景题（一屏一场景，用户选"你会怎么做"） */
+export interface SeedScenarioQuestion {
+  /** 编码：`SC_<适用人群>_<序号>`，全局唯一 */
+  code: string;
+  /** 适用人群：男 / 女 / 中性三套独立内容 */
+  audience: SeedAudience;
+  /**
+   * 情境叙述（40–90 字，第二人称、具体到时间地点与对方说的话）
+   *
+   * 沉浸感来自具体的处境而不是抽象的陈述 —— 这是本次改版的全部意义所在。
+   */
+  content: string;
+  /** 提问句（统一为"这时候你会怎么做？"这类，不超过 20 字） */
+  prompt: string;
+  /** 3 个做法（选项顺序固定、**不乱序**：算分依据绑定在选项上，乱序出错无法察觉） */
+  options: SeedScenarioOption[];
+  /** 标签，用于后台筛选 */
+  tags: string[];
+}
+
 /** 种子题目 */
 export interface SeedQuestion {
   /** 题目编码，全局唯一，形如 `Q_EI_001`（维度前缀 + 三位序号） */
