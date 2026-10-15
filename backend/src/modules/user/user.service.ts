@@ -119,6 +119,14 @@ export interface MeView {
   nickname: string | null;
   avatarUrl: string | null;
   gender: string;
+  /**
+   * 性别**是否已被询问过**（ADR-039）
+   *
+   * ⚠ 不能只看 `gender === 'UNKNOWN'` 来判断要不要弹性别引导：
+   * `UNKNOWN` 既可能是"从没问过"，也可能是"问过了、用户选择不说"。
+   * 前者要弹，后者再弹就是骚扰。因此单独回一个「问过了」的标记。
+   */
+  genderDeclared: boolean;
   birthday: string | null;
   ageRange: string | null;
   phoneBound: boolean;
@@ -141,6 +149,8 @@ export interface ProfileUpdatedView {
   nickname: string | null;
   avatarUrl: string | null;
   gender: string;
+  /** 见 `MeView.genderDeclared` */
+  genderDeclared: boolean;
   birthday: string | null;
   ageRange: string | null;
   version: number;
@@ -322,6 +332,7 @@ export class UserService {
         nickname: true,
         avatarUrl: true,
         gender: true,
+        genderDeclaredAt: true,
         birthday: true,
         phoneEnc: true,
         phoneHash: true,
@@ -345,6 +356,7 @@ export class UserService {
       nickname: user.nickname,
       avatarUrl: user.avatarUrl,
       gender: user.gender,
+      genderDeclared: Boolean(user.genderDeclaredAt),
       birthday: user.birthday ? user.birthday.toISOString().slice(0, 10) : null,
       ageRange: toAgeRange(user.birthday),
       phoneBound: user.phoneHash !== null,
@@ -450,7 +462,22 @@ export class UserService {
     const data: Record<string, unknown> = { version: { increment: 1 } };
 
     if (dto.nickname !== undefined) data['nickname'] = dto.nickname;
-    if (dto.gender !== undefined) data['gender'] = dto.gender === null ? 'UNKNOWN' : dto.gender;
+
+    if (dto.gender !== undefined) {
+      data['gender'] = dto.gender === null ? 'UNKNOWN' : dto.gender;
+
+      /**
+       * 记下「性别**被询问过**」的时间（ADR-039）
+       *
+       * ⚠ 与 `gender` 本身是两件事：`UNKNOWN` 既可能是"从没问过"，
+       * 也可能是"问过了、用户选择不说"。只按 `gender = UNKNOWN` 判断
+       * 会让选了"不想说"的人每次进入都被再问一遍。
+       *
+       * 因此**只要用户做出了选择就置位**（包括选 `UNKNOWN` / 传 `null`），
+       * 而改性别时不重置 —— 语义是"问过了"，不是"填了"。
+       */
+      data['genderDeclaredAt'] = new Date();
+    }
 
     if (dto.birthday !== undefined) {
       if (dto.birthday === null) {
@@ -495,6 +522,7 @@ export class UserService {
         nickname: true,
         avatarUrl: true,
         gender: true,
+        genderDeclaredAt: true,
         birthday: true,
         version: true,
         updatedAt: true,
@@ -510,6 +538,7 @@ export class UserService {
       nickname: fresh.nickname,
       avatarUrl: fresh.avatarUrl,
       gender: fresh.gender,
+      genderDeclared: Boolean(fresh.genderDeclaredAt),
       birthday: fresh.birthday ? fresh.birthday.toISOString().slice(0, 10) : null,
       ageRange: toAgeRange(fresh.birthday),
       version: fresh.version,

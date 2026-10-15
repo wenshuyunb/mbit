@@ -80,6 +80,13 @@ export interface MeView {
   nickname: string | null;
   avatarUrl: string | null;
   gender: string;
+  /**
+   * 性别**是否已被询问过**（ADR-039）
+   *
+   * ⚠ 不能用 `gender === 'UNKNOWN'` 代替：`UNKNOWN` 既可能是"从没问过"，
+   * 也可能是"问过了、用户选择不说"。前者要弹引导，后者再弹就是骚扰。
+   */
+  genderDeclared: boolean;
   birthday: string | null;
   ageRange: string | null;
   phoneBound: boolean;
@@ -109,3 +116,48 @@ export const getMe = (query: GetMeQuery = {}): Promise<MeView> => {
     showError: false,
   });
 };
+
+/**
+ * 性别取值（后端 `PATCH /users/me` 的 DTO 只接受这三个）
+ *
+ * ⚠ 数据层的 `UserGender` 枚举还有 `OTHER`，但接口层**不接受**它 ——
+ * 产品的三个选项是「男生 / 女生 / 不想说」，"不想说"落在 `UNKNOWN`。
+ * 前端只发这三个值，避免出现"类型允许、接口必拒"的死角。
+ */
+export type UserGenderCode = 'MALE' | 'FEMALE' | 'UNKNOWN';
+
+/** `PATCH /users/me` 的请求体 */
+export interface UpdateProfilePayload {
+  nickname?: string | null;
+  gender?: UserGenderCode | null;
+  /** `YYYY-MM-DD` */
+  birthday?: string | null;
+  /** 乐观锁版本号；不传则最后写入者胜 */
+  expectedVersion?: number;
+}
+
+/** `PATCH /users/me` 响应（后端 `ProfileUpdatedView`） */
+export interface ProfileUpdatedView {
+  id: string;
+  nickname: string | null;
+  avatarUrl: string | null;
+  gender: string;
+  /** 见 `MeView.genderDeclared` */
+  genderDeclared: boolean;
+  birthday: string | null;
+  ageRange: string | null;
+  version: number;
+  updatedAt: string;
+}
+
+/**
+ * 修改当前用户资料
+ *
+ * ⚠ 后端在 `gender` 传入时（**包括传 `UNKNOWN` / `null`**）会一并记下
+ * "性别已被询问过"的时间，因此：
+ *   · 用户选择「不想说」也必须发这个请求 —— 只在前端记本地标记的话，
+ *     换设备/清缓存后会再被问一遍；
+ *   · 只改昵称时**不要**顺手带上 `gender`，否则等于替用户"确认"了一次性别。
+ */
+export const updateProfile = (payload: UpdateProfilePayload): Promise<ProfileUpdatedView> =>
+  http.patch<ProfileUpdatedView>('/users/me', payload, { timeout: 20_000 });

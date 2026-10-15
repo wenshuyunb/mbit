@@ -1450,6 +1450,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     "nickname": "小满",
     "avatarUrl": "https://cdn.soulmap.cn/avatar/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/20260214_a7c3f9.webp",
     "gender": "FEMALE",
+    "genderDeclared": true,
     "birthday": "1996-08-21",
     "ageRange": "25-29",
     "phoneBound": true,
@@ -1518,6 +1519,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 3. `include` 未指定的块**不返回对应字段**（不返回 `null`，直接省略 key），前端类型需按可选字段处理。
 4. `stats.aiMessageCount` 为累计计数（Redis 计数器，允许 ±1 误差），仅用于展示。
 5. 该接口**不返回** `openid`、`unionid`、`session_key`。
+6. **`genderDeclared`**（ADR-039）：`gender` **是否已被询问过**。
+   ```
+   · false → 客户端应弹一次性别引导（它决定情感测评出哪一套场景题、报告用哪套措辞）
+   · true  → 不再询问，即使 gender 仍是 UNKNOWN（那是用户选了「不想说」）
+   · 🚫 不要用 gender === 'UNKNOWN' 代替它：UNKNOWN 既可能是"没问过"，
+     也可能是"问过了但选择不说"，两者都取中性场景，但交互必须不同
+   ```
 
 #### 3.2.2 `PATCH /api/v1/users/me` — 更新用户资料 🔑
 
@@ -1534,7 +1542,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | 字段              | 类型           | 必填 | 约束                                             | 说明                                                                    |
 | ----------------- | -------------- | ---- | ------------------------------------------------ | ----------------------------------------------------------------------- |
 | `nickname`        | string \| null | 否   | 1–20 字符；trim 后非空；过敏感词与 `msgSecCheck` | 昵称                                                                    |
-| `gender`          | string \| null | 否   | 枚举 `MALE` \| `FEMALE` \| `UNKNOWN`             | 性别（`UNKNOWN` 等价于清空）                                            |
+| `gender`          | string \| null | 否   | 枚举 `MALE` \| `FEMALE` \| `UNKNOWN`             | 性别；**传入即视为"已询问过"**（含传 `UNKNOWN`/`null`，见下方规则 5）   |
 | `birthday`        | string \| null | 否   | `YYYY-MM-DD`；范围 `1900-01-01` ~ 今天           | 生日（用于年龄区间计算）                                                |
 | `expectedVersion` | number         | 否   | 整数 ≥ 0                                         | 乐观锁版本（来自 `GET /users/me` 响应的 `version`）；不匹配返回 `10011` |
 
@@ -1560,6 +1568,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     "nickname": "小满",
     "avatarUrl": "https://cdn.soulmap.cn/avatar/0195f3a2-7c4e-7b31-9a6d-2f5c8e1b4d70/20260214_a7c3f9.webp",
     "gender": "FEMALE",
+    "genderDeclared": true,
     "birthday": "1996-08-21",
     "ageRange": "25-29",
     "version": 13,
@@ -1596,6 +1605,15 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 3. 昵称为自由文本，写入 AI Prompt 时必须经注入防护包裹（架构 10.3），本接口不负责该逻辑，由 `ContextBuilder` 统一处理。
 4. **乐观锁**：`version` 字段由 Prisma 层的 `version Int @default(0)` 提供（架构 8.3）。前端在编辑表单打开时记录 `version`，提交时带回；不传 `expectedVersion` 则**最后写入者胜**（弱校验，便于轻量场景）。
 5. 修改成功后写审计（用户侧资料变更日志，保留 180 天用于客服溯源）。
+6. **`gender` 与「已询问」是两件事**（ADR-039）：本接口**只要收到 `gender` 字段**
+   （`MALE` / `FEMALE` / `UNKNOWN` / `null` 都算）就记下"性别已被询问过"，
+   响应与 `GET /users/me` 的 `genderDeclared` 随即变为 `true`。
+   ```
+   · 「不想说」也必须发这个请求 —— 只在前端记本地标记，换设备/清缓存后会再被问一遍
+   · 🚫 只改昵称时不要顺手带 gender，那等于替用户"确认"了一次性别
+   · 改性别不重置该标记（问过了就是问过了）
+   · 已生成的报告**不改写**：报告是当时的快照，改性别只影响之后的新会话
+   ```
 
 #### 3.2.3 `POST /api/v1/users/me/avatar` — 上传头像（chooseAvatar 流程） 🔑
 

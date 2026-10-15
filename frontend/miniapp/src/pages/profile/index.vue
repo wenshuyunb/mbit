@@ -46,6 +46,19 @@ const menuGroups = computed(() => [
     ],
   },
   {
+    title: '基本资料',
+    items: [
+      /**
+       * 性别（ADR-039）
+       *
+       * 它决定情感测评出**哪一套场景题**、以及报告用哪套措辞，
+       * 因此必须让用户能改 —— 一开始选错、或后来想法变了都很正常。
+       * 「已出的报告不改写」：报告是当时的快照，改性别只影响之后的新会话。
+       */
+      { key: 'gender', label: '性别', desc: `${authStore.genderText} · 决定测评场景与报告语气`, url: '' },
+    ],
+  },
+  {
     title: '隐私与合规',
     items: [
       { key: 'agreement', label: '用户协议', desc: '', url: '/pkgWebview/pages/agreement' },
@@ -110,6 +123,37 @@ const handleLogout = async (): Promise<void> => {
   uni.showToast({ title: '已退出登录', icon: 'none' });
 };
 
+/**
+ * 修改性别（ADR-039）
+ *
+ * 用 `uni.showActionSheet` 而不是跳到新页面：三个选项、一次点击就能选完，
+ * 为它开一个页面反而是负担。⚠ 「不想说」也走同一个接口 ——
+ * 服务端据此记下"已经问过了"，否则下次进来又会被问。
+ */
+const changeGender = (): void => {
+  const options = ['男生', '女生', '不想说'] as const;
+  const codes = ['MALE', 'FEMALE', 'UNKNOWN'] as const;
+
+  uni.showActionSheet({
+    itemList: [...options],
+    success: (res) => {
+      const code = codes[res.tapIndex];
+      if (!code) return;
+
+      void (async () => {
+        try {
+          await authStore.saveGender(code);
+          uni.showToast({ title: '已更新', icon: 'success' });
+        } catch (error) {
+          console.error('[profile] 保存性别失败：', error);
+          uni.showToast({ title: '保存失败，请稍后重试', icon: 'none' });
+        }
+      })();
+    },
+    fail: () => undefined,
+  });
+};
+
 const onMenuTap = (key: string, url: string): void => {
   if (key === 'deletion') {
     void requestDeletion();
@@ -117,6 +161,10 @@ const onMenuTap = (key: string, url: string): void => {
   }
   if (key === 'export') {
     requestExport();
+    return;
+  }
+  if (key === 'gender') {
+    changeGender();
     return;
   }
   goTo(url);

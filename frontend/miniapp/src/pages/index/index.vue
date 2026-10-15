@@ -19,6 +19,7 @@ import { computed } from 'vue';
 import { onPullDownRefresh, onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app';
 
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
+import GenderOnboarding from '@/components/GenderOnboarding.vue';
 import { useHome } from '@/composables/use-home';
 import { modulePresentation, type ModulePresentation } from '@/config/modules';
 import { useAppStore } from '@/store/app';
@@ -42,9 +43,20 @@ const introUrlOf = (entry: ModulePresentation): string =>
 
 const { hasProfile, profileError, profileBadge, primaryTitle, primaryDesc, reportDesc, loadHomeData } = useHome();
 
-/** 下拉刷新：同时刷新首页数据与系统配置 */
+/**
+ * 下拉刷新：同时刷新首页数据、系统配置与用户快照
+ *
+ * ⚠ 必须带上 `fetchUserInfo()`：`genderDeclared`（性别问过没有，ADR-039）
+ * 只有 `/users/me` 才返回，登录响应里没有。少了它，性别引导在**首屏永远不弹** ——
+ * 而"不弹"的表现是静默的：用户照常能用，只是情感测评永远出中性版场景。
+ */
 const refresh = async (): Promise<void> => {
-  await Promise.allSettled([loadHomeData(), appStore.loadSystemConfig({ force: true })]);
+  await Promise.allSettled([loadHomeData(), appStore.loadSystemConfig({ force: true }), authStore.fetchUserInfo()]);
+};
+
+/** 性别引导完成 */
+const onGenderDone = (): void => {
+  uni.showToast({ title: '已记录，测评会按这个来出题', icon: 'none' });
 };
 
 const greeting = computed(() => {
@@ -157,7 +169,7 @@ onShow(() => {
 });
 
 onPullDownRefresh(async () => {
-  await Promise.allSettled([refresh(), authStore.fetchUserInfo()]);
+  await refresh();
   uni.stopPullDownRefresh();
 });
 
@@ -198,6 +210,14 @@ void refresh();
 
     <!-- 合规免责声明（AI 内容展示必备） -->
     <SafetyDisclaimer display="block" />
+
+    <!--
+      性别引导（ADR-039）：只在服务端明确说"没问过"时出现
+
+      它决定情感测评出哪一套场景题，所以必须在用户进入测评之前问一次；
+      放在首页而不是测评前，是因为**报告也要按性别出**，只问在测评入口就晚了。
+    -->
+    <GenderOnboarding v-if="authStore.needsGenderSetup" @done="onGenderDone" />
   </view>
 </template>
 

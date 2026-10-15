@@ -24,7 +24,7 @@ import {
 } from '@/api/auth';
 import { http, registerRequestHooks } from '@/api/request';
 import { ERROR_CODES, type ApiError } from '@/api/types';
-import { getMe, type MeView } from '@/api/user';
+import { getMe, updateProfile, type MeView, type UserGenderCode } from '@/api/user';
 import { STORAGE_KEYS } from '@/config/constants';
 import { storage } from '@/utils/storage';
 
@@ -35,7 +35,17 @@ import { storage } from '@/utils/storage';
  * 的结果由 `toUserInfo` 归一化过来。这样 store 只有一个用户形状，
  * 页面无需同时考虑两种来源的差异。
  */
-export type UserInfo = AuthUserView;
+export type UserInfo = AuthUserView & {
+  /**
+   * 性别**是否已被询问过**（ADR-039）
+   *
+   * `undefined` 表示"还不知道"（登录响应里没有这个字段，只有 `/users/me` 才有），
+   * `false` 才是"确定没问过"。**引导只在明确为 `false` 时弹** ——
+   * 把 `undefined` 也当成"没问过"的话，每次冷启动都会因为还没拉到 `/users/me`
+   * 而闪一下性别弹窗。
+   */
+  genderDeclared?: boolean;
+};
 
 /** 登录响应（保留本地别名，避免调用方改动） */
 export type LoginResult = AuthLoginResult;
@@ -51,6 +61,7 @@ const toUserInfo = (me: MeView): UserInfo => ({
   nickname: me.nickname,
   avatarUrl: me.avatarUrl,
   gender: me.gender,
+  genderDeclared: me.genderDeclared,
   birthday: me.birthday,
   phoneBound: me.phoneBound,
   status: me.status,
@@ -83,6 +94,22 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = computed(() => Boolean(accessToken.value));
   const isMember = computed(() => userInfo.value?.membership.isActive === true);
   const displayName = computed(() => userInfo.value?.nickname ?? 'SoulMap 用户');
+
+  /**
+   * 是否需要弹「你是男生还是女生」引导（ADR-039）
+   *
+   * 只在**服务端明确说"没问过"**（`genderDeclared === false`）时为真：
+   * `undefined`（还没拉到 `/users/me`）不算 —— 否则每次冷启动都会闪一下弹窗。
+   */
+  const needsGenderSetup = computed(() => isLoggedIn.value && userInfo.value?.genderDeclared === false);
+
+  /** 性别展示文案（个人中心用；"不想说"与"没填"在这里是同一个展示结果） */
+  const genderText = computed(() => {
+    const gender = userInfo.value?.gender;
+    if (gender === 'MALE') return '男生';
+    if (gender === 'FEMALE') return '女生';
+    return '未设置';
+  });
 
   // -------------------------------------------------------------------- 内部
   /**
@@ -232,6 +259,18 @@ export const useAuthStore = defineStore('auth', () => {
     storage.set(STORAGE_KEYS.userInfo, userInfo.value);
   };
 
+  /**
+   * 保存性别（ADR-039）
+   *
+   * ⚠ 必须落服务端，不能只改本地：性别决定**出哪一套场景题**，
+   * 换设备或清缓存后本地标记就没了，而服务端才是权威；
+   * 且"不想说"也要发请求 —— 服务端据此记下"已经问过了"。
+   */
+  const saveGender = async (gender: UserGenderCode): Promise<void> => {
+    const updated = await updateProfile({ gender });
+    patchUserInfo({ gender: updated.gender, genderDeclared: updated.genderDeclared });
+  };
+
   // 向请求层注册钩子（模块加载时执行一次）
   registerRequestHooks({
     getAccessToken: () => accessToken.value,
@@ -258,12 +297,15 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     isMember,
     displayName,
+    needsGenderSetup,
+    genderText,
     // action
     silentLogin,
     refresh,
     logout,
     fetchUserInfo,
     patchUserInfo,
+    saveGender,
     clearSession,
     isTokenExpiringSoon,
   };

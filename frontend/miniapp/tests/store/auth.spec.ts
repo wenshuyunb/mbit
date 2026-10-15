@@ -86,6 +86,7 @@ const ME_VIEW = {
   nickname: '小明',
   avatarUrl: 'https://cdn.example.com/avatar.webp',
   gender: 'MALE',
+  genderDeclared: true,
   birthday: null,
   ageRange: null,
   phoneBound: true,
@@ -257,5 +258,91 @@ describe('fetchUserInfo：把 MeView 归一化为统一用户形状', () => {
     await store.fetchUserInfo();
 
     expect(store.userInfo?.avatarUrl).toBe('https://cdn.example.com/avatar.webp');
+  });
+});
+
+/**
+ * 性别引导的开关与保存（ADR-039）
+ *
+ * 这一组锁的是两个**静默失败**方向：
+ *   · 该弹不弹 → 用户永远拿中性版场景，界面上完全看不出异常；
+ *   · 不该弹却弹 → 选了"不想说"的人每次冷启动都被再问一遍。
+ * 两者的区别只在 `genderDeclared` 一个字段上，而这字段只有 `/users/me` 才返回。
+ */
+describe('性别引导（ADR-039）', () => {
+  /** 登录（`needsGenderSetup` 要求已登录）+ 拉一次 `/users/me` */
+  const loginAndFetch = async (me: Record<string, unknown>): Promise<ReturnType<typeof useAuthStore>> => {
+    respondByUrl({ '/auth/wechat/login': LOGIN_RESULT, '/users/me': me });
+    const store = useAuthStore();
+    await store.silentLogin();
+    await store.fetchUserInfo();
+    return store;
+  };
+
+  it('【关键】genderDeclared=false 时才需要引导', async () => {
+    const store = await loginAndFetch({ ...ME_VIEW, gender: 'UNKNOWN', genderDeclared: false });
+
+    expect(store.isLoggedIn).toBe(true);
+    expect(store.needsGenderSetup).toBe(true);
+  });
+
+  it('【关键】选过「不想说」的人（gender=UNKNOWN 但问过了）不再被问', async () => {
+    const store = await loginAndFetch({ ...ME_VIEW, gender: 'UNKNOWN', genderDeclared: true });
+
+    expect(store.needsGenderSetup).toBe(false);
+  });
+
+  it('已选性别的人不需要引导', async () => {
+    const store = await loginAndFetch(ME_VIEW);
+
+    expect(store.needsGenderSetup).toBe(false);
+  });
+
+  it('【关键】还不知道（登录响应里没有该字段）时**不弹**，避免冷启动闪一下弹窗', async () => {
+    respondByUrl({ '/auth/wechat/login': LOGIN_RESULT });
+    const store = useAuthStore();
+    await store.silentLogin();
+
+    // 登录响应（AuthUserView）不带 genderDeclared → undefined ≠ false
+    expect(store.isLoggedIn).toBe(true);
+    expect(store.userInfo?.genderDeclared).toBeUndefined();
+    expect(store.needsGenderSetup).toBe(false);
+  });
+
+  it('saveGender 会落服务端并把结果写回本地（「不想说」也发请求）', async () => {
+    const PATC_H_RESULT = {
+      id: 'user-1',
+      nickname: '小明',
+      avatarUrl: null,
+      gender: 'UNKNOWN',
+      genderDeclared: true,
+      birthday: null,
+      ageRange: null,
+      version: 4,
+      updatedAt: '2026-10-15T00:00:00.000Z',
+    };
+
+    const { urls } = respondByUrl({ '/auth/wechat/login': LOGIN_RESULT, '/users/me': PATC_H_RESULT });
+    const store = useAuthStore();
+    await store.silentLogin();
+
+    await store.saveGender('UNKNOWN');
+
+    expect(urls.some((url) => url.includes('/users/me'))).toBe(true);
+    // 本地状态跟随**服务端返回值**，而不是自己写一个 genderDeclared=true
+    expect(store.userInfo?.gender).toBe('UNKNOWN');
+    expect(store.userInfo?.genderDeclared).toBe(true);
+    expect(store.needsGenderSetup).toBe(false);
+  });
+
+  it('genderText 只区分男女，其余一律显示未设置', async () => {
+    const store = await loginAndFetch({ ...ME_VIEW, gender: 'MALE' });
+    expect(store.genderText).toBe('男生');
+
+    store.patchUserInfo({ gender: 'FEMALE' });
+    expect(store.genderText).toBe('女生');
+
+    store.patchUserInfo({ gender: 'UNKNOWN' });
+    expect(store.genderText).toBe('未设置');
   });
 });

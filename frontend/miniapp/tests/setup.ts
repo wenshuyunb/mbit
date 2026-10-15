@@ -39,6 +39,7 @@ const uniMock = {
   showLoading: vi.fn(),
   hideLoading: vi.fn(),
   showModal: vi.fn(),
+  showActionSheet: vi.fn(),
   navigateTo: vi.fn(),
   redirectTo: vi.fn(),
   switchTab: vi.fn(),

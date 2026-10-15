@@ -112,6 +112,14 @@ const userRow = (overrides: Record<string, unknown> = {}): Record<string, unknow
   nickname: '小满',
   avatarUrl: null,
   gender: 'FEMALE',
+  /**
+   * ADR-039：`gender` 与"问过没有"分两列，夹具必须**两列都给**
+   *
+   * 只给 `gender` 会让 `Boolean(genderDeclaredAt)` 读到 `undefined` ——
+   * 虽然服务端把它当"没问过"（失败安全方向）是对的，但夹具缺字段
+   * 会让所有断言都在测一个不可能出现的行。
+   */
+  genderDeclaredAt: null,
   birthday: new Date('1996-08-21T00:00:00.000Z'),
   phoneEnc: null,
   phoneHash: null,
@@ -431,6 +439,76 @@ describe('UserService', () => {
 
       const updateArgs = prisma.user.updateMany.mock.calls[0]?.[0] as { data: Record<string, unknown> };
       expect(updateArgs.data['gender']).toBe('UNKNOWN');
+    });
+
+    /**
+     * ADR-039：性别**被询问过**与性别**是什么**是两件事
+     *
+     * `UNKNOWN` 既可能是"从没问过"、也可能是"问过了，用户选择不说"。
+     * 只按 `gender === 'UNKNOWN'` 判断就会让选了"不想说"的人每次进入都被再问一遍。
+     */
+    describe('性别询问时间（ADR-039）', () => {
+      const freshRow = (genderDeclaredAt: Date | null): Record<string, unknown> => ({
+        id: USER_ID,
+        nickname: null,
+        avatarUrl: null,
+        gender: 'MALE',
+        genderDeclaredAt,
+        birthday: null,
+        version: 13,
+        updatedAt: new Date(),
+      });
+
+      /**
+       * 排好「改资料」写完后那次回读的返回值
+       *
+       * ⚠ `updateProfile` 里 `findUnique` **只调用一次**（写完之后的回读；
+       * 冲突分支那次只在 `updateMany.count === 0` 时才走）。因此这里不能用
+       * "排两次 once"的写法 —— 那样第一次调用拿到的是排在前面的那份夹具，
+       * 断言就会读到一个与预期无关的行（表现为"断言随机失败"）。
+       * 用 `mockResolvedValue`（非 once）+ `mockReset()` 清掉前面用例留下的队列。
+       */
+      const primeUpdate = (fresh: Record<string, unknown>): void => {
+        prisma.user.findUnique.mockReset();
+        prisma.user.findUnique.mockResolvedValue(fresh);
+      };
+
+      it('选择性别 → 记下「问过了」的时间', async () => {
+        primeUpdate(freshRow(new Date()));
+
+        await service.updateProfile(USER_ID, { gender: 'MALE' });
+
+        const updateArgs = prisma.user.updateMany.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+        expect(updateArgs.data['genderDeclaredAt']).toBeInstanceOf(Date);
+      });
+
+      it('【关键】传 null（选「不想说」）**也要**记时间，否则会被反复询问', async () => {
+        primeUpdate(freshRow(new Date()));
+
+        await service.updateProfile(USER_ID, { gender: null });
+
+        const updateArgs = prisma.user.updateMany.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+        expect(updateArgs.data['genderDeclaredAt']).toBeInstanceOf(Date);
+      });
+
+      it('没动性别时**不碰**该字段（改昵称不该伪装成"问过性别了"）', async () => {
+        primeUpdate(freshRow(new Date()));
+
+        await service.updateProfile(USER_ID, { nickname: '新昵称' });
+
+        const updateArgs = prisma.user.updateMany.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+        expect('genderDeclaredAt' in updateArgs.data).toBe(false);
+      });
+
+      it('响应里的 genderDeclared 跟随该字段', async () => {
+        primeUpdate(freshRow(new Date()));
+        const declared = await service.updateProfile(USER_ID, { gender: 'MALE' });
+        expect(declared.genderDeclared).toBe(true);
+
+        primeUpdate(freshRow(null));
+        const notDeclared = await service.updateProfile(USER_ID, { nickname: '再改一次' });
+        expect(notDeclared.genderDeclared).toBe(false);
+      });
     });
 
     it('【乐观锁】传 expectedVersion 且不匹配 → 版本冲突', async () => {

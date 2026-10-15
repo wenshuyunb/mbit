@@ -4638,6 +4638,17 @@ model User {
   nickname          String?    @db.VarChar(64)
   avatarUrl         String?    @map("avatar_url") @db.VarChar(512)
   gender            UserGender @default(UNKNOWN)
+  /// 性别**被询问过**的时间（ADR-039）
+  ///
+  /// ⚠ 与 `gender` 是两件事，必须分开存：
+  /// `gender = UNKNOWN` 有两种截然不同的来源 ——「从来没问过用户」与
+  /// 「问过了，用户选择不说」。两者的取题结果相同（都取中性版场景），
+  /// 但前者要弹引导、后者不该反复弹。只看 `gender` 无法区分，
+  /// 于是会出现"选了不想说的人每次进来都被再问一遍"。
+  ///
+  /// 置位时机：用户在首启引导、情感测评前兜底、或个人中心里**做出选择**时
+  /// （包括选择"不想说"）。改性别不重置该时间。
+  genderDeclaredAt  DateTime?  @map("gender_declared_at") @db.Timestamptz(3)
   birthday          DateTime?  @db.Date
   ageVerified       Boolean    @default(false) @map("age_verified")
   phoneEnc          String?    @map("phone_enc") @db.VarChar(512)
