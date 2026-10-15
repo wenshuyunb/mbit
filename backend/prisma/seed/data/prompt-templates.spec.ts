@@ -701,6 +701,34 @@ describe('Prompt 模板种子数据契约', () => {
         expect(template.description.length).toBeGreaterThan(10);
       }
     });
+
+    /**
+     * 【关键】种子文本必须放得进数据库列（`VarChar` 上限）
+     *
+     * 这条断言是**踩坑后补的**：情感报告 v3 的 `changeNote` 写长了一百多字，seed 直接
+     * 在 `prisma.promptVersion.upsert()` 处报
+     *
+     *   `The provided value for the column is too long for the column's type`
+     *
+     * 而此前没有任何测试盯着这件事 —— 种子数据是"运行到灌库才验证"的，
+     * 于是改提示词的人只会在 seed 那一步才发现，且报错信息里连**列名**都没有
+     *（`Column: (not available)`），得回去翻 `schema.prisma` 才知道是哪一列。
+     *
+     * 上限逐字取自 `schema.prisma`：
+     *   · `PromptTemplate.key` / `name` → `VarChar(64)`
+     *   · `PromptTemplate.description` → `VarChar(512)`
+     *   · `PromptVersion.changeNote` → `VarChar(512)`
+     *
+     * 注意：**不是**"截断即可"—— 灌库会直接失败（拒绝写入），所以这里必须失败在测试里。
+     */
+    it('【关键】key / name / description / changeNote 都在数据库列长上限内', () => {
+      for (const template of PROMPT_TEMPLATES) {
+        expect(template.key.length).toBeLessThanOrEqual(64);
+        expect(template.name.length).toBeLessThanOrEqual(64);
+        expect(template.description.length).toBeLessThanOrEqual(512);
+        expect(template.changeNote.length).toBeLessThanOrEqual(512);
+      }
+    });
   });
 
   /**
@@ -1104,18 +1132,42 @@ describe('Prompt 模板种子数据契约', () => {
       expect(systemPrompt).toContain('绝不重新计算');
     });
 
-    it('首段免费预览（用户先看到自己的依恋姿态再决定付费）', () => {
+    /**
+     * ⚠ v3 之前这里断言的是 `attachment_portrait` 等 4 个小写键。那 4 个键
+     * **不在契约 §3.5.4 的 `REPORT_SECTION_KEYS` 白名单里**，而「金句卡」
+     * （`quoteSectionKey`）由 `@IsIn(REPORT_SECTION_KEYS)` 校验 ——
+     * 也就是情感报告上的金句卡此前必然取不到段落（`CONTRACT_DRIFT_AUDIT.md` §9.2）。
+     *
+     * 与 `report.mbti` 同一处理：段落键与白名单**逐字相等（含顺序）**，
+     * 顺带断言 6 段（旧版 4 段正是用户说"简陋"的直接原因：没有一段专门回答
+     * "我属于什么 / 我需要什么 / 我该怎么办"）。
+     */
+    it('【关键】段落键与契约 §3.5.4 白名单逐字一致，且为加厚后的 6 段', () => {
       const template = emotion();
 
-      expect(template?.sections[0]?.key).toBe('attachment_portrait');
+      expect(template?.sections).toHaveLength(6);
+      expect(template?.sections.map((section) => section.key)).toEqual([...REPORT_SECTION_KEYS]);
+      // 免费预览仍在前两段（用户先看到"你属于什么"，再决定付费）
+      expect(template?.sections[0]?.key).toBe('CORE_PORTRAIT');
       expect(template?.sections[0]?.freePreview).toBe(true);
-      expect(template?.sections).toHaveLength(4);
-      expect(template?.sections.map((section) => section.key)).toEqual([
-        'attachment_portrait',
-        'love_language_map',
-        'conflict_pattern',
-        'pattern_insight',
-      ]);
+      expect(template?.sections[1]?.key).toBe('DIMENSION_ANALYSIS');
+      expect(template?.sections[1]?.freePreview).toBe(true);
+      // 每段都必须带 hint：hint 会被拼进提示词（`buildSectionFormatInstruction`），
+      // 缺失就直接变成"泛泛而谈"——那正是旧版报告的病根
+      for (const section of template?.sections ?? []) {
+        expect((section.hint ?? '').length).toBeGreaterThan(20);
+      }
+    });
+
+    it('【关键】提示词明令禁止用 `###` 拆子标题（否则分段解析按下标错位）', () => {
+      const template = emotion();
+      const prompt = template?.userPromptTemplate ?? '';
+
+      // 解析器（`report-section.parser.ts`）按 `#{1,4}` 抓标题、并按下标对齐段落键：
+      // 模型若在「五条建议」里给每条写 `### 为什么有效`，后面所有段落都会整体错位
+      expect(prompt).toContain('不要输出任何其他级别的标题');
+      expect(prompt).toContain('严禁');
+      expect(prompt).toContain('子标题');
     });
 
     it('【关键】按提示词要求的标题生成的正文，能被分段解析器切回声明的段落键', () => {
