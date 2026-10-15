@@ -253,6 +253,139 @@ describe('EmotionEngine.compute（数据不足）', () => {
   });
 });
 
+describe('EmotionEngine.compute（沉浸式场景题，ADR-039）', () => {
+  /**
+   * 造一道场景题（迫选）
+   *
+   * 场景题的每个选项都带**多个维度**的分值：一个"你会怎么做"的选择会同时
+   * 透露依恋、冲突风格与爱的语言，因此题目声明的 `dimension` 只是"主维度"，
+   * 真正往哪些维度累加由所选选项的 `scoreMap` 决定。
+   */
+  const scenario = (
+    id: string,
+    options: Array<{ value: number; scoreMap: Record<string, number> }>,
+  ): EngineQuestion => ({
+    id,
+    type: 'FORCED_CHOICE',
+    // 主维度：用于后台展示与"没有 scoreMap 时"的兜底
+    dimension: Object.keys(options[0]?.scoreMap ?? {})[0] ?? 'ATTACH_ANXIETY',
+    weight: 1,
+    reverseScored: false,
+    minValue: null,
+    maxValue: null,
+    options: options.map((option) => ({ value: option.value, scoreMap: option.scoreMap })),
+  });
+
+  it('【关键】一个选择同时喂给多个维度（这正是场景题与量表题的根本差别）', () => {
+    const questions: EngineQuestion[] = [
+      scenario('S1', [
+        { value: 1, scoreMap: { ATTACH_ANXIETY: 4, CONFLICT_ACCOMMODATING: 4 } },
+        { value: 2, scoreMap: { ATTACH_AVOIDANCE: 4, CONFLICT_AVOIDING: 4 } },
+      ]),
+    ];
+    // 选"回避"那条：依恋回避 + 冲突回避
+    const answers: EngineAnswer[] = [{ questionId: 'S1', value: 2, responseMs: 4000 }];
+
+    const output = engine.compute({ questions, answers });
+
+    expect(output.rawScores.dimensions['ATTACH_AVOIDANCE']?.answeredCount).toBe(1);
+    expect(output.rawScores.dimensions['CONFLICT_AVOIDING']?.answeredCount).toBe(1);
+    // 没有被选中的选项分值不参与（选 2 就不该给"迁就"加分）
+    expect(output.rawScores.dimensions['CONFLICT_ACCOMMODATING']).toBeUndefined();
+  });
+
+  it('量程由该维度的选项分值推导，百分比落在 0 与 100 两端', () => {
+    const questions: EngineQuestion[] = [
+      scenario('S1', [
+        { value: 1, scoreMap: { ATTACH_ANXIETY: 1 } },
+        { value: 2, scoreMap: { ATTACH_ANXIETY: 5 } },
+      ]),
+    ];
+
+    const low = engine.compute({ questions, answers: [{ questionId: 'S1', value: 1, responseMs: 4000 }] });
+    const high = engine.compute({ questions, answers: [{ questionId: 'S1', value: 2, responseMs: 4000 }] });
+
+    expect(low.attachment.anxiety).toBe(0);
+    expect(high.attachment.anxiety).toBe(100);
+  });
+
+  it('多道场景题累加到同一维度（24 个场景撑起 12 个维度的数据量）', () => {
+    const questions: EngineQuestion[] = [
+      scenario('S1', [
+        { value: 1, scoreMap: { ATTACH_ANXIETY: 5 } },
+        { value: 2, scoreMap: { ATTACH_ANXIETY: 1 } },
+      ]),
+      scenario('S2', [
+        { value: 1, scoreMap: { ATTACH_ANXIETY: 5 } },
+        { value: 2, scoreMap: { ATTACH_ANXIETY: 1 } },
+      ]),
+      scenario('S3', [
+        { value: 1, scoreMap: { ATTACH_ANXIETY: 1 } },
+        { value: 2, scoreMap: { ATTACH_ANXIETY: 5 } },
+      ]),
+    ];
+    const answers: EngineAnswer[] = [
+      { questionId: 'S1', value: 1, responseMs: 4000 },
+      { questionId: 'S2', value: 1, responseMs: 4000 },
+      { questionId: 'S3', value: 1, responseMs: 4000 },
+    ];
+
+    const output = engine.compute({ questions, answers });
+
+    expect(output.rawScores.dimensions['ATTACH_ANXIETY']?.answeredCount).toBe(3);
+    // 两题取 5、一题取 1 → 归一化 (5+5+1 − 3×1) / (3×5 − 3×1) = 8/12 ≈ 66.7
+    expect(output.attachment.anxiety).toBeCloseTo(66.67, 1);
+  });
+
+  it('选项分值全相同时该维度不可用（range = 0），不会伪装成 50 分结论', () => {
+    const questions: EngineQuestion[] = [
+      scenario('S1', [
+        { value: 1, scoreMap: { LOVE_TIME: 3 } },
+        { value: 2, scoreMap: { LOVE_TIME: 3 } },
+      ]),
+    ];
+
+    const output = engine.compute({ questions, answers: [{ questionId: 'S1', value: 1, responseMs: 4000 }] });
+
+    expect(output.rawScores.dimensions['LOVE_TIME']?.answeredCount).toBe(1);
+    expect(output.loveLanguage.scores['LOVE_TIME']).toBe(50);
+    // 五个爱的语言都没有有效量程 → 该族没有结论
+    expect(output.loveLanguage.primary).toEqual([]);
+    expect(output.unresolved).toContain('爱的语言');
+  });
+
+  it('【回归】量表题（scoreMap 为空）仍按"用户所选值"计分，口径一字不变', () => {
+    const questions = [likert('ATTACH_ANXIETY', 'ATTACH_ANXIETY')];
+    const answers: EngineAnswer[] = [{ questionId: 'ATTACH_ANXIETY', value: 4, responseMs: 3000 }];
+
+    const output = engine.compute({ questions, answers });
+
+    // 5 点量表选 4 → (4 − 1) / (5 − 1) = 75
+    expect(output.attachment.anxiety).toBe(75);
+  });
+
+  it('场景题与量表题可以同卷共存（迁移期两种题型并存）', () => {
+    const questions: EngineQuestion[] = [
+      likert('L1', 'ATTACH_AVOIDANCE'),
+      scenario('S1', [
+        { value: 1, scoreMap: { ATTACH_AVOIDANCE: 5 } },
+        { value: 2, scoreMap: { ATTACH_AVOIDANCE: 1 } },
+      ]),
+    ];
+
+    const output = engine.compute({
+      questions,
+      answers: [
+        { questionId: 'L1', value: 1, responseMs: 3000 },
+        { questionId: 'S1', value: 2, responseMs: 4000 },
+      ],
+    });
+
+    // 两题都进了同一维度，且没有互相覆盖
+    expect(output.rawScores.dimensions['ATTACH_AVOIDANCE']?.answeredCount).toBe(2);
+  });
+});
+
 describe('EmotionEngine.compute（阈值来自调用方）', () => {
   it('阈值改变会改变类型判定，但轴分数不变', () => {
     const input = build({ ATTACH_ANXIETY: 75, ATTACH_AVOIDANCE: 25 });

@@ -23,26 +23,64 @@ const likertQuestion = (id: string): SnapshotSourceQuestion => ({
   id,
   code: `Q_${id}`,
   content: `题目内容 ${id}`,
+  scenarioPrompt: null,
   type: 'LIKERT5',
   dimension: 'EI',
   reverseScored: false,
   weight: 1,
   tags: ['测试'],
-  options: [1, 2, 3, 4, 5].map((value) => ({ label: `选项${value}`, value, isActive: true })),
+  // 量表题不带选项分值（空对象），算分走"用户所选值"这条老路
+  options: [1, 2, 3, 4, 5].map((value) => ({
+    label: `选项${value}`,
+    value,
+    isActive: true,
+    scoreMap: {},
+    feedback: null,
+  })),
 });
 
 const binaryQuestion = (id: string, reverseScored = false): SnapshotSourceQuestion => ({
   id,
   code: `Q_${id}`,
   content: `二选一 ${id}`,
+  scenarioPrompt: null,
   type: 'BINARY',
   dimension: 'SN',
   reverseScored,
   weight: 1,
   tags: ['测试'],
   options: [
-    { label: '选项A', value: 0, isActive: true },
-    { label: '选项B', value: 1, isActive: true },
+    { label: '选项A', value: 0, isActive: true, scoreMap: {}, feedback: null },
+    { label: '选项B', value: 1, isActive: true, scoreMap: {}, feedback: null },
+  ],
+});
+
+/** 沉浸式场景题夹具（ADR-039）：选项带维度分与即时反馈 */
+const scenarioQuestion = (id: string): SnapshotSourceQuestion => ({
+  id,
+  code: `SC_${id}`,
+  content: `你加班到很晚，她发消息说「算了，你忙吧」。`,
+  scenarioPrompt: '这时候你会怎么做？',
+  type: 'FORCED_CHOICE',
+  dimension: 'ATTACH_ANXIETY',
+  reverseScored: false,
+  weight: 1,
+  tags: ['场景', '回避'],
+  options: [
+    {
+      label: '立刻打电话过去解释',
+      value: 1,
+      isActive: true,
+      scoreMap: { ATTACH_ANXIETY: 3, CONFLICT_COLLABORATING: 2 },
+      feedback: '她多半会先松一口气。',
+    },
+    {
+      label: '先睡，明天再说',
+      value: 2,
+      isActive: true,
+      scoreMap: { ATTACH_AVOIDANCE: 3, CONFLICT_AVOIDING: 2 },
+      feedback: '事情可能会留到明天，也可能就过去了。',
+    },
   ],
 });
 
@@ -166,14 +204,14 @@ describe('buildPaperSnapshot', () => {
     const withInactive: SnapshotSourceQuestion = {
       ...likertQuestion('q1'),
       options: [
-        { label: '生效', value: 1, isActive: true },
-        { label: '停用', value: 2, isActive: false },
+        { label: '生效', value: 1, isActive: true, scoreMap: {}, feedback: null },
+        { label: '停用', value: 2, isActive: false, scoreMap: {}, feedback: null },
       ],
     };
 
     const snapshot = buildPaperSnapshot([withInactive], { random: seededRandom(1) });
 
-    expect(snapshot.questions[0]?.options).toEqual([{ label: '生效', value: 1 }]);
+    expect(snapshot.questions[0]?.options).toEqual([{ label: '生效', value: 1, scoreMap: {}, feedback: null }]);
   });
 
   describe('乱序控制', () => {
@@ -248,5 +286,65 @@ describe('buildPaperSnapshot', () => {
     const second = buildPaperSnapshot(questions, { random: seededRandom(11) });
 
     expect(second).toEqual(first);
+  });
+
+  // ==========================================================================
+  // ADR-039：场景题（沉浸式）的字段必须随快照固化
+  // ==========================================================================
+
+  describe('场景题字段（ADR-039）', () => {
+    it('【关键】选项的 scoreMap 被固化进快照 —— 它是场景题的算分依据', () => {
+      const snapshot = buildPaperSnapshot([scenarioQuestion('s1')], { random: seededRandom(1) });
+      const option = snapshot.questions[0]?.options[0];
+
+      expect(option?.scoreMap).toEqual({ ATTACH_ANXIETY: 3, CONFLICT_COLLABORATING: 2 });
+    });
+
+    it('选项的即时反馈被固化（前端选中后立刻展示）', () => {
+      const snapshot = buildPaperSnapshot([scenarioQuestion('s1')], { random: seededRandom(1) });
+
+      expect(snapshot.questions[0]?.options[0]?.feedback).toBe('她多半会先松一口气。');
+    });
+
+    it('情境叙述与提问句分开存放（合成一句就没法排版成两段，沉浸感消失）', () => {
+      const snapshot = buildPaperSnapshot([scenarioQuestion('s1')], { random: seededRandom(1) });
+
+      expect(snapshot.questions[0]?.content).toContain('算了，你忙吧');
+      expect(snapshot.questions[0]?.scenarioPrompt).toBe('这时候你会怎么做？');
+    });
+
+    it('量表题的 scenarioPrompt 为 null（题干本身即陈述句）', () => {
+      const snapshot = buildPaperSnapshot([likertQuestion('l1')], { random: seededRandom(1) });
+
+      expect(snapshot.questions[0]?.scenarioPrompt).toBeNull();
+    });
+
+    it('【关键】FORCED_CHOICE 的选项**不打乱** —— 防止"选 A 得到 B 的分"', () => {
+      const snapshot = buildPaperSnapshot([scenarioQuestion('s1')], { random: () => 0 });
+      const values = snapshot.questions[0]?.options.map((option) => option.value);
+
+      expect(values).toEqual([1, 2]);
+      expect(snapshot.optionShuffled).toBe(false);
+    });
+
+    it('停用的选项被丢弃时，分值不会"串位"（乱序只作用于保留后的选项）', () => {
+      const question = scenarioQuestion('s1');
+      const withInactive: SnapshotSourceQuestion = {
+        ...question,
+        options: [...question.options, { label: '停用项', value: 3, isActive: false, scoreMap: {}, feedback: null }],
+      };
+
+      const snapshot = buildPaperSnapshot([withInactive], { random: seededRandom(1) });
+
+      expect(snapshot.questions[0]?.options).toHaveLength(2);
+      expect(snapshot.questions[0]?.options[0]?.scoreMap).toEqual({ ATTACH_ANXIETY: 3, CONFLICT_COLLABORATING: 2 });
+    });
+
+    it('快照版本已升到 ps-v2（旧 ps-v1 会话仍按旧语义解析）', () => {
+      const snapshot = buildPaperSnapshot([scenarioQuestion('s1')], { random: seededRandom(1) });
+
+      expect(snapshot.snapshotVersion).toBe('ps-v2');
+      expect(SNAPSHOT_VERSION).toBe('ps-v2');
+    });
   });
 });

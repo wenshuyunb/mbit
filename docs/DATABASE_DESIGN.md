@@ -4168,10 +4168,33 @@ enum QuestionSelectionMode {
 enum QuestionType {
   LIKERT5 // 5 点李克特量表
   BINARY // 二选一
-  FORCED_CHOICE // 迫选
+  FORCED_CHOICE // 迫选（**情感模块的沉浸式场景题用它**，见 ADR-039）
   RANK // 排序
 
   @@map("question_type")
+}
+
+/// 题目适用人群（ADR-039）
+///
+/// ## 为什么会有这一列
+///
+/// 情感测评已从"陈述句 + 同意程度"改为**沉浸式场景题**：给一段恋爱/相处中的处境，
+/// 问"你会怎么做"。而处境本身带性别角色差异（谁先开口、见家长、生育、
+/// 被说"太黏人/太冷淡"），所以场景题分**男 / 女 / 中性三套独立内容**，
+/// 报告措辞也按性别走。抽题时按用户性别过滤这一列。
+///
+/// ## ⚠ 只用于情感场景题，不要给标准化量表题标 `MALE` / `FEMALE`
+///
+/// MBTI、大五与近期状态自评都是**标准化量表**：男女用同一套题、共用常模才有
+/// 可比性。按性别换题会让分数不再可比 —— 那是"看起来更贴心、实际毁掉效度"。
+/// 因此非场景题一律保持默认值 `ALL`。
+enum QuestionAudience {
+  ALL // 所有人（默认；量表题与通用题都用它）
+  MALE // 男生版场景
+  FEMALE // 女生版场景
+  NEUTRAL // 中性版场景（用户选「不想说」时取这一套）
+
+  @@map("question_audience")
 }
 
 /// 计分维度
@@ -4851,6 +4874,16 @@ model Question {
   testDefinition   TestDefinition   @relation(fields: [testDefinitionId], references: [id], onDelete: Cascade)
   code             String           @unique @db.VarChar(48)
   content          String           @db.Text
+  /// 场景题的**提问句**（ADR-039），如「这时候你会怎么做？」
+  ///
+  /// ⚠ 与 `content` 分工，别混用：
+  ///   · `content` = **情境叙述**（"你加班到十一点，她发了句『算了，你忙吧』"）
+  ///   · `scenarioPrompt` = **问用户什么**（"这时候你会怎么做？"）
+  /// 量表题没有提问句（题干本身就是陈述），因此可空。
+  /// 合成一句会让前端没法把"处境"与"提问"排版成两段，沉浸感直接消失。
+  scenarioPrompt   String?          @map("scenario_prompt") @db.VarChar(128)
+  /// 适用人群（ADR-039）；量表题保持 ALL，理由见 `QuestionAudience` 枚举注释
+  audience         QuestionAudience @default(ALL)
   type             QuestionType
   dimension        Dimension
   subDimension     String?          @map("sub_dimension") @db.VarChar(32)
@@ -4875,6 +4908,8 @@ model Question {
   @@index([testDefinitionId, order])
   @@index([dimension, isActive])
   @@index([isActive])
+  /// 抽题按「定义 + 适用人群 + 启用」过滤（ADR-039）
+  @@index([testDefinitionId, audience, isActive])
   @@map("questions")
 }
 
@@ -4885,7 +4920,21 @@ model QuestionOption {
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
   label      String   @db.VarChar(256)
   value      Int
+  /// 该选项在各**计分维度**上的分值（ADR-039）
+  ///
+  /// 量表题不用它（分值就是 `value`）；场景题**必须**用它：
+  /// 一个"你会怎么做"的选项会同时透露依恋、冲突风格与爱的语言，
+  /// 例如 `{ "ATTACH_ANXIETY": 3, "CONFLICT_COLLABORATING": 2 }`。
+  ///
+  /// ⚠ 这是场景题的**算分依据**，必须随试卷快照一起固化（`ps-v2`）——
+  /// 提交算分是从快照重建引擎输入的，快照里没有它，场景题就会被算成"全 0"。
   scoreMap   Json     @map("score_map") @db.JsonB
+  /// 选中该选项后的**即时反馈**（ADR-039），一句话，不带评判
+  ///
+  /// 沉浸感主要来自"叙事 + 即时反馈"，而不是分支剧情。
+  /// 写成"这样做的常见后续"而不是"你这样做是对的/错的"：本模块不做评判，
+  /// 也不该让用户觉得自己选错了。
+  feedback   String?  @map("feedback") @db.VarChar(200)
   order      Int      @default(0)
   isActive   Boolean  @default(true) @map("is_active")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -6602,7 +6651,8 @@ model UserPhoneHistory {
 | 6.1 | `TestModule`                | `test_module`                 | `PERSONALITY`=MBTI 人格测试；`EMOTION`=情感测评（含情侣匹配）；`MENTAL_HEALTH`=心理健康测评（**只给结论、不给建议**）。由 ADR-038 引入：三个模块各自独立画像、互不干扰                                                                                                                                           |
 | 7   | `TestDefinitionStatus`      | `test_definition_status`      | `DRAFT`=草稿；`ACTIVE`=已发布；`ARCHIVED`=已归档                                                                                                                                                                                                                                                                 |
 | 8   | `QuestionSelectionMode`     | `question_selection_mode`     | `STATIC_SET`=固定题目集合；`DIMENSION_QUOTA`=按维度配额动态抽取                                                                                                                                                                                                                                                  |
-| 9   | `QuestionType`              | `question_type`               | `LIKERT5`=5 点李克特量表；`BINARY`=二选一；`FORCED_CHOICE`=迫选；`RANK`=排序                                                                                                                                                                                                                                     |
+| 9   | `QuestionType`              | `question_type`               | `LIKERT5`=5 点李克特量表；`BINARY`=二选一；`FORCED_CHOICE`=迫选（**情感模块的沉浸式场景题用它**）；`RANK`=排序                                                                                                                                                                                                   |
+| 9.1 | `QuestionAudience`          | `question_audience`           | `ALL`=所有人（默认，量表题）；`MALE`=男生版场景；`FEMALE`=女生版场景；`NEUTRAL`=中性版场景。由 ADR-039 引入：**只有情感场景题按性别分套**，MBTI/大五/状态自评等标准化量表保持 `ALL` 以保证可比性                                                                                                                 |
 | 10  | `Dimension`                 | `dimension`                   | `EI`=外向/内向；`SN`=实感/直觉；`TF`=思考/情感；`JP`=判断/知觉；`OPENNESS`=开放性；`CONSCIENTIOUSNESS`=尽责性；`EXTRAVERSION`=外向性；`AGREEABLENESS`=宜人性；`NEUROTICISM`=神经质；`ATTACHMENT`=依恋类型；`LOVE_LANGUAGE`=爱的语言；`CONFLICT_STYLE`=冲突风格                                                   |
 | 11  | `TestSessionStatus`         | `test_session_status`         | `CREATED`=已创建未取卷；`IN_PROGRESS`=作答中；`SUBMITTED`=已提交待算分；`SCORED`=已算分；`REPORT_READY`=报告已生成；`EXPIRED`=超时过期；`ABANDONED`=用户放弃                                                                                                                                                     |
 | 12  | `AttachmentStyle`           | `attachment_style`            | `SECURE`=安全型；`ANXIOUS`=焦虑型；`AVOIDANT`=回避型；`FEARFUL`=恐惧型（紊乱型）                                                                                                                                                                                                                                 |

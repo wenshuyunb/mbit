@@ -64,6 +64,7 @@ import {
   computeEffectiveValue,
   createDimensionAccumulator,
   finalizeDimension,
+  optionScoreMapDimensions,
   type DimensionAccumulator,
 } from '../../../common/engine/assessment-scoring.util';
 import { roundTo } from '../../../common/engine/engine-math.util';
@@ -135,9 +136,28 @@ export class EmotionEngine {
         continue;
       }
 
-      const dimension = question.dimension?.toUpperCase();
+      /**
+       * 这道题该往**哪些维度**累加（ADR-039）
+       *
+       * 沉浸式场景题的选项本身带维度分值，且一个"你会怎么做"的选择会同时透露
+       * 依恋、冲突风格与爱的语言 —— 因此按选项里**实际出现的维度**逐个累加，
+       * 而不是只算题目声明的那一个。
+       *
+       * ⚠ 量表题的选项没有 `scoreMap`，这里会回退到"只算题目声明的维度"，
+       * 既有题库的算分口径**一字不变**（ADR-005 的回归要求，由回归快照锁住）。
+       */
+      const declaredDimension = question.dimension?.toUpperCase() ?? '';
+      const covered = optionScoreMapDimensions(question, answer).filter((dimension) =>
+        EMOTION_SCORABLE_DIMENSIONS.includes(dimension),
+      );
+      const dimensions =
+        covered.length > 0
+          ? covered
+          : EMOTION_SCORABLE_DIMENSIONS.includes(declaredDimension)
+            ? [declaredDimension]
+            : [];
 
-      if (!dimension || !EMOTION_SCORABLE_DIMENSIONS.includes(dimension)) {
+      if (dimensions.length === 0) {
         // 非情感维度（如人格题混进了情感卷）：计入完成率，但不参与情感得分。
         // 与人格引擎对称 —— 两个模块互相看到对方的题时都不会算错分
         validAnsweredCount += 1;
@@ -149,19 +169,28 @@ export class EmotionEngine {
         continue;
       }
 
-      const effective = computeEffectiveValue(question, answer);
+      let accumulated = false;
 
-      // 无法计算有效值（选项分值缺失等）→ 视为未答
-      if (effective === null) continue;
+      for (const dimension of dimensions) {
+        const effective = computeEffectiveValue(question, answer, dimension);
 
-      const accumulator = accumulators.get(dimension) ?? createDimensionAccumulator();
-      accumulators.set(dimension, accumulator);
+        // 无法计算有效值（选项分值缺失等）→ 该维度不计
+        if (effective === null) continue;
 
-      accumulateDimension(accumulator, {
-        effective,
-        weight: question.weight,
-        reverseScored: question.reverseScored,
-      });
+        const accumulator = accumulators.get(dimension) ?? createDimensionAccumulator();
+        accumulators.set(dimension, accumulator);
+
+        accumulateDimension(accumulator, {
+          effective,
+          weight: question.weight,
+          reverseScored: question.reverseScored,
+        });
+
+        accumulated = true;
+      }
+
+      // 一个维度都算不出来 → 与旧行为一致：视为未答（不计入 validAnsweredCount）
+      if (!accumulated) continue;
 
       validAnsweredCount += 1;
       collectResponseMetrics(answer, (value) => {

@@ -20,6 +20,7 @@ import type { TestModule } from '@prisma/client';
 
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
+import { parseScoreMap } from '../../common/engine/score-map.util';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import type { EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
@@ -317,6 +318,25 @@ const MBTI_POLES: Record<string, { positive: string; negative: string; positiveL
 /** 允许写答案的会话状态 */
 const WRITABLE_STATUSES = new Set(['CREATED', 'IN_PROGRESS']);
 
+/**
+ * 把快照里的题目投影成**下发给客户端**的形状（ADR-039）
+ *
+ * 唯一的差别是**去掉 `scoreMap`**，原因有两条：
+ *
+ *   1. **它是算分依据**（答案键）：场景题的每个选项带维度分值，下发等于把
+ *      "选哪个能得高分"直接交给客户端。即使本项目没有"正确答案"，
+ *      把评分键暴露出去也会让人去凑分，而画像一旦被凑出来就不再是测量结果；
+ *   2. **体积**：一题 4 个选项各带一个 2–4 键的映射，52 题就是几百个键，
+ *      而这个字段客户端一次都用不到（前端只需要题干、选项文案与即时反馈）。
+ *
+ * ⚠ 快照（数据库里那份）**必须保留** `scoreMap` —— 提交算分是从快照重建引擎输入的，
+ * 少了它场景题会被算成全 0。因此是"下发时投影"，不是"存的时候不存"。
+ */
+const toClientQuestion = (question: PaperQuestion): PaperQuestion => ({
+  ...question,
+  options: question.options.map(({ label, value, feedback }) => ({ label, value, feedback: feedback ?? null })),
+});
+
 @Injectable()
 export class TestService {
   private readonly logger = new Logger(TestService.name);
@@ -522,6 +542,7 @@ export class TestService {
         id: true,
         code: true,
         content: true,
+        scenarioPrompt: true,
         type: true,
         dimension: true,
         reverseScored: true,
@@ -530,7 +551,9 @@ export class TestService {
         options: {
           where: { isActive: true },
           orderBy: { order: 'asc' },
-          select: { label: true, value: true, isActive: true },
+          // ⚠ `scoreMap`（场景题的算分依据）与 `feedback`（即时反馈）必须一起取：
+          // 快照是算分时**唯一**的题目来源，这里少取一个字段，场景题就会静默算成 0 分
+          select: { label: true, value: true, isActive: true, scoreMap: true, feedback: true },
         },
       },
     });
@@ -553,7 +576,33 @@ export class TestService {
       });
     }
 
-    const paperSnapshot = buildPaperSnapshot(questions);
+    const paperSnapshot = buildPaperSnapshot(
+      questions.map((question) => ({
+        id: question.id,
+        code: question.code,
+        content: question.content,
+        scenarioPrompt: question.scenarioPrompt,
+        type: question.type,
+        dimension: question.dimension,
+        reverseScored: question.reverseScored,
+        weight: question.weight,
+        tags: question.tags,
+        /**
+         * ⚠ `scoreMap` 是 JSONB，必须**收窄**而不是断言
+         *
+         * 后台能往这一列写进任何 JSON；直接断言成 `Record<string, number>`
+         * 会让字符串/数组值一路混进算分，最后以 NaN 的形式在落库时才炸。
+         * 收窄规则与后台写路径共用同一份实现（`parseScoreMap`）。
+         */
+        options: question.options.map((option) => ({
+          label: option.label,
+          value: option.value,
+          isActive: option.isActive,
+          scoreMap: parseScoreMap(option.scoreMap),
+          feedback: option.feedback,
+        })),
+      })),
+    );
     const now = new Date();
     const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
 
@@ -623,7 +672,7 @@ export class TestService {
     }
 
     const start = (batch - 1) * pageSize;
-    const questions = snapshot.questions.slice(start, start + pageSize);
+    const questions = snapshot.questions.slice(start, start + pageSize).map(toClientQuestion);
 
     const answers = await this.prisma.testAnswer.findMany({
       where: { sessionId, isSkipped: false },
@@ -817,7 +866,20 @@ export class TestService {
       dimension: question.dimension,
       weight: question.weight,
       reverseScored: question.reverseScored,
-      options: question.options.map((option) => ({ value: option.value, scoreMap: null })),
+      /**
+       * 选项分值**取自快照**（ADR-039）
+       *
+       * ⚠ 这里曾经硬编码 `scoreMap: null`，等于把场景题的算分依据整条丢掉：
+       * 沉浸式场景题的每个选项都带维度分值（一个选择同时透露依恋、冲突风格、
+       * 爱的语言），丢掉之后所有作答都会被算成"该维度 0 分"，而且**不报任何错**。
+       *
+       * `?? null` 是给 `ps-v1` 旧快照用的：那个格式的选项里根本没有这个键，
+       * 归一为 `null`（= 按选项值计分的量表语义），**不能**当成 0。
+       */
+      options: question.options.map((option) => ({
+        value: option.value,
+        scoreMap: option.scoreMap ?? null,
+      })),
     }));
 
     const engineAnswers: EngineAnswer[] = answers.map((answer) => ({

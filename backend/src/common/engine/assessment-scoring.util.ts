@@ -28,21 +28,57 @@ export const findScoreIgnoreCase = (scoreMap: Record<string, number> | null, dim
   return undefined;
 };
 
-/** 查找选项的维度分（`scoreMap[维度]`），找不到返回 null */
-export const findOptionDimensionScore = (question: EngineQuestion, optionValue: number): number | null => {
+/**
+ * 查找选项的维度分（`scoreMap[维度]`），找不到返回 null
+ *
+ * @param dimension 目标维度；默认取题目自己声明的那个。
+ *                  **显式传入**是为沉浸式场景题准备的（ADR-039）：一道场景题的选项
+ *                  会同时给出多个维度的分值，因此同一份作答需要对多个维度各算一次。
+ */
+export const findOptionDimensionScore = (
+  question: EngineQuestion,
+  optionValue: number,
+  dimension: string = question.dimension,
+): number | null => {
   const option = question.options.find((item) => item.value === optionValue);
   if (!option?.scoreMap) return null;
 
-  const dimension = question.dimension.toUpperCase();
+  const target = dimension.toUpperCase();
 
   // 维度键大小写不敏感，便于后台录入
   for (const [key, value] of Object.entries(option.scoreMap)) {
-    if (key.toUpperCase() === dimension && Number.isFinite(value)) {
+    if (key.toUpperCase() === target && Number.isFinite(value)) {
       return value;
     }
   }
 
   return null;
+};
+
+/**
+ * 用户所选选项**覆盖了哪些维度**（大写；无 `scoreMap` 时为空数组）
+ *
+ * 沉浸式场景题的算分入口：一个"你会怎么做"的选择会同时透露依恋、冲突风格与
+ * 爱的语言，因此要按选项里实际出现的维度逐个累加，而不是只算题目自己声明的那一个。
+ *
+ * ⚠ 量表题（选项 `scoreMap` 为空）返回空数组，调用方据此回退到"只算题目声明的维度"，
+ * 从而保证既有量表题的算分口径**一字不变**（ADR-005 的回归要求）。
+ *
+ * 排序题返回空数组：它的作答是"一串选项"，语义由 `computeRankEffectiveValue` 处理，
+ * 不适用"某个选项带哪些维度"。
+ */
+export const optionScoreMapDimensions = (question: EngineQuestion, answer: EngineAnswer): string[] => {
+  if (question.type === 'RANK') return [];
+
+  const rawValue = Array.isArray(answer.value) ? answer.value[0] : answer.value;
+  if (rawValue === undefined || !Number.isFinite(rawValue)) return [];
+
+  const option = question.options.find((item) => item.value === rawValue);
+  if (!option?.scoreMap) return [];
+
+  return Object.entries(option.scoreMap)
+    .filter(([, value]) => Number.isFinite(value))
+    .map(([key]) => key.toUpperCase());
 };
 
 /**
@@ -56,8 +92,11 @@ export const findOptionDimensionScore = (question: EngineQuestion, optionValue: 
  *         要求「全部选项都带该维度分值」是为了避免部分覆盖时推出误导性的跨度。
  *   3. 题型默认量表（见 `DEFAULT_SCALE`）
  */
-export const resolveScale = (question: EngineQuestion): { min: number; max: number } => {
-  const dimension = question.dimension.toUpperCase();
+export const resolveScale = (
+  question: EngineQuestion,
+  dimension: string = question.dimension,
+): { min: number; max: number } => {
+  const target = dimension.toUpperCase();
   // DEFAULT_SCALE 对全部题型都是穷尽的（Record<EngineQuestionType, ...>），
   // 因此这里无需兜底 —— 新增题型时 TypeScript 会直接报错，比运行时兜底更早暴露问题
   const fallback = DEFAULT_SCALE[question.type];
@@ -84,7 +123,7 @@ export const resolveScale = (question: EngineQuestion): { min: number; max: numb
     let allCovered = true;
 
     for (const option of question.options) {
-      const score = findScoreIgnoreCase(option.scoreMap, dimension);
+      const score = findScoreIgnoreCase(option.scoreMap, target);
 
       if (score === undefined || !Number.isFinite(score)) {
         allCovered = false;
@@ -96,7 +135,23 @@ export const resolveScale = (question: EngineQuestion): { min: number; max: numb
     if (allCovered && scores.length >= 2) {
       const min = Math.min(...scores);
       const max = Math.max(...scores);
-      if (min < max) return { min, max };
+
+      /**
+       * ⚠ 这里**不**要求 `min < max`（ADR-039）
+       *
+       * 全部选项都给同一个分值 = 这道题对该维度**不携带任何信息**。
+       * 旧写法在这种情况下会退回题型默认量程（如 0–1），而选项分值可能是 3，
+       * 于是 `clamp(3, 0, 1) = 1` —— **所有人这一维度都是满分**，
+       * 而且没有任何报错：一个写错的选项分值会变成整份画像上的固定偏移。
+       *
+       * 返回退化的 `{ min: min, max: max }`（min === max）则会把"零信息"如实传下去：
+       * `normalizeToUnit` 对退化量程返回 0，累加器的 `weightedMax - weightedMin` 也是 0，
+       * 最终 `finalizeDimension.usable = false` —— 该维度不出结论（中位 50 仅作占位），
+       * 正是"没有数据就不该有结论"应有的表现。
+       *
+       * 对既有量表题无影响：它们的选项没有 `scoreMap`，`allCovered` 恒为 false。
+       */
+      if (min <= max) return { min, max };
     }
   }
 
@@ -152,24 +207,28 @@ const computeRankEffectiveValue = (
 /**
  * 计算单题在某维度上的有效原始分与量表范围
  *
- * @returns null 表示该题无法为本维度贡献得分
+ * @param dimension 目标维度；默认取题目自己声明的那个。**显式传入**时（ADR-039）
+ *                  用于沉浸式场景题：一道题的选项同时给出多个维度的分值，
+ *                  于是同一份作答要对每个维度各算一次有效值与量程。
+ * @returns null 表示该题无法为**该维度**贡献得分
  */
 export const computeEffectiveValue = (
   question: EngineQuestion,
   answer: EngineAnswer,
+  dimension: string = question.dimension,
 ): { value: number; scaleMin: number; scaleMax: number } | null => {
   if (question.type === 'RANK') {
-    return computeRankEffectiveValue(question, answer, resolveScale(question));
+    return computeRankEffectiveValue(question, answer, resolveScale(question, dimension));
   }
 
-  const scale = resolveScale(question);
+  const scale = resolveScale(question, dimension);
 
   const rawValue = Array.isArray(answer.value) ? answer.value[0] : answer.value;
 
   if (rawValue === undefined || !Number.isFinite(rawValue)) return null;
 
   // 优先使用「选项 → 维度分」映射（迫选题中同一题的不同选项贡献不同）
-  const optionScore = findOptionDimensionScore(question, rawValue);
+  const optionScore = findOptionDimensionScore(question, rawValue, dimension);
   const effectiveRaw = optionScore ?? rawValue;
 
   // 反向计分：把语义翻转到同一极（等价于 max − value）

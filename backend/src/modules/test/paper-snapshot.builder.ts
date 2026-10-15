@@ -19,7 +19,20 @@
 import type { PaperQuestion, PaperSnapshot, SnapshotSourceQuestion } from './test.types';
 
 /** 快照格式版本：格式变更时递增，旧会话仍可按旧版本解析 */
-export const SNAPSHOT_VERSION = 'ps-v1';
+export const SNAPSHOT_VERSION = 'ps-v2';
+
+/**
+ * `ps-v1` — 只带 `{ label, value }` 的历史格式
+ *
+ * `ps-v2`（ADR-039）在选项上补了 `scoreMap`（场景题的**算分依据**）
+ * 与 `feedback`，在题目上补了 `scenarioPrompt`。
+ *
+ * ⚠ 升版**不能**让旧会话失效：库里存着进行中的 `ps-v1` 会话，
+ * 它们按旧语义（选项分值 = 用户所选值）继续算分，不受影响。
+ * 读取侧因此必须把缺失的 `scoreMap` 归一为 `null`，而不是当作 0 ——
+ * 当作 0 会让所有旧作答被算成"全部最低分"，且不报任何错。
+ */
+export const LEGACY_SNAPSHOT_VERSION = 'ps-v1';
 
 /** 默认每批返回题数（契约规则 4：48–93 题的完整试卷约 60–120KB，超出小程序单次请求体验阈值） */
 export const DEFAULT_PAGE_SIZE = 20;
@@ -56,9 +69,22 @@ export const shouldShuffleOptions = (question: SnapshotSourceQuestion): boolean 
 
 /** 构造单题的快照条目 */
 const buildPaperQuestion = (question: SnapshotSourceQuestion, order: number, random: () => number): PaperQuestion => {
+  /**
+   * ⚠ 选项乱序**只对 `BINARY` 生效**，且这里刻意不给场景题乱序
+   *
+   * 量表题乱序会破坏"程度递进"的语义（契约规则 2）；
+   * 而场景题的选项是**并列的做法**，乱序本身无害 —— 但它的每个选项都带
+   * `scoreMap`（算分依据），乱序一旦出错就会让"选 A 得到 B 的分"且无法察觉。
+   * 收益（避免位置偏好）远小于风险（算分错位），因此不做。
+   */
   const options = question.options
     .filter((option) => option.isActive)
-    .map((option) => ({ label: option.label, value: option.value }));
+    .map((option) => ({
+      label: option.label,
+      value: option.value,
+      scoreMap: option.scoreMap,
+      feedback: option.feedback,
+    }));
 
   const orderedOptions = shouldShuffleOptions(question) ? shuffle(options, random) : options;
 
@@ -67,6 +93,7 @@ const buildPaperQuestion = (question: SnapshotSourceQuestion, order: number, ran
     questionId: question.id,
     code: question.code,
     content: question.content,
+    scenarioPrompt: question.scenarioPrompt,
     type: question.type,
     dimension: question.dimension,
     reverseScored: question.reverseScored,
