@@ -80,6 +80,8 @@ interface Harness {
     aiReport: { findUnique: jest.Mock; update: jest.Mock };
     personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock };
     testSession: { findFirst: jest.Mock };
+    /** 读用户性别（ADR-039 的性别语境） */
+    user: { findFirst: jest.Mock };
     reportSection: { deleteMany: jest.Mock; createMany: jest.Mock };
     aiUsageLog: { create: jest.Mock };
     $transaction: jest.Mock;
@@ -135,6 +137,12 @@ const createHarness = (): Harness => {
         questionCount: 32,
       }),
     },
+    /**
+     * 报告生成要读用户性别，用于注入 `{{genderContext}}`（ADR-039）
+     *
+     * 默认"未提供性别" → 报告走中性措辞（与真实行为一致：缺省即中性）。
+     */
+    user: { findFirst: jest.fn().mockResolvedValue({ gender: 'UNKNOWN' }) },
     reportSection: tx.reportSection,
     aiUsageLog: { create: jest.fn().mockResolvedValue({ id: 'log-1' }) },
     $transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => callback(tx)),

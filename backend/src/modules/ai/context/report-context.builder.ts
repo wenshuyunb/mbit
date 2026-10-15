@@ -16,6 +16,7 @@
 
 import { MBTI_TYPE_PROFILES } from '../../personality/data/mbti-types';
 import type { MbtiTypeProfile } from '../../personality/data/mbti-types.types';
+import { buildGenderContext } from './gender-context.util';
 
 /** 缺失数据的统一占位文案（模型据此知道该项本次不可用） */
 export const UNAVAILABLE_PLACEHOLDER = '（本次测评未包含此项）';
@@ -112,6 +113,13 @@ export interface ReportContextInput {
   readonly testDefinitionCode: string | null;
   readonly answeredCount: number | null;
   readonly questionCount: number | null;
+  /**
+   * 用户的性别（ADR-039），用于生成报告的**性别语境**
+   *
+   * ⚠ 它只影响举例与称呼，**不影响任何结论**（见 `gender-context.util.ts`）。
+   * 传 `null` 表示未提供或选择不说 → 报告使用中性措辞。
+   */
+  readonly gender?: string | null;
 }
 
 /** 组装结果 */
@@ -239,6 +247,16 @@ export const buildReportContext = (input: ReportContextInput): ReportContext => 
         ? null
         : `${input.answeredCount}/${input.questionCount}`,
     ),
+
+    /**
+     * 性别语境（ADR-039）
+     *
+     * ⚠ 用直接赋值而不是 `resolve(...)`：它**永远可用** ——
+     * 未提供性别时给出的是一句明确指令（"一律使用中性措辞"），
+     * 而不是"（本次测评未包含此项）"那种占位。后者会让模型自己脑补一个性别，
+     * 而这份报告是要给用户看的。
+     */
+    genderContext: buildGenderContext(input.gender ?? null),
   };
 
   return { variables, unavailable };

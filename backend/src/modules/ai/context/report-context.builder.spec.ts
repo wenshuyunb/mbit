@@ -127,6 +127,37 @@ describe('buildReportContext', () => {
     it('【关键】完全没有缺项', () => {
       expect(buildReportContext(fullInput()).unavailable).toEqual([]);
     });
+
+    /**
+     * 性别语境（ADR-039）
+     *
+     * ⚠ 它**永远可用**：未提供性别时给出的是一句明确指令（"一律使用中性措辞"），
+     * 而不是"（本次测评未包含此项）"那种占位 —— 后者会让模型自行脑补一个性别。
+     */
+    describe('性别语境', () => {
+      it('未提供性别 → 中性措辞指令，且不算缺项', () => {
+        const built = buildReportContext({ ...fullInput(), gender: null });
+
+        expect(built.variables['genderContext']).toContain('未提供性别');
+        expect(built.unavailable).not.toContain('genderContext');
+      });
+
+      it('提供性别 → 按该视角展开，并禁止刻板印象', () => {
+        const built = buildReportContext({ ...fullInput(), gender: 'FEMALE' });
+
+        expect(built.variables['genderContext']).toContain('女生');
+        expect(built.variables['genderContext']).toContain('严禁性别刻板印象');
+      });
+
+      it('【关键】性别不参与任何**结论性**变量', () => {
+        const male = buildReportContext({ ...fullInput(), gender: 'MALE' }).variables;
+        const female = buildReportContext({ ...fullInput(), gender: 'FEMALE' }).variables;
+
+        for (const key of ['mbtiType', 'mbtiTypeName', 'dimensionEI', 'bigFiveSummary', 'mbtiConfidence']) {
+          expect(male[key]).toBe(female[key]);
+        }
+      });
+    });
   });
 
   describe('确定性', () => {

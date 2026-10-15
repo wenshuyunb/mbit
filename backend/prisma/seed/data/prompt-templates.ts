@@ -329,11 +329,27 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      * v4：给「你的关系模式」段补 `hint`，**显式禁止**模型给依恋类型 / 爱的语言 /
      * 冲突风格。v3 只摘掉了变量却没约束这一段的写法，实测模型会自己编一个依恋类型
      *（见 `MBTI_REPORT_SECTIONS` 上的说明），编造内容还落在付费段里。
+     *
+     * v5：注入 `{{genderContext}}`（ADR-039）—— 举例与称呼跟用户性别一致，
+     * 同时显式禁止性别刻板印象；未提供性别时一律中性措辞。
      */
-    version: 4,
+    version: 5,
     systemPrompt: REPORT_SYSTEM_GUARDRAILS,
     userPromptTemplate: [
       '请为下面这位用户撰写人格深度解读报告。',
+      '',
+      '## 写作语境（性别）',
+      '{{genderContext}}',
+      '',
+      /**
+       * ⚠ 这句**静态**要求与 `{{genderContext}}` 里的那句是**故意重复**的
+       *
+       * 变量文本由代码生成（`gender-context.util.ts`），而模板是版本化、可评审、
+       * 运营能在后台改的那一份。把硬约束只放在变量里，等于"这条红线在模板上看不见" ——
+       * 谁改了模板或改错了变量，都不会有人当场发现。
+       * 重复一句的代价是多几行 token，收益是评审时它就在眼前。
+       */
+      '🚫 严禁性别刻板印象：不写"男生不该……""女生都……"，也不要把性别当作分数的解释。',
       '',
       '## 用户的人格数据',
       '- 类型：{{mbtiType}}（{{mbtiTypeName}}，{{mbtiGroup}}）',
@@ -374,6 +390,8 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     // 6 段 × 600 字 ≈ 3600 字 ≈ 2100 token，2048 会被截断，故提高到 4096
     maxTokens: 4096,
     changeNote:
+      'v5：注入 {{genderContext}}（ADR-039）—— 举例与称呼跟用户性别一致，' +
+      '并显式禁止性别刻板印象与"因为你是男生/女生，所以……"这类归因；未提供性别时一律中性措辞。' +
       'v4：为「你的关系模式」段增加写作要求，显式禁止给出依恋类型 / 爱的语言 / 冲突风格 —— ' +
       'v3 摘掉变量后模型会在该段自行编造依恋类型（实测出现「结合安全型依恋与协作式冲突风格来看」，' +
       '而提示词里并无此类数据），且该段属付费内容；' +
@@ -412,8 +430,11 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      * v2：**摘掉情感变量**（ADR-038 模块隔离）——
      * 原先有一段「由大五分派生的关系风格」，等于人格模块在产情感结论。
      * 保留 v1 供历史报告对号。
+     *
+     * v3：注入 `{{genderContext}}`（ADR-039）—— 举例与称呼跟用户性别一致，
+     * 同时显式禁止性别刻板印象；未提供性别时一律中性措辞。
      */
-    version: 2,
+    version: 3,
     /**
      * 与 MBTI 报告共用 `REPORT_SYSTEM_GUARDRAILS`（不得重新算分 / 禁止临床用语 / 不用绝对化断言），
      * 再补五条大五专属要求。
@@ -456,6 +477,13 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     userPromptTemplate: [
       '请为下面这位用户撰写**大五人格（Big Five / OCEAN）**深度解读报告。',
       '',
+      '## 写作语境（性别）',
+      '{{genderContext}}',
+      '',
+      // 与 `{{genderContext}}` 里的同类约束故意重复：硬约束必须出现在**模板**里，
+      // 见 `report.mbti` 同一位置的说明
+      '🚫 严禁性别刻板印象：不写"男生不该……""女生都……"，也不要把性别当作分数的解释。',
+      '',
       '## 用户的大五特质数据（本次报告的分数来源，共五项）',
       '{{bigFiveSummary}}',
       '',
@@ -489,6 +517,8 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     // 四段 × 150–300 字，与关系报告同档；低于此值容易把最后一段截断
     maxTokens: 2560,
     changeNote:
+      'v3：注入 {{genderContext}}（ADR-039）—— 举例与称呼跟用户性别一致，' +
+      '并显式禁止性别刻板印象；未提供性别时一律中性措辞。' +
       'v2：摘掉「由大五分派生的关系风格」整段（attachmentStyle / loveLanguages / conflictStyle）' +
       '—— 模块隔离（ADR-038）：人格模块不再产情感结论。v1 为首个 4 段式大五报告',
   },
@@ -702,7 +732,7 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     type: 'EMOTION_ANALYSIS',
     description:
       '基于依恋（ECR 双轴）、爱的语言与冲突处理风格（TKI）的直接测量结果，生成亲密关系风格解读报告（4 段：依恋姿态 / 被爱方式 / 冲突反应 / 模式提醒）',
-    version: 1,
+    version: 2,
     systemPrompt: EMOTION_REPORT_GUARDRAILS,
     /**
      * 变量**只允许**取自 `emotion-report-context.builder.ts` 的
@@ -712,7 +742,8 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      *   `{{loveLanguageSummary}}`（五项爱的语言的完整分布）、`{{primaryLoveLanguages}}`（主导两项）、
      *   `{{conflictStyle}}`（主导冲突风格）、`{{conflictStyleSummary}}`（五种风格的完整分布）、
      *   `{{consistencyScore}}` `{{completionRate}}` `{{avgResponseSeconds}}` `{{answeredRatio}}`
-     *   （数据质量）、`{{engineVersion}}` `{{testDefinitionCode}}`（元信息）。
+     *   （数据质量）、`{{engineVersion}}` `{{testDefinitionCode}}`（元信息）、
+     *   `{{genderContext}}`（性别语境，ADR-039）。
      *
      * ⚠ **刻意不引用任何人格变量**（`{{mbtiType}}` / `{{bigFiveSummary}}` / `{{dimensionEI}}` …）：
      * 情感测评没有测人格，这些数据本次根本不存在。引用了它们只会让渲染失败或喂进占位文案，
@@ -720,6 +751,13 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
      */
     userPromptTemplate: [
       '请基于下面这位用户的**情感测评**结果，撰写一份亲密关系风格解读报告。',
+      '',
+      '## 写作语境（性别）',
+      '{{genderContext}}',
+      '',
+      // 与 `{{genderContext}}` 里的同类约束故意重复：硬约束必须出现在**模板**里，
+      // 见 `report.mbti` 同一位置的说明
+      '🚫 严禁性别刻板印象：不写"男生不该……""女生都……"，也不要把性别当作分数的解释。',
       '',
       '## 用户数据',
       '',
@@ -766,6 +804,8 @@ export const PROMPT_TEMPLATES: SeedPromptTemplate[] = [
     // 4 段 × 600 字 ≈ 2400 字 ≈ 1400 token，2048 会被截断
     maxTokens: 3072,
     changeNote:
+      'v2：注入 {{genderContext}}（ADR-039）—— 情感报告的举例与称呼要跟用户一致（你和他 / 你和她），' +
+      '并显式禁止性别刻板印象与"因为你是男生/女生，所以……"这类归因；未提供性别时一律中性措辞。' +
       '首个版本：4 段式情感测评报告（依恋双轴 / 爱的语言分布 / 冲突风格 / 模式提醒），' +
       '首段免费预览；与人格报告**完全分离**的上下文与系统提示词（ADR-038 模块隔离），' +
       '并给 `PromptType.EMOTION_ANALYSIS` 这个长期空转的枚举值补上真实模板',

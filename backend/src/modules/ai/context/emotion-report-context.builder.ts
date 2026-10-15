@@ -34,6 +34,7 @@ import {
   type LoveLanguageDimension,
 } from '../../emotion/engine/emotion-engine.types';
 import { UNAVAILABLE_PLACEHOLDER, formatScore } from './report-context.builder';
+import { buildGenderContext } from './gender-context.util';
 
 /**
  * 依恋类型中文名
@@ -97,6 +98,14 @@ export interface EmotionReportContextInput {
   readonly testDefinitionCode: string | null;
   readonly answeredCount: number | null;
   readonly questionCount: number | null;
+  /**
+   * 用户的性别（ADR-039），用于生成报告的**性别语境**
+   *
+   * 情感报告尤其依赖它：举例里的"你和他/你和她"必须与用户一致，
+   * 而处境（谁先开口、见家长、要不要先低头）本身就带性别角色差异。
+   * ⚠ 但结论不受影响（见 `gender-context.util.ts`）。传 `null` → 中性措辞。
+   */
+  readonly gender?: string | null;
 }
 
 /** 组装结果（与人格报告同形状，便于共用同一套渲染与校验） */
@@ -223,6 +232,15 @@ export const buildEmotionReportContext = (input: EmotionReportContextInput): Emo
         ? null
         : `${input.answeredCount}/${input.questionCount}`,
     ),
+
+    /**
+     * 性别语境（ADR-039）
+     *
+     * ⚠ 直接赋值：它**永远可用** —— 未提供性别时给出的是一句明确指令
+     * （"一律使用中性措辞"），而不是占位文案。情感报告里冒出一句"作为女生……"
+     * 对选了「不想说」的用户是直接的冒犯，因此这里不能留空让模型自由发挥。
+     */
+    genderContext: buildGenderContext(input.gender ?? null),
   };
 
   return { variables, unavailable };

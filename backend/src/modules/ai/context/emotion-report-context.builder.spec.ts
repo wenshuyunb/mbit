@@ -129,6 +129,39 @@ describe('buildEmotionReportContext', () => {
     expect(unavailable).toEqual([]);
   });
 
+  /**
+   * 性别语境（ADR-039）
+   *
+   * 情感报告对它的依赖最直接：举例里的"你和他 / 你和她"必须与用户一致，
+   * 而处境本身（谁先开口、见家长、要不要先低头）就带性别角色差异。
+   */
+  describe('性别语境', () => {
+    it('未提供性别时给中性措辞的**明确指令**（不是占位文案）', () => {
+      const built = buildEmotionReportContext({ ...input(), gender: null });
+
+      expect(built.variables['genderContext']).toContain('未提供性别');
+      expect(built.variables['genderContext']).toContain('对方');
+      // 占位文案会被模型读成"这里本来有东西"，进而自行脑补一个性别
+      expect(built.unavailable).not.toContain('genderContext');
+    });
+
+    it('提供性别时按该视角展开，且仍然禁止刻板印象', () => {
+      const built = buildEmotionReportContext({ ...input(), gender: 'MALE' });
+
+      expect(built.variables['genderContext']).toContain('男生');
+      expect(built.variables['genderContext']).toContain('严禁性别刻板印象');
+    });
+
+    it('【关键】性别不参与任何**结论性**变量（分数与类型不因性别变化）', () => {
+      const male = buildEmotionReportContext({ ...input(), gender: 'MALE' }).variables;
+      const female = buildEmotionReportContext({ ...input(), gender: 'FEMALE' }).variables;
+
+      for (const key of ['attachmentStyle', 'attachmentAxes', 'primaryLoveLanguages', 'conflictStyle']) {
+        expect(male[key]).toBe(female[key]);
+      }
+    });
+  });
+
   it('【关键】变量表里**没有任何人格变量**（模块隔离）', () => {
     const personalityKeys = [
       'mbtiType',

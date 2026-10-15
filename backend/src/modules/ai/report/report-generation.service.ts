@@ -410,6 +410,22 @@ export class ReportGenerationService {
     await this.liveProgress.clear(reportId);
   }
 
+  /**
+   * 读取用户性别（ADR-039），供报告生成**性别语境**
+   *
+   * ⚠ 读不到就返回 `null`（→ 报告使用中性措辞），**不要抛错**：
+   * 报告是一份已经付费/已触发的任务，因为"用户没填性别"而失败是不可接受的。
+   * 性别在这里只影响举例与称呼，缺了就退化成中性，不影响任何结论。
+   */
+  private async loadUserGender(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId },
+      select: { gender: true },
+    });
+
+    return user?.gender ?? null;
+  }
+
   /** 读取画像并渲染 Prompt（返回 `prompt` 便于调用方复用） */
   private async prepare(
     userId: string,
@@ -438,6 +454,7 @@ export class ReportGenerationService {
       testDefinitionCode: session?.definitionCode ?? null,
       answeredCount: session?.answeredCount ?? null,
       questionCount: session?.questionCount ?? null,
+      gender: await this.loadUserGender(userId),
     };
 
     const { variables } = buildReportContext(input);
@@ -515,6 +532,7 @@ export class ReportGenerationService {
       testDefinitionCode: profile.testResult?.definitionCode ?? null,
       answeredCount,
       questionCount,
+      gender: await this.loadUserGender(userId),
     });
 
     const prompt = await this.prompts.getPrompt(templateKey, mergeGenerationOptions(variables, options));
