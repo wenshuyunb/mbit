@@ -80,6 +80,14 @@ const personality = computed<PersonalitySessionResult | null>(() =>
 /** 情感结果（收窄后的便捷访问；非情感结果时为 null） */
 const emotion = computed<EmotionSessionResult | null>(() => (result.value?.module === 'EMOTION' ? result.value : null));
 
+/**
+ * 情感结论（服务端确定性生成，见 `EmotionConclusion` 的说明）
+ *
+ * 旧数据（本次改动之前生成的会话结果）里没有这个字段，因此按可选处理：
+ * 拿不到就不渲染结论区，而不是把页面搞崩。
+ */
+const emotionConclusion = computed(() => emotion.value?.result.conclusion ?? null);
+
 /** 心理健康结果（收窄后的便捷访问；非本模块时为 null） */
 const mentalHealth = computed<MentalHealthSessionResult | null>(() =>
   result.value?.module === 'MENTAL_HEALTH' ? result.value : null,
@@ -409,6 +417,43 @@ const goMyReportDetail = (): void => {
           <text class="result__emotion-style">{{ attachmentView?.label ?? '待生成' }}</text>
           <text class="result__summary">依恋类型由两条倾向求交得出，会随情境与对象变化 · 仅供自我探索参考</text>
         </view>
+
+        <!--
+          ★ 结论区（ADR-039 补）：这一屏是用户"做完题最先看到的"，必须直接给结论
+
+          原先这一页只有标签与分数，实测用户的原话是「看完不知道想表达什么，
+          也没有告诉我我属于什么、需要什么、建议是什么」。
+          结论由**服务端按固定规则算出**（不是 AI 生成、不消耗额度、不必等报告），
+          深度解读仍由用户主动生成的报告承担。
+        -->
+        <template v-if="emotionConclusion">
+          <view class="card result__section result__verdict">
+            <text class="result__verdict-headline">{{ emotionConclusion.headline }}</text>
+            <text class="result__verdict-text">{{ emotionConclusion.portrait }}</text>
+          </view>
+
+          <view class="card result__section result__need">
+            <text class="result__section-title">你在关系里最需要什么</text>
+            <text class="result__verdict-text">{{ emotionConclusion.needs }}</text>
+          </view>
+
+          <view class="card result__section">
+            <text class="result__section-title">你的优势</text>
+            <view v-for="(item, index) in emotionConclusion.strengths" :key="index" class="result__bullet">
+              <text class="result__bullet-dot">·</text>
+              <text class="result__bullet-text">{{ item }}</text>
+            </view>
+          </view>
+
+          <view class="card result__section result__advice">
+            <text class="result__section-title">可以立刻开始做的三件事</text>
+            <view v-for="(item, index) in emotionConclusion.suggestions" :key="index" class="result__advice-item">
+              <text class="result__advice-index">{{ index + 1 }}</text>
+              <text class="result__advice-text">{{ item }}</text>
+            </view>
+            <text class="result__advice-note">{{ emotionConclusion.note }}</text>
+          </view>
+        </template>
 
         <view v-if="qualityNotice" class="result__notice card">
           <text class="result__notice-text">{{ qualityNotice }}</text>
@@ -745,6 +790,93 @@ const goMyReportDetail = (): void => {
     margin-bottom: $space-md;
     font-size: $font-size-md;
     font-weight: $font-weight-semibold;
+  }
+
+  /**
+   * 结论区（ADR-039 补）
+   *
+   * 与下面的"分数区"刻意做出**层级差别**：结论卡片更大、更靠前、字号更高 ——
+   * 用户先读到"你是什么样、需要什么"，再看分数是怎么来的。
+   * 反过来（先一堆分数）正是这次被用户指出"不知道想表达什么"的原因。
+   */
+  &__verdict {
+    background: linear-gradient(135deg, $color-primary-fade 0%, $color-bg-card 70%);
+    border: 2rpx solid rgba(91, 75, 224, 0.18);
+  }
+
+  &__verdict-headline {
+    display: block;
+    font-size: $font-size-lg;
+    font-weight: $font-weight-bold;
+    line-height: $line-height-base;
+    color: $color-text-primary;
+  }
+
+  &__verdict-text {
+    display: block;
+    margin-top: $space-sm;
+    font-size: $font-size-base;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+  }
+
+  &__need {
+    background-color: $color-primary-fade;
+  }
+
+  &__bullet {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: $space-xs;
+  }
+
+  &__bullet-dot {
+    margin-right: $space-xs;
+    font-size: $font-size-base;
+    color: $color-primary;
+  }
+
+  &__bullet-text {
+    flex: 1;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+  }
+
+  &__advice-item {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: $space-md;
+  }
+
+  &__advice-index {
+    @include flex-center;
+    flex-shrink: 0;
+    width: 40rpx;
+    height: 40rpx;
+    margin-right: $space-sm;
+    font-size: $font-size-xs;
+    font-weight: $font-weight-semibold;
+    color: $color-text-inverse;
+    background-color: $color-primary;
+    border-radius: 50%;
+  }
+
+  &__advice-text {
+    flex: 1;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+  }
+
+  &__advice-note {
+    display: block;
+    margin-top: $space-md;
+    padding-top: $space-sm;
+    font-size: $font-size-xs;
+    line-height: $line-height-loose;
+    color: $color-text-placeholder;
+    border-top: 1rpx solid $color-divider;
   }
 
   &__dimension {

@@ -234,6 +234,32 @@ export interface PersonalitySessionResult extends SessionResultEnvelope {
   };
 }
 
+/**
+ * 情感测评的**确定性结论**（结果页直接展示，ADR-039 补）
+ *
+ * ⚠ 它**不是 AI 生成**的：由服务端按固定规则从画像算出，同一份画像任何时候
+ * 都得到同一段话。之所以要有它，是因为结果页原先只有"标签 + 分数" ——
+ * 用户看完不知道这意味着什么、自己需要什么、该做什么。
+ *
+ * 深度解读（更细的举例与个性化建议）仍由用户主动生成的 AI 报告承担。
+ */
+export interface EmotionConclusion {
+  /** 一句话画像（最先看到的那句） */
+  headline: string;
+  /** 依恋姿态的人话解读（含两轴分数与档位） */
+  portrait: string;
+  /** 你在关系里最需要什么 */
+  needs: string;
+  /** 有分歧时的你 */
+  conflict: string;
+  /** 你在关系里的优势 */
+  strengths: string[];
+  /** 可以立刻开始做的三件事 */
+  suggestions: string[];
+  /** 合规提示（服务端下发，前端原样展示） */
+  note: string;
+}
+
 /** 情感测评的算分结果（依恋双轴 + 爱的语言 + 冲突风格） */
 export interface EmotionSessionResult extends SessionResultEnvelope {
   module: 'EMOTION';
@@ -256,6 +282,8 @@ export interface EmotionSessionResult extends SessionResultEnvelope {
       scores: Record<string, number>;
       style: string;
     };
+    /** 见 `EmotionConclusion` 的说明 */
+    conclusion: EmotionConclusion;
     quality: SessionQuality;
   };
 }

@@ -21,6 +21,7 @@ import type { QuestionAudience, TestModule } from '@prisma/client';
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { parseScoreMap } from '../../common/engine/score-map.util';
+import { buildEmotionConclusion, type EmotionConclusion } from '../emotion/emotion-conclusion.util';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import type { EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
@@ -203,6 +204,17 @@ export interface EmotionSubmitResultView extends SubmitResultEnvelope {
       scores: Record<string, number>;
       style: string;
     };
+    /**
+     * 结果页的**确定性结论**（ADR-039 补）
+     *
+     * ⚠ 它不是 AI 写的，也不落库：由画像按固定规则算出，同一份画像任何时候
+     * 都得到同一段话。结果页原先只有"标签 + 分数"，用户的原话是
+     * 「看完不知道想表达什么，也没有告诉我我属于什么、需要什么、建议是什么」。
+     *
+     * 与 AI 报告的分工：这一段保证**做完题立刻有结论**（不必等十几秒的报告生成），
+     * 深度解读与个性化建议由用户主动生成的报告承担。
+     */
+    conclusion: EmotionConclusion;
     quality: SubmitQualityView;
   };
 }
@@ -1875,6 +1887,23 @@ export class TestService {
           scores: (profile.conflictScores ?? {}) as Record<string, number>,
           style: profile.conflictStyle,
         },
+        /**
+         * 结论（ADR-039 补）：结果页要能直接回答"我是什么样、我需要什么、我该做什么"
+         *
+         * 纯函数、不落库 —— 它是**由画像按固定规则推出来的描述**，
+         * 同一份画像任何时候都得到同一段话（ADR-005 的可复现要求）。
+         * 与 AI 报告的分工：这一段保证"做完题立刻有结论"，
+         * 深度解读与个性化建议仍由用户主动生成的报告承担。
+         */
+        conclusion: buildEmotionConclusion({
+          attachmentStyle: profile.attachmentStyle,
+          attachmentAnxiety: profile.attachmentAnxiety,
+          attachmentAvoidance: profile.attachmentAvoidance,
+          loveLanguageScores: (profile.loveLanguageScores ?? null) as Record<string, number> | null,
+          primaryLoveLanguages: profile.primaryLoveLanguages,
+          conflictStyle: profile.conflictStyle,
+          conflictScores: (profile.conflictScores ?? null) as Record<string, number> | null,
+        }),
         quality: {
           consistencyScore: profile.consistencyScore ?? 0,
           completionRate: profile.completionRate ?? 0,
@@ -2025,6 +2054,17 @@ export class TestService {
         scores: output.conflict.scores,
         style: output.conflict.style ?? '',
       },
+      // 见 `buildEmotionResultFromExisting` 里的说明：结果页的结论是**算出来的**，
+      // 与 AI 报告分工 —— 用户做完题立刻有结论，不必等报告生成
+      conclusion: buildEmotionConclusion({
+        attachmentStyle: output.attachment.style ?? '',
+        attachmentAnxiety: output.attachment.anxiety,
+        attachmentAvoidance: output.attachment.avoidance,
+        loveLanguageScores: output.loveLanguage.scores,
+        primaryLoveLanguages: output.loveLanguage.primary,
+        conflictStyle: output.conflict.style ?? '',
+        conflictScores: output.conflict.scores,
+      }),
       quality: {
         consistencyScore: output.quality.consistencyScore,
         completionRate: output.quality.completionRate,
