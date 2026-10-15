@@ -28,8 +28,14 @@
 
 /** 自动跳题控制器 */
 export interface AutoAdvance {
-  /** 排一次跳转；重复调用**只会保留最后一次**（不会叠加成连跳两题） */
-  schedule(): void;
+  /**
+   * 排一次跳转；重复调用**只会保留最后一次**（不会叠加成连跳两题）
+   *
+   * @param delayMs 本次的延时；不传则用创建时的默认值。
+   *                沉浸式场景题需要更长的时间（用户要读完那句即时反馈），
+   *                而量表题只要"看到选中态"就够了。
+   */
+  schedule(delayMs?: number): void;
   /** 取消待执行的跳转（手动翻页、跳题、离开页面时调用） */
   cancel(): void;
   /** 当前是否有待执行的跳转（测试与调试用） */
@@ -39,7 +45,7 @@ export interface AutoAdvance {
 /**
  * 创建一个自动跳题控制器
  *
- * @param delayMs 延时（要给用户"看到自己点的选项被选中"的时间）
+ * @param delayMs 默认延时（要给用户"看到自己点的选项被选中"的时间）
  * @param advance 到点后执行的动作（通常是 `goTo(currentIndex + 1)`）
  */
 export const createAutoAdvance = (delayMs: number, advance: () => void): AutoAdvance => {
@@ -53,13 +59,13 @@ export const createAutoAdvance = (delayMs: number, advance: () => void): AutoAdv
   };
 
   return {
-    schedule(): void {
+    schedule(overrideMs?: number): void {
       // 先取消再排：连点两次选项不应该连跳两题
       cancel();
       timer = setTimeout(() => {
         timer = null;
         advance();
-      }, delayMs);
+      }, overrideMs ?? delayMs);
     },
 
     cancel,

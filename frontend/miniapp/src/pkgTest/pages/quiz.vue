@@ -41,14 +41,6 @@ import { useTestStore } from '@/store/test';
 import { goBack } from '@/utils/navigate';
 import { confirm } from '@/utils/toast';
 
-/**
- * 自动跳题延时
- *
- * 220ms 而不是更短：要留出"看到自己点的选项被选中"的时间，
- * 太短会让人怀疑自己有没有点到（然后重复点击 —— 又回到竞态里）。
- */
-const ADVANCE_DELAY_MS = 220;
-
 const appStore = useAppStore();
 const testStore = useTestStore();
 
@@ -76,6 +68,40 @@ const currentAnswer = computed<number | null>(() => {
 
 /** 是否为最后一题 */
 const isLast = computed(() => testStore.currentIndex >= testStore.total - 1);
+
+/**
+ * 当前题的**做法反馈**（沉浸式场景题专有）
+ *
+ * 用户选完一个做法后，先给他一句"这样做常见的后续"，再滑入下一幕 ——
+ * 沉浸感主要来自"叙事 + 即时反馈"，而不是分支剧情。
+ * 量表题没有这个字段，因此这里为 `null` 时走原来的快速跳题节奏。
+ */
+const currentFeedback = computed<string | null>(() => {
+  const current = question.value;
+  const selected = currentAnswer.value;
+  if (!current || selected === null) return null;
+
+  return current.options.find((option) => option.value === selected)?.feedback ?? null;
+});
+
+/** 是否为沉浸式场景题（由是否存在提问句判定） */
+const isScenario = computed(() => Boolean(question.value?.scenarioPrompt));
+
+/**
+ * 自动跳题延时
+ *
+ * 220ms 而不是更短：要留出"看到自己点的选项被选中"的时间，
+ * 太短会让人怀疑自己有没有点到（然后重复点击 —— 又回到竞态里）。
+ */
+const ADVANCE_DELAY_MS = 220;
+
+/**
+ * 场景题的跳题延时：要留出**读完那句反馈**的时间
+ *
+ * 1400ms 是"能读完一句话、又不至于让人等"的经验值。
+ * 反馈只有十几个字，但一闪而过就等于没有 —— 那样这个功能就白做了。
+ */
+const SCENARIO_ADVANCE_DELAY_MS = 1400;
 
 /**
  * 自动跳题控制器（见 `@/pkgTest/auto-advance` 的说明）
@@ -107,7 +133,8 @@ const select = (value: number): void => {
     return;
   }
 
-  autoAdvance.schedule();
+  // 场景题多留一会儿：用户要先读完那句即时反馈，再进入下一幕
+  autoAdvance.schedule(isScenario.value ? SCENARIO_ADVANCE_DELAY_MS : ADVANCE_DELAY_MS);
 };
 
 /** 退出答题（自定义导航栏没有原生返回键，必须自己给一个） */
@@ -217,8 +244,25 @@ onUnload(() => {
 
     <!-- 题目区 -->
     <view v-if="question" class="quiz__body">
-      <text class="quiz__index">第 {{ testStore.currentIndex + 1 }} 题 / 共 {{ testStore.total }} 题</text>
-      <text class="quiz__content">{{ question.content }}</text>
+      <!--
+        沉浸式场景题（ADR-039）：情境叙述 + 提问 + 做法 + 即时反馈
+
+        计量表题与场景题的唯一区别**只在排版**：数据侧两者都是"题干 + 若干选项"。
+        因此这里不另开一个页面 —— 两套模板并存于同一页，
+        断点续答、漏答补救、进度条这些都只有一份实现。
+      -->
+      <template v-if="isScenario">
+        <text class="quiz__index">第 {{ testStore.currentIndex + 1 }} 幕 / 共 {{ testStore.total }} 幕</text>
+        <view class="quiz__scene">
+          <text class="quiz__scene-text">{{ question.content }}</text>
+        </view>
+        <text class="quiz__prompt">{{ question.scenarioPrompt }}</text>
+      </template>
+
+      <template v-else>
+        <text class="quiz__index">第 {{ testStore.currentIndex + 1 }} 题 / 共 {{ testStore.total }} 题</text>
+        <text class="quiz__content">{{ question.content }}</text>
+      </template>
 
       <view class="quiz__options">
         <view
@@ -230,6 +274,11 @@ onUnload(() => {
           <text class="quiz__option-label">{{ option.label }}</text>
           <text class="quiz__option-check">{{ currentAnswer === option.value ? '✓' : '' }}</text>
         </view>
+      </view>
+
+      <!-- 即时反馈：选完才出现，给用户一句"这样做常见的后续"（不评判对错） -->
+      <view v-if="currentFeedback" class="quiz__feedback">
+        <text class="quiz__feedback-text">{{ currentFeedback }}</text>
       </view>
     </view>
 
@@ -354,6 +403,54 @@ onUnload(() => {
     font-size: $font-size-lg;
     font-weight: $font-weight-semibold;
     line-height: $line-height-base;
+  }
+
+  /**
+   * 场景叙述（沉浸式场景题专用）
+   *
+   * 与量表题的"题干"刻意做出**观感差别**：量表题干是一行陈述，
+   * 而场景是一段处境 —— 更大的行距、更宽的内边距、独立卡片，
+   * 让人先"进入这个场景"，再看到提问。沉浸感有一半来自这里。
+   */
+  &__scene {
+    padding: $space-lg;
+    margin-top: $space-md;
+    background-color: $color-bg-hover;
+    border-radius: $radius-lg;
+  }
+
+  &__scene-text {
+    font-size: $font-size-md;
+    line-height: $line-height-loose;
+    color: $color-text-primary;
+  }
+
+  &__prompt {
+    display: block;
+    margin-top: $space-lg;
+    font-size: $font-size-lg;
+    font-weight: $font-weight-semibold;
+    line-height: $line-height-base;
+  }
+
+  /**
+   * 即时反馈
+   *
+   * 选完做法后出现的一句话，只描述"这样做的常见后续"，不评判对错。
+   * 用主色淡底 + 左侧竖线，读起来像旁白而不是评分。
+   */
+  &__feedback {
+    padding: $space-md $space-lg;
+    margin-top: $space-md;
+    background-color: $color-primary-fade;
+    border-left: 6rpx solid $color-primary;
+    border-radius: $radius-sm;
+  }
+
+  &__feedback-text {
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
   }
 
   &__options {

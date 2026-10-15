@@ -98,4 +98,28 @@ describe('createAutoAdvance', () => {
 
     expect(advance).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * 场景题需要更长的延时的原因：要留出**读完那句即时反馈**的时间。
+   * 反馈只有十几个字，但一闪而过就等于没有 —— 那样这个功能就白做了。
+   */
+  it('可以按次覆盖延时（场景题读反馈用更长时间）', () => {
+    const LONG_MS = 1400;
+
+    controller.schedule(LONG_MS);
+    vi.advanceTimersByTime(DELAY_MS);
+    expect(advance).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(LONG_MS - DELAY_MS);
+    expect(advance).toHaveBeenCalledTimes(1);
+  });
+
+  it('覆盖延时后仍然只跳一次、且可被取消', () => {
+    controller.schedule(1400);
+    controller.schedule(1400);
+    controller.cancel();
+    vi.advanceTimersByTime(3000);
+
+    expect(advance).not.toHaveBeenCalled();
+  });
 });

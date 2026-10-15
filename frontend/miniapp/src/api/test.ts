@@ -60,18 +60,38 @@ export interface SessionProgress {
   completionRate: number;
 }
 
-/** 试卷快照中的题目（与后端 `PaperQuestion` 对齐） */
+/**
+ * 试卷快照中的题目（与后端 `PaperQuestion` 对齐）
+ *
+ * ## 两种题型共用这一个结构（ADR-039）
+ *
+ * | 字段              | 量表题（MBTI / 大五 / 状态自评） | 沉浸式场景题（情感测评） |
+ * | ----------------- | ------------------------------- | ------------------------ |
+ * | `content`         | 一句陈述句                      | **情境叙述**（一段处境） |
+ * | `scenarioPrompt`  | `null`                          | 提问句（"你会怎么做？"） |
+ * | `options[].label` | 五级同意程度                    | 一个具体做法             |
+ * | `options[].feedback` | `null`                       | 该做法的即时反馈         |
+ *
+ * ⚠ 选项的 `scoreMap`（算分依据）**不下发** —— 那是评分键，客户端不需要。
+ */
 export interface PaperQuestion {
   order: number;
   questionId: string;
   code: string;
   content: string;
+  /** 场景题的提问句；量表题为 `null`（题干本身即陈述） */
+  scenarioPrompt?: string | null;
   type: QuestionType;
   dimension: string;
   reverseScored: boolean;
   weight: number;
   tags: string[];
-  options: Array<{ label: string; value: number }>;
+  options: Array<{
+    label: string;
+    value: number;
+    /** 选中该做法后的即时反馈；量表题为 `null` */
+    feedback?: string | null;
+  }>;
 }
 
 /** 会话视图（创建 / 断点续答返回） */
@@ -89,6 +109,13 @@ export interface TestSessionView {
   progress: SessionProgress;
   paper: {
     snapshotVersion: string;
+    /**
+     * 本次取用的题目适用人群（ADR-039）
+     *
+     * 情感场景题按性别分男 / 女 / 中性三套独立内容，这个字段说明"手上这份试卷
+     * 是哪一套"（界面可据此标注，排障时也一眼能对上）。量表题为 `ALL`。
+     */
+    audience?: 'ALL' | 'MALE' | 'FEMALE' | 'NEUTRAL';
     questionsPerPage: number;
     shuffled: boolean;
     optionShuffled: boolean;
