@@ -76,9 +76,22 @@ export interface PaperAnswerScale {
   values: number[];
 }
 
+/** 题目适用人群（与 Prisma `QuestionAudience` 对齐；ADR-039） */
+export type PaperAudience = 'ALL' | 'MALE' | 'FEMALE' | 'NEUTRAL';
+
 /** 试卷快照（落库后永不修改） */
 export interface PaperSnapshot {
   snapshotVersion: string;
+  /**
+   * 本次实际取用的**题目适用人群**（ADR-039）
+   *
+   * 情感场景题按性别分三套，所以"这份画像是用哪套题测出来的"必须跟着快照走：
+   *   · 用户之后改了性别 → **旧会话不受影响**（快照已固化），新会话用新的一套；
+   *   · 复盘"为什么这个人的结果看起来不一样"时，第一件要看的就是它。
+   *
+   * `ps-v1` 旧快照没有这个字段（那时只有一套题），读取侧按可选处理。
+   */
+  audience?: PaperAudience;
   /** 每批下发题数 */
   questionsPerPage: number;
   /** 题目是否经过乱序 */

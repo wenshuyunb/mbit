@@ -16,7 +16,7 @@
  * 本文件是纯函数：随机源可注入，便于单测得到确定性结果。
  */
 
-import type { PaperQuestion, PaperSnapshot, SnapshotSourceQuestion } from './test.types';
+import type { PaperAudience, PaperQuestion, PaperSnapshot, SnapshotSourceQuestion } from './test.types';
 
 /** 快照格式版本：格式变更时递增，旧会话仍可按旧版本解析 */
 export const SNAPSHOT_VERSION = 'ps-v2';
@@ -108,10 +108,11 @@ const buildPaperQuestion = (question: SnapshotSourceQuestion, order: number, ran
  *
  * @param questions 抽题结果（已按定义规则选出，顺序未定）
  * @param options.random 随机源（默认 `Math.random`；测试可注入确定性序列）
+ * @param options.audience 本次取用的题目适用人群（ADR-039；固化进快照以便复盘）
  */
 export const buildPaperSnapshot = (
   questions: readonly SnapshotSourceQuestion[],
-  options: { random?: () => number; shuffled?: boolean } = {},
+  options: { random?: () => number; shuffled?: boolean; audience?: PaperAudience } = {},
 ): PaperSnapshot => {
   const random = options.random ?? Math.random;
   const shouldShuffleQuestions = options.shuffled ?? true;
@@ -120,6 +121,7 @@ export const buildPaperSnapshot = (
 
   return {
     snapshotVersion: SNAPSHOT_VERSION,
+    audience: options.audience ?? 'ALL',
     questionsPerPage: DEFAULT_PAGE_SIZE,
     shuffled: shouldShuffleQuestions,
     // 只要有任一题需要选项乱序，就在快照层面标记；逐题的最终顺序已固化在 options 中

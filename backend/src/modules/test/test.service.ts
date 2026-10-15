@@ -16,7 +16,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { TestModule } from '@prisma/client';
+import type { QuestionAudience, TestModule } from '@prisma/client';
 
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
@@ -44,7 +44,7 @@ import type {
   SaveAnswersDto,
   SubmitSessionDto,
 } from './dto/test.dto';
-import type { PaperQuestion, PaperSnapshot } from './test.types';
+import type { PaperAudience, PaperQuestion, PaperSnapshot } from './test.types';
 
 // ============================================================================
 // 响应类型
@@ -101,6 +101,13 @@ export interface TestSessionView {
   progress: SessionProgressView;
   paper: {
     snapshotVersion: string;
+    /**
+     * 本次取用的题目适用人群（ADR-039）
+     *
+     * 情感场景题按性别分三套独立内容（男 / 女 / 中性），量表题统一为 `ALL`。
+     * 下发给客户端是为了让界面能标注"这是哪一套"，也便于排障时一眼对上。
+     */
+    audience: PaperAudience;
     questionsPerPage: number;
     shuffled: boolean;
     optionShuffled: boolean;
@@ -535,8 +542,25 @@ export class TestService {
     }
 
     // --------------------------------------------------------------- 抽题与固化快照
+    /**
+     * 按用户性别决定抽哪一套题（ADR-039）
+     *
+     * 情感场景题分男 / 女 / 中性三套独立内容；量表题（MBTI、大五、状态自评）
+     * 一律 `audience = 'ALL'`，不受性别影响 —— 标准化量表男女共用一套题才可比。
+     *
+     * ⚠ 取不到性别（`UNKNOWN` / `OTHER` / 记录缺失）时取**中性套**，
+     * 而不是"随机挑一套"或"全都发"：前者会让用户拿到不属于自己的处境，
+     * 后者会让同一份试卷里出现三套场景（题量直接翻三倍）。
+     */
+    const audience = await this.resolveQuestionAudience(userId);
+
     const questions = await this.prisma.question.findMany({
-      where: { testDefinitionId: definition.id, isActive: true, deletedAt: null },
+      where: {
+        testDefinitionId: definition.id,
+        isActive: true,
+        deletedAt: null,
+        audience: { in: ['ALL', audience] },
+      },
       orderBy: { order: 'asc' },
       select: {
         id: true,
@@ -602,6 +626,7 @@ export class TestService {
           feedback: option.feedback,
         })),
       })),
+      { audience },
     );
     const now = new Date();
     const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
@@ -702,6 +727,14 @@ export class TestService {
       },
       paper: {
         snapshotVersion: snapshot.snapshotVersion,
+        /**
+         * 本次取用的题目适用人群（ADR-039）
+         *
+         * 情感场景题按性别分三套；把它下发给客户端有两个用处：
+         * 界面可以标注"男生版 / 女生版 / 通用版"，以及排障时一眼看出这份试卷是哪一套。
+         * `ps-v1` 旧快照没有这个字段，按 `ALL`（那时只有一套题）回落。
+         */
+        audience: snapshot.audience ?? 'ALL',
         questionsPerPage: pageSize,
         shuffled: snapshot.shuffled,
         optionShuffled: snapshot.optionShuffled,
@@ -1583,6 +1616,28 @@ export class TestService {
     const avoidance = readNumber('attachment_threshold_avoidance');
 
     return anxiety === undefined || avoidance === undefined ? undefined : { anxiety, avoidance };
+  }
+
+  /**
+   * 该用户应抽哪一套题（ADR-039）
+   *
+   * 情感场景题分男 / 女 / 中性三套独立内容；量表题一律 `audience = 'ALL'`，
+   * 不受性别影响（标准化量表男女共用一套题才有可比性）。
+   *
+   * ⚠ 缺省取**中性套**：用户没填过、选了"不想说"，或记录读不到，都走中性套。
+   * 🚫 不要"随机挑一套"（用户会拿到不属于自己的处境），
+   * 也不要"三套全发"（同一份试卷里出现三套场景，题量直接翻三倍）。
+   */
+  private async resolveQuestionAudience(userId: string): Promise<QuestionAudience> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId },
+      select: { gender: true },
+    });
+
+    if (user?.gender === 'MALE') return 'MALE';
+    if (user?.gender === 'FEMALE') return 'FEMALE';
+
+    return 'NEUTRAL';
   }
 
   // ==========================================================================

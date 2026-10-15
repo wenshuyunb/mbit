@@ -155,6 +155,8 @@ const buildMentalHealthSnapshot = (): PaperSnapshot => ({
 interface PrismaStub {
   testDefinition: { findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
   question: { findMany: jest.Mock };
+  /** 抽题要按用户性别选哪一套场景（ADR-039）：`findFirst` 返回 `{ gender }` */
+  user: { findFirst: jest.Mock };
   testSession: {
     create: jest.Mock;
     findUnique: jest.Mock;
@@ -181,6 +183,8 @@ const createPrismaStub = (): PrismaStub => {
   const stub = {
     testDefinition: { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
     question: { findMany: jest.fn() },
+    // 默认返回未设置性别 → 抽中性套（与真实行为一致：缺省即中性）
+    user: { findFirst: jest.fn().mockResolvedValue({ gender: 'UNKNOWN' }) },
     testSession: {
       create: jest.fn(),
       findUnique: jest.fn(),
@@ -1206,6 +1210,59 @@ describe('TestService', () => {
       expect(createArgs.data['questionCount']).toBe(1);
       expect(createArgs.data['definitionCode']).toBe('MBTI_LITE');
       expect(createArgs.data['expiredAt']).toBeInstanceOf(Date);
+    });
+
+    /**
+     * 按性别抽题（ADR-039）
+     *
+     * 情感场景题分男 / 女 / 中性三套独立内容，抽题时按用户性别过滤 `audience`；
+     * 量表题统一 `ALL`，因此任何性别的用户都会抽到它们（这是刻意的：
+     * 标准化量表男女共用一套题才有可比性）。
+     *
+     * ⚠ 取不到性别时必须取**中性套**，而不是"随机挑一套"（用户会拿到不属于自己的处境）
+     * 或"三套全发"（同一份试卷里出现三套场景，题量翻三倍）。
+     */
+    describe('按性别抽题（ADR-039）', () => {
+      /** 读出抽题条件里的 audience 白名单 */
+      const audienceFilterOf = (): unknown => {
+        const args = prisma.question.findMany.mock.calls[0]?.[0] as { where?: Record<string, unknown> } | undefined;
+        return args?.where?.['audience'];
+      };
+
+      it.each([
+        ['MALE', ['ALL', 'MALE']],
+        ['FEMALE', ['ALL', 'FEMALE']],
+        ['UNKNOWN', ['ALL', 'NEUTRAL']],
+        ['OTHER', ['ALL', 'NEUTRAL']],
+      ])('性别 %s → 抽 %j', async (gender, expected) => {
+        seedDefinition();
+        prisma.user.findFirst.mockResolvedValue({ gender });
+
+        await service.createSession(USER_ID, 'MBTI_LITE', {});
+
+        expect(audienceFilterOf()).toEqual({ in: expected });
+      });
+
+      it('读不到用户记录时也取中性套（不抛错、不下发三套）', async () => {
+        seedDefinition();
+        prisma.user.findFirst.mockResolvedValue(null);
+
+        await service.createSession(USER_ID, 'MBTI_LITE', {});
+
+        expect(audienceFilterOf()).toEqual({ in: ['ALL', 'NEUTRAL'] });
+      });
+
+      it('【关键】实际取用的 audience 被固化进快照（复盘"这份画像用哪套题测的"）', async () => {
+        seedDefinition();
+        prisma.user.findFirst.mockResolvedValue({ gender: 'FEMALE' });
+
+        await service.createSession(USER_ID, 'MBTI_LITE', {});
+
+        const createArgs = prisma.testSession.create.mock.calls[0]?.[0] as {
+          data: { paperSnapshot: { audience?: string } };
+        };
+        expect(createArgs.data.paperSnapshot.audience).toBe('FEMALE');
+      });
     });
 
     it('【题库不足】可用题量为 0 → 报错且不创建会话（40011 语义）', async () => {

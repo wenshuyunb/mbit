@@ -2763,7 +2763,8 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       "completionRate": 0
     },
     "paper": {
-      "snapshotVersion": "ps-v1",
+      "snapshotVersion": "ps-v2",
+      "audience": "ALL",
       "questionsPerPage": 1,
       "shuffled": true,
       "optionShuffled": true,
@@ -2859,6 +2860,15 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   "timestamp": "2026-02-14T13:30:00.000Z"
 }
 ```
+
+**试卷快照字段说明（ADR-039 补充）**
+
+| 字段                             | 说明                                                                                                                                                                                |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `paper.audience`                 | 本次实际取用的**题目适用人群**：`ALL` \| `MALE` \| `FEMALE` \| `NEUTRAL`。情感场景题按性别分三套，这个字段说明"这份画像是用哪一套测出来的"（`ps-v1` 旧快照无此字段，按 `ALL` 回落） |
+| `questions[].scenarioPrompt`     | **场景题的提问句**（如「这时候你会怎么做？」），与 `content`（情境叙述）分开：合成一句前端就没法把"处境"与"提问"排版成两段，沉浸感会消失。量表题为 `null`                           |
+| `questions[].options[].feedback` | 选中该做法后的**即时反馈**（一句话，只描述后续、不评判对错）。量表题为 `null`                                                                                                       |
+| `questions[].options[].scoreMap` | ⚠ **不下发**。选项 → 维度分值的映射是场景题的**算分依据**（等于评分键），服务端持有，客户端不需要                                                                                   |
 
 **成功响应 200（复用已有会话）**
 

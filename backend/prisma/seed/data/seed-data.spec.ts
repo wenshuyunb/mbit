@@ -13,8 +13,17 @@
  *     · 题干质量底线（长度、无指令性措辞、无重复）
  */
 
-import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './index';
+import { BIG_FIVE_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './index';
 import type { SeedDimension, SeedQuestion } from '../types';
+
+/**
+ * ⚠ 情感模块（`EMOTION_LITE`）**不在这份契约里**
+ *
+ * 它已从李克特量表改成沉浸式场景题（ADR-039），题库是
+ * `questions.emotion-scenarios.*`，结构完全不同（分值挂在选项上、没有正反向题、
+ * 每场景 3 个做法），因此约束写在 `questions.emotion-scenarios.spec.ts` 里。
+ * 原 52 题量表题库已退役并从 seed 删除（历史作答仍在库里，可追溯）。
+ */
 
 /** 期望的题量与反向题数（与 seed 内容约定一致） */
 const EXPECTED_MBTI: Array<{ dimension: SeedDimension; total: number; reverse: number }> = [
@@ -32,42 +41,7 @@ const EXPECTED_BIG_FIVE: Array<{ dimension: SeedDimension; total: number; revers
   { dimension: 'NEUROTICISM', total: 10, reverse: 3 },
 ];
 
-/**
- * 情感模块的期望题量（ADR-038 阶段 3）
- *
- * 依恋每轴 6 题（4 正 2 反）；爱的语言与冲突风格每项 4 题（2 正 2 反）。
- *
- * ## 为什么每项是 4 题而不是 3 题
- *
- * 起初按 3 题（2 正 + 1 反）设计，全卷 42 题，但撞上了下面那条
- * 「前后半区都要有反向题」的守卫 —— 题量 3 时 `half = 1`，两个半区是互斥的
- * `{flags[0]}` 与 `{flags[1], flags[2]}`，**1 道反向题在数学上不可能同时落进两侧**。
- *
- * 正确的解法是补题量而不是放宽守卫：守卫服务的是"别让受测者识别出反向题区段"，
- * 而每项只有 1 道反向题时，该维度的一致性评分本身也偏脆
- * （拿 2 个正向值的均值与 1 个反向值比较）。4 题（2 正 2 反）两头都解决了。
- */
-const EXPECTED_EMOTION: Array<{ dimension: SeedDimension; total: number; reverse: number }> = [
-  { dimension: 'ATTACH_ANXIETY', total: 6, reverse: 2 },
-  { dimension: 'ATTACH_AVOIDANCE', total: 6, reverse: 2 },
-  { dimension: 'LOVE_WORDS', total: 4, reverse: 2 },
-  { dimension: 'LOVE_TIME', total: 4, reverse: 2 },
-  { dimension: 'LOVE_GIFTS', total: 4, reverse: 2 },
-  { dimension: 'LOVE_SERVICE', total: 4, reverse: 2 },
-  { dimension: 'LOVE_TOUCH', total: 4, reverse: 2 },
-  { dimension: 'CONFLICT_COLLABORATING', total: 4, reverse: 2 },
-  { dimension: 'CONFLICT_COMPROMISING', total: 4, reverse: 2 },
-  { dimension: 'CONFLICT_ACCOMMODATING', total: 4, reverse: 2 },
-  { dimension: 'CONFLICT_AVOIDING', total: 4, reverse: 2 },
-  { dimension: 'CONFLICT_COMPETING', total: 4, reverse: 2 },
-];
-
-const ALL_QUESTIONS: SeedQuestion[] = [
-  ...MBTI_QUESTIONS,
-  ...BIG_FIVE_QUESTIONS,
-  ...EMOTION_QUESTIONS,
-  ...MENTAL_HEALTH_QUESTIONS,
-];
+const ALL_QUESTIONS: SeedQuestion[] = [...MBTI_QUESTIONS, ...BIG_FIVE_QUESTIONS, ...MENTAL_HEALTH_QUESTIONS];
 
 /**
  * 心理健康模块的期望题量（ADR-038 阶段 4）
@@ -94,35 +68,6 @@ describe('题库种子数据契约', () => {
     expect(BIG_FIVE_QUESTIONS).toHaveLength(50);
   });
 
-  it('情感题量为 52 道（依恋 12 + 爱的语言 20 + 冲突风格 20）', () => {
-    expect(EMOTION_QUESTIONS).toHaveLength(52);
-  });
-
-  it.each(EXPECTED_EMOTION)('情感维度 $dimension：$total 题、$reverse 道反向题', ({ dimension, total, reverse }) => {
-    const items = EMOTION_QUESTIONS.filter((question) => question.dimension === dimension);
-
-    expect(items).toHaveLength(total);
-    expect(items.filter((question) => question.reverseScored)).toHaveLength(reverse);
-  });
-
-  it('情感题库只含情感维度（不混入人格题，否则答卷里会多出无效题）', () => {
-    const personalityDimensions = [
-      'EI',
-      'SN',
-      'TF',
-      'JP',
-      'OPENNESS',
-      'CONSCIENTIOUSNESS',
-      'EXTRAVERSION',
-      'AGREEABLENESS',
-      'NEUROTICISM',
-    ];
-
-    for (const question of EMOTION_QUESTIONS) {
-      expect(personalityDimensions).not.toContain(question.dimension);
-    }
-  });
-
   it('心理健康题量为 24 道（六个维度各 4 题）', () => {
     expect(MENTAL_HEALTH_QUESTIONS).toHaveLength(24);
   });
@@ -137,11 +82,10 @@ describe('题库种子数据契约', () => {
     },
   );
 
-  it('心理健康题库只含本模块的六个维度（三套白名单互不重叠）', () => {
+  it('心理健康题库只含本模块的六个维度（各模块白名单互不重叠）', () => {
     const otherDimensions = [
       ...MBTI_QUESTIONS.map((question) => question.dimension),
       ...BIG_FIVE_QUESTIONS.map((question) => question.dimension),
-      ...EMOTION_QUESTIONS.map((question) => question.dimension),
     ];
 
     for (const question of MENTAL_HEALTH_QUESTIONS) {

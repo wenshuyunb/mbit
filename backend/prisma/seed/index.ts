@@ -22,8 +22,8 @@ import {
   ADMIN_ROLE_PERMISSIONS,
   ALL_ADMIN_PERMISSIONS,
 } from '../../src/modules/admin/rbac/admin-permission.constants';
-import { BIG_FIVE_QUESTIONS, EMOTION_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './data';
-import { ALL_EMOTION_SCENARIOS, PENDING_AUDIENCES } from './data/questions.emotion-scenarios';
+import { BIG_FIVE_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './data';
+import { ALL_EMOTION_SCENARIOS, EMOTION_SCENARIO_SETS, PENDING_AUDIENCES } from './data/questions.emotion-scenarios';
 import { MEMBERSHIP_PLANS, PRODUCTS } from './data/catalog';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
@@ -46,9 +46,9 @@ const LIKERT5_OPTIONS: Array<{ label: string; value: number }> = [
 const QUESTION_SETS: Array<{ definitionCode: string; questions: SeedQuestion[] }> = [
   { definitionCode: 'MBTI_LITE', questions: MBTI_QUESTIONS },
   { definitionCode: 'BIG_FIVE_50', questions: BIG_FIVE_QUESTIONS },
-  // ADR-038 阶段 3：情感模块的题库（42 题，三个族）
-  { definitionCode: 'EMOTION_LITE', questions: EMOTION_QUESTIONS },
-  // ADR-038 阶段 4：心理健康模块的题库（24 题，六个维度）
+  // ⚠ 情感模块（EMOTION_LITE）**不在这里**：它已改成沉浸式场景题（ADR-039），
+  // 由 `seedEmotionScenarios()` 按适用人群灌入。原 52 题李克特量表题库已退役。
+  // 心理健康模块（ADR-038 阶段 4）：24 题，六个维度
   { definitionCode: 'MENTAL_HEALTH_LITE', questions: MENTAL_HEALTH_QUESTIONS },
 ];
 
@@ -73,8 +73,10 @@ interface SeedSummary {
   adminRoles?: number;
   /** 角色-权限映射数 */
   adminRolePermissions?: number;
-  /** 场景题数（ADR-039；见 `seedEmotionScenarios` 的说明） */
+  /** 场景题数（ADR-039） */
   scenarioQuestions?: number;
+  /** 已退役的情感量表题数（ADR-039；退役 = `isActive: false`，历史作答仍可追溯） */
+  retiredLikertQuestions?: number;
 }
 
 // ============================================================================
@@ -305,27 +307,27 @@ const seedQuestionsFor = async (definitionCode: string, questions: SeedQuestion[
 };
 
 /**
- * 灌入沉浸式场景题（ADR-039）
+ * 灌入沉浸式场景题，并**退役**情感模块的旧李克特量表题库（ADR-039）
  *
- * ## 为什么它**暂时**写成 `isActive: false`
+ * ## 三套题必须一样长
  *
- * 场景题按适用人群分三套（`audience`），而**抽题时的性别过滤属于下一步**
- * （ADR-039 第四步）。过滤没接上之前，如果这些题是启用状态，
- * `EMOTION_LITE` 的试卷会同时抽到 52 道量表题 + 所有已灌入的场景题 ——
- * 一次"只改题库"的提交会把线上测评直接弄坏。
+ * 抽题按用户性别取 **一套**（`audience` ∈ 男/女/中性 + 通用题），
+ * `test_definition.questionCount` 是"这套题有多少题"，只能有一个数。
+ * 三套长度不一致时，短的那套用户会直接撞上"题库配置异常"（题量不足即拒绝建会话），
+ * 而长的那套用户会拿到超量试卷。因此这里**显式断言三套等长**，
+ * 不等长就在灌库阶段失败，而不是等某个性别的用户来触发。
  *
- * 因此本步先**只把内容灌进去**（真实数据、真实分值、真实反馈），
- * 等性别过滤与量表题退役一起上线时，把这里的 `isActive` 翻成 `true` 即可。
- * 这样每一步提交都是可用状态，而不是"半截改到一半"。
+ * ## 为什么退役旧量表题，而不是删掉
  *
- * ## 选项为什么必须带 `scoreMap` 与 `feedback`
+ * `test_answers.question_id` 外键指向 `questions`，历史作答必须能追溯到题目；
+ * 物理删除会让旧会话的作答明细变成孤儿。因此退役 = `isActive: false`：
+ * 抽题不会再选它（抽题条件里有 `isActive: true`），历史数据仍然完整可查。
  *
- * 场景题的分值挂在**选项**上（量表题的分值是用户所选的值）。少写 `scoreMap`
- * 会让该选项的所有维度都是 0 分；少写 `feedback` 则用户选完什么都不发生 ——
- * 沉浸感正是靠这句即时反馈撑起来的。
+ * ⚠ 退役必须与**性别过滤**同时上线：过滤没接上时启用场景题，
+ * 试卷会同时抽到 52 道量表题 + 三套场景题（题量直接翻三倍）。
  */
-const seedEmotionScenarios = async (): Promise<{ questions: number; options: number }> => {
-  if (ALL_EMOTION_SCENARIOS.length === 0) return { questions: 0, options: 0 };
+const seedEmotionScenarios = async (): Promise<{ questions: number; options: number; retired: number }> => {
+  if (ALL_EMOTION_SCENARIOS.length === 0) return { questions: 0, options: 0, retired: 0 };
 
   const definition = await prisma.testDefinition.findUnique({
     where: { code: 'EMOTION_LITE' },
@@ -335,6 +337,18 @@ const seedEmotionScenarios = async (): Promise<{ questions: number; options: num
   if (!definition) {
     throw new Error('未找到测试定义 EMOTION_LITE（请先执行 seedDefinitions）');
   }
+
+  const sizes = Object.entries(EMOTION_SCENARIO_SETS).map(([audience, set]) => [audience, set?.length ?? 0] as const);
+  const distinct = new Set(sizes.map(([, size]) => size));
+
+  if (distinct.size > 1) {
+    throw new Error(
+      `场景题库三套长度不一致：${sizes.map(([audience, size]) => `${audience}=${size}`).join(' / ')}。` +
+        '抽题按性别取一套，题量只能有一个数 —— 请补齐较短的那套。',
+    );
+  }
+
+  const perAudienceCount = sizes[0]?.[1] ?? 0;
 
   let optionCount = 0;
 
@@ -351,7 +365,7 @@ const seedEmotionScenarios = async (): Promise<{ questions: number; options: num
       weight: 1,
       reverseScored: false,
       order: Number.parseInt(scenario.code.slice(-2), 10),
-      isActive: false,
+      isActive: true,
       tags: scenario.tags,
     };
 
@@ -380,7 +394,19 @@ const seedEmotionScenarios = async (): Promise<{ questions: number; options: num
     }
   }
 
-  return { questions: ALL_EMOTION_SCENARIOS.length, options: optionCount };
+  // 退役旧量表题：抽题不会再选到它，但历史作答仍能追溯到题目
+  const retired = await prisma.question.updateMany({
+    where: { testDefinitionId: definition.id, type: 'LIKERT5' },
+    data: { isActive: false },
+  });
+
+  // 题量回填为**单套**的题数（旧值是量表题的 52）
+  await prisma.testDefinition.update({
+    where: { code: 'EMOTION_LITE' },
+    data: { questionCount: perAudienceCount },
+  });
+
+  return { questions: ALL_EMOTION_SCENARIOS.length, options: optionCount, retired: retired.count };
 };
 
 const seedRelationshipRules = async (): Promise<number> => {
@@ -819,7 +845,9 @@ async function main(): Promise<void> {
   summary.promptTemplates = await seedPromptTemplates();
   summary.systemConfigs = await seedSystemConfigs();
   summary.compatibilityWeights = await seedCompatibilityWeights();
-  summary.scenarioQuestions = (await seedEmotionScenarios()).questions;
+  const scenarios = await seedEmotionScenarios();
+  summary.scenarioQuestions = scenarios.questions;
+  summary.retiredLikertQuestions = scenarios.retired;
 
   // 顺序不可颠倒：商品通过 membershipPlanId 引用套餐
   summary.membershipPlans = await seedMembershipPlans();
@@ -849,7 +877,8 @@ async function main(): Promise<void> {
       `  Prompt   : ${summary.promptTemplates ?? 0}`,
       `  系统配置 : ${summary.systemConfigs ?? 0}`,
       `  匹配权重 : ${summary.compatibilityWeights ?? 0}`,
-      `  场景题   : ${summary.scenarioQuestions ?? 0}（未启用：等性别过滤与量表题退役一起上线）`,
+      `  场景题   : ${summary.scenarioQuestions ?? 0}（男/女/中性各 24，按性别抽一套）`,
+      `  退役量表 : ${summary.retiredLikertQuestions ?? 0} 道（情感模块改用场景题；行保留，历史作答仍可追溯）`,
       `  会员套餐 : ${summary.membershipPlans ?? 0}`,
       `  商品     : ${summary.products ?? 0}`,
       `  权限点   : ${summary.adminPermissions ?? 0}`,
