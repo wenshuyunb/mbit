@@ -171,6 +171,27 @@ export const SYSTEM_CONFIGS: SeedSystemConfig[] = [
     isEditable: true,
   },
   {
+    /**
+     * AI 助手是否为会员专属（ADR-038 阶段 5）
+     *
+     * 用户明确要求「AI 助手……需要加入会员才可以使用」。做成**配置**而不是硬编码：
+     * 这个开关直接决定免费用户能否使用助手，属于运营策略 ——
+     * 试运行期想放开、或想回滚，都只改一个值而不必发版。
+     *
+     * ⚠ 读取点在 `chat-quota.service.ts` 的 `readBoolean()`，**兜底值也是 true**：
+     * 配置读不到时若兜底成 false，这个付费门槛会静默失效（用户不花钱就用上会员功能，
+     * 且没有任何告警）。宁可读不到时保守地要求会员。
+     */
+    key: 'ai.assistantMembersOnly',
+    value: 'true',
+    valueType: ConfigValueType.BOOLEAN,
+    group: 'AI',
+    description: 'AI 助手是否仅限会员使用（true = 免费用户不可用，走会员引导）',
+    // 前端需要据此决定展示"会员引导"还是"剩余次数" → 公开
+    isPublic: true,
+    isEditable: true,
+  },
+  {
     key: 'ai.maxConcurrentStreams',
     value: '3',
     valueType: ConfigValueType.NUMBER,

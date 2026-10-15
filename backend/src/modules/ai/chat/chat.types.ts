@@ -82,12 +82,24 @@ export const MAX_TITLE_LENGTH = 30;
 /** 单条用户消息长度上限（契约 §3.7.3 / §3.7.5：1–2000 字符） */
 export const MAX_MESSAGE_LENGTH = 2000;
 
-/** `contextHints` 允许的取值（契约 §3.7.5） */
-export const CONTEXT_HINTS = ['RECENT_REPORT', 'RECENT_TEST', 'RELATIONSHIP_REPORT'] as const;
+/**
+ * `contextHints` 允许的取值（契约 §3.7.5 + ADR-038 阶段 5）
+ *
+ * `ALL_MODULES` 是**管家角色**的入口：把三个模块（人格 / 情感 / 心理状态）的
+ * 当前结果各取一小段摘要注入上下文，让助手能"总结你测过的所有东西"并回答
+ * 跨模块的问题（例如"我是不是在关系里更容易紧张"要同时用到情感与心理两块数据）。
+ *
+ * ⚠ 它注入的是**画像与结论**，不是三份报告的全文：
+ *   · 心理状态模块**根本没有 AI 报告**（产品红线是不给建议），
+ *     它的结论就是 `mental_health_profiles.conclusion` —— 只读报告会漏掉整个模块；
+ *   · 报告全文动辄两三千字，三份一起塞进提示词会把对话上下文挤爆，
+ *     而管家要的是"知道结论"，不是"复述报告"。
+ */
+export const CONTEXT_HINTS = ['RECENT_REPORT', 'RECENT_TEST', 'RELATIONSHIP_REPORT', 'ALL_MODULES'] as const;
 export type ContextHint = (typeof CONTEXT_HINTS)[number];
 
-/** `contextHints` 最多允许个数（契约 §3.7.5：最多 3 个） */
-export const MAX_CONTEXT_HINTS = 3;
+/** `contextHints` 最多允许个数（契约 §3.7.5：最多 3 个；ADR-038 阶段 5 因新增 `ALL_MODULES` 提到 4） */
+export const MAX_CONTEXT_HINTS = 4;
 
 /** 会话消息数上限（契约 §3.7.5 错误码 `50018`：200 条） */
 export const MAX_MESSAGES_PER_CONVERSATION = 200;

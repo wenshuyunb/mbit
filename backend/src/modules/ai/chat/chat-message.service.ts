@@ -400,8 +400,16 @@ export class ChatMessageService {
       throw new BusinessException(ErrorCode.AI_CONTENT_BLOCKED, '内容包含不适宜的信息，请调整后重试');
     }
 
-    // ---- ⑥ 配额原子预占 ----
-    const availability = await this.quota.resolveAvailability(input.userId);
+    // ---- ⑥ 会员门槛 + 配额原子预占 ----
+    /**
+     * 先判**会员门槛**再判配额（ADR-038 阶段 5）
+     *
+     * 顺序不能反：免费用户额度用尽与"这个功能本来就要会员"是两回事，
+     * 错误码也不同（`50006` 跳次数包页 / `70016` 跳会员页）。
+     * 若先判配额，免费用户在额度耗尽时会收到"次数已用完，可升级会员或购买次数包"——
+     * 而真实原因是**这个功能只对会员开放**，那条提示会误导他先去买次数包。
+     */
+    const availability = await this.quota.assertAssistantAccess(input.userId);
 
     if (availability.chargeSource === null) {
       throw new BusinessException(ErrorCode.AI_QUOTA_EXCEEDED, 'AI 使用次数已用完，可升级会员或购买次数包继续使用', {

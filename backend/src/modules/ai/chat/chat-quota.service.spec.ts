@@ -11,6 +11,7 @@
  *   · **Redis 故障时降级而非放行**（配额不能 fail-open）
  */
 
+import { ErrorCode } from '../../../common/errors/error-code';
 import type { PrismaService } from '../../../infra/prisma/prisma.service';
 import type { RedisService } from '../../../infra/redis/redis.service';
 import type { EntitlementService } from '../../membership/entitlement.service';
@@ -78,6 +79,8 @@ const createHarness = (): Harness => {
       if (key === 'memberAiDailyLimit') return Promise.resolve({ value: 50, rawValue: '50' });
       if (key === 'aiMessageMaxLength') return Promise.resolve({ value: 2000, rawValue: '2000' });
       if (key === 'ai.maxConcurrentStreams') return Promise.resolve({ value: 3, rawValue: '3' });
+      // AI 助手会员门槛（ADR-038 阶段 5）：默认开启
+      if (key === 'ai.assistantMembersOnly') return Promise.resolve({ value: true, rawValue: 'true' });
 
       return Promise.resolve(undefined);
     }),
@@ -154,6 +157,109 @@ describe('ChatQuotaService.resolveAvailability — 会员判定走 EntitlementSe
 
     expect(result.isMember).toBe(false);
     expect(result.expiresAt).toBeNull();
+  });
+});
+
+/**
+ * AI 助手的会员门槛（ADR-038 阶段 5）
+ *
+ * 用户明确要求「AI 助手……需要加入会员才可以使用」。这一组测的是
+ * **门槛本身与其开关语义**，而不是配额 —— 两者是独立的拒绝理由，
+ * 错误码也不同（`70016` 走会员引导 / `50006` 走次数包引导）。
+ */
+describe('ChatQuotaService.assertAssistantAccess — 会员门槛', () => {
+  it('【关键】非会员 + 门槛开启 → 抛 70016（不是配额错误码）', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([]);
+
+    await expect(h.service.assertAssistantAccess(USER_ID, NOW)).rejects.toMatchObject({
+      code: ErrorCode.ENTITLEMENT_REQUIRED,
+    });
+  });
+
+  it('【关键】非会员 + 门槛**关闭** → 放行（免费额度仍然可用）', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([]);
+    h.systemConfigs.getEntry.mockImplementation((key: string) =>
+      Promise.resolve(key === 'ai.assistantMembersOnly' ? { value: false, rawValue: 'false' } : undefined),
+    );
+
+    const result = await h.service.assertAssistantAccess(USER_ID, NOW);
+
+    expect(result.requiresMembership).toBe(false);
+    expect(result.isMember).toBe(false);
+  });
+
+  it('会员 + 门槛开启 → 放行', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([
+      {
+        type: 'MEMBERSHIP_ACTIVE',
+        status: 'ACTIVE',
+        resourceKey: null,
+        reportId: null,
+        expireAt: new Date('2026-03-14T10:00:00.000Z'),
+        remainingQuota: null,
+      },
+    ]);
+    h.redis.get.mockResolvedValue(JSON.stringify({ d: '20260214', c: 3 }));
+
+    const result = await h.service.assertAssistantAccess(USER_ID, NOW);
+
+    expect(result.isMember).toBe(true);
+  });
+
+  it('【关键】配置读不到时**兜底为需要会员**（否则付费门槛会静默失效）', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([]);
+    // 配置整表读不到（库没灌种子 / 配置被删）
+    h.systemConfigs.getEntry.mockResolvedValue(undefined);
+
+    await expect(h.service.assertAssistantAccess(USER_ID, NOW)).rejects.toMatchObject({
+      code: ErrorCode.ENTITLEMENT_REQUIRED,
+    });
+  });
+
+  it('【关键】配置值写成 `"false"` 时**真的关闭**（不能落进 Boolean() 的坑）', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([]);
+    /**
+     * `Boolean('false') === true` —— 若实现里用了它，"关掉开关"会变成"打开开关"，
+     * 而且完全静默。本仓库已经在查询串上踩过一次（`query-boolean.util.ts` 的文件头），
+     * 因此在**业务开关**上再钉一遍。
+     */
+    h.systemConfigs.getEntry.mockImplementation((key: string) =>
+      Promise.resolve(key === 'ai.assistantMembersOnly' ? { value: 'false', rawValue: 'false' } : undefined),
+    );
+
+    const result = await h.service.assertAssistantAccess(USER_ID, NOW);
+
+    expect(result.requiresMembership).toBe(false);
+  });
+
+  it('无法识别的配置值 → 回落兜底（保守地要求会员）', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([]);
+    h.systemConfigs.getEntry.mockImplementation((key: string) =>
+      Promise.resolve(key === 'ai.assistantMembersOnly' ? { value: 'yes', rawValue: 'yes' } : undefined),
+    );
+
+    await expect(h.service.assertAssistantAccess(USER_ID, NOW)).rejects.toMatchObject({
+      code: ErrorCode.ENTITLEMENT_REQUIRED,
+    });
+  });
+
+  it('【关键】门槛只**报告**、不在这里抛错给只读接口（`/ai/quota` 必须可用）', async () => {
+    const h = createHarness();
+    h.entitlements.loadEntitlements.mockResolvedValue([]);
+
+    // 配额查询路径不能被门槛拦住：前端正是靠它来告诉用户"你需要开通会员"
+    const availability = await h.service.resolveAvailability(USER_ID, NOW);
+
+    expect(availability.requiresMembership).toBe(true);
+    expect(availability.isMember).toBe(false);
+    // 配额视图本身不变（免费额度照常计算），门槛是**另一条独立信息**
+    expect(availability.view.limitedBy).toBe('FREE_QUOTA');
   });
 });
 

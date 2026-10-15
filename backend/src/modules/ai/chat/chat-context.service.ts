@@ -28,6 +28,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
+import {
+  EMOTION_ATTACHMENT_LABELS,
+  EMOTION_CONFLICT_LABELS,
+  EMOTION_LOVE_LANGUAGE_LABELS,
+} from '../../ai/context/emotion-report-context.builder';
+import {
+  MENTAL_HEALTH_OVERALL_LABELS,
+  type MentalHealthOverallLevel,
+} from '../../mental-health/engine/mental-health-engine.types';
 import { deriveRelationshipStyleFromBigFive } from '../../personality/engine/relationship-style.evaluator';
 import { loadRelationshipStyleRules } from '../../personality/relationship-style-rules.loader';
 import { relationTypeName } from '../../relationship/relationship-view.util';
@@ -1133,7 +1142,114 @@ export class ChatContextService {
       }
     }
 
+    if (hints.includes('ALL_MODULES')) {
+      const digest = await this.loadAllModuleDigest(userId);
+
+      if (digest !== null) {
+        snippets.push({ label: '你三个模块的测评结果', text: digest });
+      }
+    }
+
     return snippets;
+  }
+
+  /**
+   * 三个模块的结果摘要（ADR-038 阶段 5 的"管家"能力）
+   *
+   * ## 为什么读**画像**而不是读报告
+   *
+   * `RECENT_REPORT` 那条走的是 `ai_reports.summary`，但那条路对第三个模块是**空的**：
+   * 心理状态模块没有 AI 报告（产品红线是不给建议，而 AI 解读必然滑向建议），
+   * 它的交付物是 `mental_health_profiles.conclusion`。
+   * 因此管家必须读**各模块自己的画像**，否则"读取三个模块"实际上只覆盖了两个。
+   *
+   * 顺带解决了长度问题：报告全文两三千字，三份一起塞会把对话上下文挤爆；
+   * 画像里本来就只有结论性字段，天然适合做摘要。
+   *
+   * ## 三个模块都可能是空的
+   *
+   * 用户完全可能只做过其中一个。缺失的模块**不写进摘要**（而不是写"未测评"）：
+   * 一段"你还没做 XX"的提示对模型没有信息量，反而可能诱导它去追问，
+   * 而报告的追问应该由产品文案负责，不是在这里塞。
+   *
+   * @returns 摘要文本；三个模块一个都没做过时返回 `null`
+   */
+  private async loadAllModuleDigest(userId: string): Promise<string | null> {
+    const [profile, emotionProfile, mentalHealthProfile] = await Promise.all([
+      this.loadCurrentProfile(userId),
+      this.prisma.emotionProfile.findFirst({
+        where: { userId, isCurrent: true, deletedAt: null },
+        orderBy: { version: 'desc' },
+        select: {
+          attachmentStyle: true,
+          attachmentAnxiety: true,
+          attachmentAvoidance: true,
+          primaryLoveLanguages: true,
+          conflictStyle: true,
+        },
+      }),
+      this.prisma.mentalHealthProfile.findFirst({
+        where: { userId, isCurrent: true, deletedAt: null },
+        orderBy: { version: 'desc' },
+        select: { overallLevel: true, conclusion: true },
+      }),
+    ]);
+
+    const sections: string[] = [];
+
+    if (profile !== null) {
+      sections.push(
+        [
+          '【人格】',
+          `类型：${profile.mbtiType}`,
+          `大五（0–100）：开放性 ${Math.round(profile.openness)}、尽责性 ${Math.round(profile.conscientiousness)}、外向性 ${Math.round(profile.extraversion)}、宜人性 ${Math.round(profile.agreeableness)}、神经质 ${Math.round(profile.neuroticism)}`,
+        ].join('\n'),
+      );
+    }
+
+    if (emotionProfile !== null) {
+      // 标签表是 `Record<具体联合类型, string>`，而库里的列是 `string`（编码由运营配置决定），
+      // 因此先按 `Record<string, string>` 收窄再查 —— 未知编码原样输出，不猜
+      const loveLanguageLabels = EMOTION_LOVE_LANGUAGE_LABELS as Readonly<Record<string, string>>;
+      const conflictLabels = EMOTION_CONFLICT_LABELS as Readonly<Record<string, string>>;
+
+      sections.push(
+        [
+          '【情感／亲密关系】',
+          `依恋风格：${EMOTION_ATTACHMENT_LABELS[emotionProfile.attachmentStyle] ?? emotionProfile.attachmentStyle}`,
+          `依恋两轴：焦虑 ${Math.round(emotionProfile.attachmentAnxiety)}、回避 ${Math.round(emotionProfile.attachmentAvoidance)}`,
+          `主导爱的语言：${emotionProfile.primaryLoveLanguages.map((code) => loveLanguageLabels[code] ?? code).join('、') || '（未得出）'}`,
+          `冲突风格：${conflictLabels[emotionProfile.conflictStyle] ?? emotionProfile.conflictStyle}`,
+        ].join('\n'),
+      );
+    }
+
+    if (mentalHealthProfile !== null) {
+      sections.push(
+        [
+          '【近两周状态】',
+          `整体：${MENTAL_HEALTH_OVERALL_LABELS[mentalHealthProfile.overallLevel as MentalHealthOverallLevel] ?? mentalHealthProfile.overallLevel}`,
+          /**
+           * ⚠ 这里注入的是**服务端已经给出的结论文本本身**，不是让模型重新解读一遍。
+           * 心理状态模块的红线是"不给建议"，管家在复述它时也必须守住同一条线：
+           * 因此下面的 `hint` 里明确要求"照实引用，不要在此基础上给建议"。
+           */
+          `结论：${mentalHealthProfile.conclusion}`,
+        ].join('\n'),
+      );
+    }
+
+    if (sections.length === 0) return null;
+
+    /**
+     * 预算控制
+     *
+     * 三段拼起来最长约 600 字（心理状态的结论本身就接近 100 字）。
+     * 截到 `HINT_TEXT_LIMIT * 2` 而不是 `HINT_TEXT_LIMIT`：管家要能一次说清三个模块，
+     * 800 字是"够用且不挤占 Recent/Persona"的折中；超出部分从**末尾**截掉，
+     * 保证人格与情感两段（更常被追问）完整。
+     */
+    return sections.join('\n\n').slice(0, HINT_TEXT_LIMIT * 2);
   }
 
   /** 关系归属校验（`relationshipId` 不属于当前用户 → `50023` → 本项目 `RELATIONSHIP_NOT_OWNED`） */

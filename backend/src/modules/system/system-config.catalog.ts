@@ -820,6 +820,22 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     impactScope: 'GLOBAL',
     isPublic: true,
   },
+  {
+    key: 'ai.assistantMembersOnly',
+    group: 'AI',
+    label: 'AI 助手仅限会员',
+    valueType: ConfigValueType.BOOLEAN,
+    defaultValue: 'true',
+    description:
+      'AI 助手是否仅限会员使用（ADR-038 阶段 5：用户要求「AI 助手需要加入会员才可以使用」）。' +
+      '开启时免费用户在建会话与发消息两处都会被拒（错误码 70016，前端应引导开通会员）；' +
+      '关闭即恢复免费额度（`freeAiQuotaTotal`）—— 因此**不需要二次确认**，改错了改回来即可',
+    // 与告警/资损类开关不同：它只影响"哪些人能试用"，不涉及金额与数据，
+    // 因此不要求 X-Confirm-Password（要求它反而会让运营不敢在试运行期调整）
+    requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: true,
+  },
 
   // ---------------------------------------------------------------- 安全策略
   {

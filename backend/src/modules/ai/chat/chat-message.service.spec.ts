@@ -74,6 +74,14 @@ interface Harness {
   quota: {
     loadLimits: jest.Mock;
     resolveAvailability: jest.Mock;
+    /**
+     * 会员门槛断言（ADR-038 阶段 5）
+     *
+     * 真实实现是「`resolveAvailability` + 非会员时抛 70016」，
+     * 因此夹具**必须委托给同一个 `resolveAvailability` 桩**而不是另给一个返回值 ——
+     * 否则两个桩可以互相矛盾（配额说会员、门槛说不是），而真实实现不可能那样。
+     */
+    assertAssistantAccess: jest.Mock;
     reserve: jest.Mock;
     refund: jest.Mock;
     readStringConfig: jest.Mock;
@@ -106,6 +114,8 @@ const availabilityOf = (): QuotaAvailability => {
     planName: '月度会员',
     expiresAt: '2026-03-14T10:00:00.000Z',
     chargeSource: 'DAILY_LIMIT',
+    // 夹具默认"会员专属已开启 + 本人是会员" → 能通过 `assertAssistantAccess`
+    requiresMembership: true,
   };
 };
 
@@ -229,6 +239,15 @@ const createHarness = (): Harness => {
       maxConcurrentStreams: 3,
     }),
     resolveAvailability: jest.fn().mockResolvedValue(availabilityOf()),
+    /**
+     * 会员门槛断言：**委托给同一个 `resolveAvailability` 桩**
+     *
+     * 真实实现就是"调 `resolveAvailability`，非会员时抛错"。让夹具也这样，
+     * 好处是：测试只需要 stub `resolveAvailability` 就能同时控制两条路径，
+     * 不会出现"配额说耗尽、门槛说放行"这种**真实实现不可能有**的矛盾状态
+     *（那种矛盾会让测试通过而线上失败）。
+     */
+    assertAssistantAccess: jest.fn(),
     reserve: jest.fn().mockResolvedValue(reservationOf()),
     refund: jest.fn().mockResolvedValue(undefined),
     readStringConfig: jest.fn((_key: string, fallback: string) => Promise.resolve(fallback)),
@@ -237,6 +256,22 @@ const createHarness = (): Harness => {
     saveIdempotentResult: jest.fn().mockResolvedValue(undefined),
     releaseIdempotency: jest.fn().mockResolvedValue(undefined),
   };
+
+  /**
+   * 会员门槛委托给配额判定（与真实实现同形）：stub 一处即可控制两条路径
+   *
+   * ⚠ 必须**把返回值传出去**（`assertAssistantAccess` 的返回类型是
+   * `Promise<QuotaAvailability>`，服务端拿它读 `chargeSource`）。
+   * 第一版写成 `async () => { await quota.resolveAvailability(); }` ——
+   * 语义上"调用了同一个桩"，但返回值变成 `undefined`，
+   * 12 个用例直接 `Cannot read properties of undefined (reading 'chargeSource')`。
+   * 这里显式标注返回类型：`quota.resolveAvailability` 是 `jest.fn()`（`any`），
+   * 不标注会触发 `no-unsafe-return`。
+   */
+  const resolveAvailability = (): Promise<QuotaAvailability> =>
+    quota.resolveAvailability() as Promise<QuotaAvailability>;
+
+  quota.assertAssistantAccess.mockImplementation(resolveAvailability);
 
   const prompts = {
     getPrompt: jest.fn().mockResolvedValue({

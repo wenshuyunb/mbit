@@ -32,6 +32,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
 
 import { BusinessException } from '../../../common/errors/business.exception';
 import { ErrorCode } from '../../../common/errors/error-code';
@@ -90,6 +91,19 @@ export interface QuotaAvailability {
   readonly expiresAt: string | null;
   /** 本次应按哪个来源计费（耗尽时为 `null`） */
   readonly chargeSource: ChargeAction | null;
+  /**
+   * AI 助手是否为**会员专属**（ADR-038 阶段 5）
+   *
+   * 来自系统配置 `ai.assistantMembersOnly`，默认 `true`（用户明确要求
+   * "AI 助手需要加入会员才可以使用"）。做成配置而不是硬编码：
+   * 这个开关直接决定免费用户能否使用助手，属于**运营策略**，
+   * 调整它不该发版 —— 试运行期想放开、或想回滚，都只改一个配置值。
+   *
+   * ⚠ 这里只**报告**，不在这里抛错：抛错是调用方（写入路径）的职责。
+   * 配额服务同时服务于只读的 `/ai/quota`，在那里抛错会让"查看额度"变成 403，
+   * 而前端恰恰需要这个接口来告诉用户"你需要开通会员"。
+   */
+  readonly requiresMembership: boolean;
 }
 
 /** 预占结果 */
@@ -118,6 +132,19 @@ export interface ChatLimits {
 /** 免费额度系统配置读不到时的兜底（与 `system-config.catalog.ts` 默认值一致） */
 const FALLBACK_FREE_QUOTA_TOTAL = 10;
 const FALLBACK_MEMBER_DAILY_LIMIT = 50;
+
+/**
+ * AI 助手是否为会员专属（ADR-038 阶段 5）
+ *
+ * 默认 **true**：用户明确要求「AI 助手……需要加入会员才可以使用」。
+ *
+ * ⚠ 兜底值取 `true` 而不是 `false`：配置读不到时（库没灌种子、配置被删），
+ * 若兜底成 `false`，这个付费门槛会**静默失效** —— 用户不花钱就用上了会员功能，
+ * 而没有任何告警。宁可读不到时保守地要求会员（顶多让付费用户多点一次，
+ * 且 `/ai/quota` 会如实告诉他们原因）。
+ */
+const CONFIG_KEY_ASSISTANT_MEMBERS_ONLY = 'ai.assistantMembersOnly';
+const FALLBACK_ASSISTANT_MEMBERS_ONLY = true;
 
 /**
  * 原子预占脚本
@@ -210,9 +237,10 @@ export class ChatQuotaService {
    * （ADR-015：权益是解锁付费内容的唯一依据），本服务不自己写会员判定逻辑。
    */
   async resolveAvailability(userId: string, now: Date = new Date()): Promise<QuotaAvailability> {
-    const [entitlementRows, limits] = await Promise.all([
+    const [entitlementRows, limits, requiresMembership] = await Promise.all([
       this.entitlements.loadEntitlements(userId),
       this.loadLimits(),
+      this.readBoolean(CONFIG_KEY_ASSISTANT_MEMBERS_ONLY, FALLBACK_ASSISTANT_MEMBERS_ONLY),
     ]);
 
     const isMember = hasActiveMembership(entitlementRows, now);
@@ -243,7 +271,33 @@ export class ChatQuotaService {
       planName,
       expiresAt,
       chargeSource: chargeSourceOf(view, isMember),
+      requiresMembership,
     };
+  }
+
+  /**
+   * 断言当前用户可以使用 AI 助手（ADR-038 阶段 5）
+   *
+   * 两条独立的拒绝理由，错误码不同，前端据此决定跳哪个页面：
+   *   · **需要会员**（`ENTITLEMENT_REQUIRED` 70016）→ 跳会员购买页；
+   *   · **额度用尽**（`AI_QUOTA_EXCEEDED` 50006）→ 跳次数包/会员页。
+   *
+   * ⚠ 会员判定复用 `resolveAvailability` 的结果，不在这里重新查一遍权益 ——
+   * 两次查询之间会员可能过期，那样"刚判过可用、立刻又被拒"，用户看到的是随机失败。
+   * 配额耗尽那条**不在本方法里**（它由调用方按各自的语义处理），
+   * 本方法只管"这个功能是不是会员专属"。
+   */
+  async assertAssistantAccess(userId: string, now: Date = new Date()): Promise<QuotaAvailability> {
+    const availability = await this.resolveAvailability(userId, now);
+
+    if (availability.requiresMembership && !availability.isMember) {
+      throw new BusinessException(ErrorCode.ENTITLEMENT_REQUIRED, 'AI 助手为会员专属功能，开通会员后即可使用', {
+        httpStatus: HttpStatus.FORBIDDEN,
+        details: [{ field: 'membership', issue: 'MEMBERSHIP_REQUIRED' }],
+      });
+    }
+
+    return availability;
   }
 
   /** 简短配额视图（会话类接口内嵌用） */
@@ -677,6 +731,31 @@ export class ChatQuotaService {
       const value = Number(entry.rawValue);
 
       return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /**
+   * 读一个布尔配置
+   *
+   * 只认 `'true'` / `'false'`（大小写不敏感）两种写法，其它一律用兜底值。
+   *
+   * ⚠ **刻意不用 `Boolean(rawValue)`**：`Boolean('false') === true`，
+   * 于是"关掉开关"会变成"打开开关"，而且是静默的 ——
+   * 这个坑在本仓库已经踩过一次（`common/utils/query-boolean.util.ts` 的文件头记着），
+   * 不要在这里重犯。
+   */
+  private async readBoolean(key: string, fallback: boolean): Promise<boolean> {
+    try {
+      const entry = await this.systemConfigs.getEntry(key);
+      if (entry === undefined) return fallback;
+
+      const normalized = entry.rawValue.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+
+      return fallback;
     } catch {
       return fallback;
     }

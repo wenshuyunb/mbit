@@ -119,6 +119,16 @@ export interface AiQuotaView {
     readonly creditsUrl: string;
     readonly reason: string | null;
   };
+  /**
+   * AI 助手是否为会员专属（ADR-038 阶段 5）
+   *
+   * 前端据此决定展示哪套引导：`true` 且用户不是会员时应当**显示会员引导**，
+   * 而不是"剩余 N 次"——后者会让人以为再等等就能用。
+   *
+   * ⚠ 这是一个**配置项**（`ai.assistantMembersOnly`），不是常量：
+   * 试运行期想放开、或想回滚，都只改配置值而不需要发版。
+   */
+  readonly assistantMembersOnly: boolean;
   readonly usage: {
     readonly today: {
       readonly date: string;
@@ -217,6 +227,15 @@ export class ChatConversationService {
    */
   async createConversation(input: CreateConversationInput): Promise<ConversationCreatedView> {
     this.assertAiChatEnabled();
+
+    /**
+     * 会员门槛（ADR-038 阶段 5）
+     *
+     * 放在**幂等预占之前**：非会员不该占用幂等键，否则他反复点"新建会话"会留下
+     * 一堆幂等记录，而每一次都被拒 —— 那些记录还会让后续升级成会员后的首次请求
+     * 命中一条"正在处理中"的假状态。
+     */
+    await this.quota.assertAssistantAccess(input.userId);
 
     const claimed = await this.quota.claimIdempotency(
       IDEMPOTENCY_SCOPE_CONVERSATION,
@@ -451,7 +470,19 @@ export class ChatConversationService {
       this.loadUsageStats(userId, includeUsage),
     ]);
 
-    const exhausted = !availability.view.hasQuota;
+    /**
+     * 「不可用」有两个来源，必须分开表达（ADR-038 阶段 5）
+     *
+     *   · **会员门槛**：功能本身只对会员开放 → 无论还剩多少次都不可用，
+     *     引导是**开通会员**（`ENTITLEMENT_REQUIRED`）；
+     *   · **额度用尽**：会员/次数包/免费额度都用完了 → 引导是升级或买次数包
+     *     （`AI_QUOTA_EXCEEDED`）。
+     *
+     * 合成一个布尔值会让前端只能显示一句含糊的提示，
+     * 而这两种情况的付费路径完全不同。
+     */
+    const blockedByMembership = availability.requiresMembership && !availability.isMember;
+    const exhausted = !availability.view.hasQuota || blockedByMembership;
 
     return {
       plan: {
@@ -483,8 +514,14 @@ export class ChatConversationService {
         canChat: !exhausted,
         upgradeUrl: PAYWALL_UPGRADE_URL,
         creditsUrl: PAYWALL_CREDITS_URL,
-        reason: exhausted ? exhaustedReasonOf(availability.view.limitedBy) : null,
+        // 会员门槛优先：它不取决于额度，买次数包也解决不了
+        reason: blockedByMembership
+          ? 'MEMBERSHIP_REQUIRED'
+          : exhausted
+            ? exhaustedReasonOf(availability.view.limitedBy)
+            : null,
       },
+      assistantMembersOnly: availability.requiresMembership,
       usage,
       limits: {
         rateLimit: {

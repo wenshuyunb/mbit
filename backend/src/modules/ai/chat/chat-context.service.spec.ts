@@ -63,6 +63,9 @@ interface Harness {
     };
     relationship: { findFirst: jest.Mock; findMany: jest.Mock };
     personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock };
+    emotionProfile: { findFirst: jest.Mock };
+    mentalHealthProfile: { findFirst: jest.Mock };
+    relationshipStyleRule: { findMany: jest.Mock };
     user: { findUnique: jest.Mock; findMany: jest.Mock };
     testSession: { findFirst: jest.Mock };
     aiReport: { findFirst: jest.Mock };
@@ -111,6 +114,18 @@ const createHarness = (): Harness => {
     },
     relationship: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
     personalityProfile: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
+    // 另两个模块的画像（ADR-038 阶段 5 的"管家"要读它们）。默认都是"没做过"
+    emotionProfile: { findFirst: jest.fn().mockResolvedValue(null) },
+    mentalHealthProfile: { findFirst: jest.fn().mockResolvedValue(null) },
+    /**
+     * 关系风格规则表
+     *
+     * ⚠ 本夹具此前**没有这一项**，而它是 `loadCurrentProfile` 的必经之路
+     * （ADR-038 阶段 2 起"读画像"要先读规则表来推导关系风格）。
+     * 之所以一直没暴露：在此之前所有用例的 `personalityProfile.findFirst` 都返回 `null`，
+     * 函数在读到规则表之前就 return 了。第一个"画像非空"的用例（本组）立刻把它撞出来。
+     */
+    relationshipStyleRule: { findMany: jest.fn().mockResolvedValue([]) },
     user: { findUnique: jest.fn().mockResolvedValue({ nickname: '小满' }), findMany: jest.fn().mockResolvedValue([]) },
     testSession: { findFirst: jest.fn().mockResolvedValue(null) },
     aiReport: { findFirst: jest.fn().mockResolvedValue(null) },
@@ -574,5 +589,122 @@ describe('buildContext — 上下文装配', () => {
 
     expect(prepared.relationshipActive).toBe(false);
     expect(prepared.partnerNickname).toBe('小满');
+  });
+});
+
+/**
+ * 三模块摘要 —— "管家"能力（ADR-038 阶段 5）
+ *
+ * 这一组的重点是**它读的是画像而不是报告**：
+ * 心理状态模块根本没有 AI 报告（产品红线是不给建议），
+ * 只读 `ai_reports` 的实现在那个模块上是空的 —— 而"读取三个模块"这句话
+ * 恰恰要求第三个模块也能被读到。
+ */
+describe('buildContext — ALL_MODULES 三模块摘要', () => {
+  const personalityRow = {
+    mbtiType: 'INFJ',
+    mbtiConfidence: 78,
+    eiPercent: 34,
+    snPercent: 68,
+    tfPercent: 61,
+    jpPercent: 72,
+    openness: 82,
+    conscientiousness: 71,
+    extraversion: 34,
+    agreeableness: 88,
+    neuroticism: 56,
+  };
+
+  const emotionRow = {
+    attachmentStyle: 'ANXIOUS',
+    attachmentAnxiety: 72,
+    attachmentAvoidance: 31,
+    primaryLoveLanguages: ['LOVE_WORDS', 'LOVE_TIME'],
+    conflictStyle: 'CONFLICT_ACCOMMODATING',
+  };
+
+  const mentalHealthRow = {
+    overallLevel: 'MILD',
+    conclusion: '从本次作答看，你近期的状态整体有些起伏。其中「压力感受」比较明显。',
+  };
+
+  it('【关键】三个模块的结果都进入上下文（含**没有 AI 报告**的心理状态模块）', async () => {
+    const h = createHarness();
+    h.prisma.aiConversation.findUnique.mockResolvedValue(conversationRow());
+    h.prisma.personalityProfile.findFirst.mockResolvedValue(personalityRow);
+    h.prisma.emotionProfile.findFirst.mockResolvedValue(emotionRow);
+    h.prisma.mentalHealthProfile.findFirst.mockResolvedValue(mentalHealthRow);
+
+    const prepared = await h.service.buildContext({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      includePersona: true,
+      contextHints: ['ALL_MODULES'],
+    });
+
+    const digest = prepared.context.blocks['memoryAndHints'] ?? '';
+
+    expect(digest).toContain('INFJ');
+    expect(digest).toContain('焦虑型'); // 情感：依恋
+    expect(digest).toContain('肯定的言辞'); // 情感：爱的语言（编码译成中文）
+    expect(digest).toContain('迁就型'); // 情感：冲突风格
+    // 关键：第三个模块的**结论文本本身**要进上下文
+    expect(digest).toContain('整体有些起伏');
+    expect(digest).toContain('压力感受');
+  });
+
+  it('【关键】没做过的模块**不写进摘要**（不写"未测评"这类无信息量的占位）', async () => {
+    const h = createHarness();
+    h.prisma.aiConversation.findUnique.mockResolvedValue(conversationRow());
+    h.prisma.personalityProfile.findFirst.mockResolvedValue(personalityRow);
+    // 情感与心理状态都没做过
+
+    const prepared = await h.service.buildContext({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      includePersona: true,
+      contextHints: ['ALL_MODULES'],
+    });
+
+    const digest = prepared.context.blocks['memoryAndHints'] ?? '';
+
+    expect(digest).toContain('INFJ');
+    expect(digest).not.toContain('未测评');
+    expect(digest).not.toContain('【情感／亲密关系】');
+    expect(digest).not.toContain('【近两周状态】');
+  });
+
+  it('三个模块一个都没做过 → 不注入三模块摘要（但不影响已有的记忆摘要）', async () => {
+    const h = createHarness();
+    h.prisma.aiConversation.findUnique.mockResolvedValue(conversationRow());
+
+    const prepared = await h.service.buildContext({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      includePersona: true,
+      contextHints: ['ALL_MODULES'],
+    });
+
+    // `memoryAndHints` 这一块同时承载"记忆摘要"与"提示片段"，
+    // 因此断言的是**没有注入三模块那一段**，而不是整块为空
+    const hints = prepared.context.blocks['memoryAndHints'] ?? '';
+
+    expect(hints).not.toContain('【你三个模块的测评结果】');
+    expect(hints).toContain('之前聊过工作压力。');
+  });
+
+  it('未请求 ALL_MODULES 时不读另两张画像表（不做无谓查询）', async () => {
+    const h = createHarness();
+    h.prisma.aiConversation.findUnique.mockResolvedValue(conversationRow());
+
+    await h.service.buildContext({
+      userId: USER_ID,
+      conversationId: CONVERSATION_ID,
+      includePersona: true,
+      contextHints: [],
+    });
+
+    expect(h.prisma.emotionProfile.findFirst).not.toHaveBeenCalled();
+    expect(h.prisma.mentalHealthProfile.findFirst).not.toHaveBeenCalled();
   });
 });
