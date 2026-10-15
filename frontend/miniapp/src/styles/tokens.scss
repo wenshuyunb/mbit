@@ -11,10 +11,11 @@ $color-primary: #5b4be0; // 主色：探索/自我认知
 $color-primary-light: #7d70ea;
 $color-primary-dark: #4234c4;
 $color-primary-fade: rgba(91, 75, 224, 0.08);
-
 $color-secondary: #ff7a59; // 辅助色：情感/关系
 $color-secondary-light: #ff9a80;
 $color-secondary-fade: rgba(255, 122, 89, 0.1);
+/// 提醒色淡底（漏答提示等；与主色/辅助色淡底同源写法）
+$color-warning-fade: rgba(245, 158, 11, 0.12);
 
 // ------------------------------------------------------------------ 功能色
 $color-success: #22c55e;

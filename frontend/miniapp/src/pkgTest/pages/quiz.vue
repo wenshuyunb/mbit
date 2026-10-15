@@ -4,34 +4,69 @@
  *
  * 职责：逐题作答、进度展示、断点续答、提交算分。
  *
+ * ## ⚠ 2026-10-15 修掉的真实故障：题目被**静默跳过**
+ *
+ * 真机实测：用户在 52 题的情感测评里答到最后，提交被服务端拒绝
+ * 「还有 4 道题未作答」，而未答的 4 道是**散落**在卷中的（第 10、34、37、49 题）。
+ * 根因是自动跳题的竞态：
+ *
+ * ```
+ * 点选项 → 180ms 后自动 next()   ← 定时器没有任何取消机制
+ * 用户在这 180ms 内又点了「下一题」→ 第二次 next()
+ * 结果：连跳两题，中间那道**从未显示**，也不会有答案
+ * ```
+ *
+ * 修法分两层，缺一不可：
+ *
+ *   1. **消除竞态**：自动跳题的定时器可取消，任何手动翻页（上一题/下一题/题号跳转）
+ *      与页面卸载都先 `clearTimeout`；同一次作答只留一个待执行的跳转；
+ *   2. **让漏答可见可操作**：光修竞态不够 —— 已经漏掉的题必须能被发现。
+ *      底部常驻「还有 N 题未作答 · 去补答」，点一下直接跳到第一道缺题；
+ *      提交前也会引导过去，而不是让用户对着计数器自己找
+ *      （52 题里找 4 道没答的题，靠人眼是不可能完成的任务）。
+ *
  * 关键实现：
  *   · 答案立即写本地草稿（store 内），服务端按 2s 节流批量 upsert，杀进程不丢答案
- *   · 支持左右滑动切题 + 题号跳转
+ *   · 选项点击后自动跳下一题（可被手动翻页打断，见上）
  *   · 提交前强制同步剩余答案，避免服务端判定未答完
- *
- * Phase 0 状态：交互与状态机完整（依赖 store/test.ts 的真实实现），
- *               题库数据来自服务端，Phase 2 联调。
  */
 
-import { computed, ref } from 'vue';
+import { computed, onUnmounted, ref } from 'vue';
 import { onHide, onLoad, onUnload } from '@dcloudio/uni-app';
 
-import { useTestStore } from '@/store/test';
+import { presentationByTestCode } from '@/config/modules';
+import { createAutoAdvance } from '@/pkgTest/auto-advance';
 import { useAppStore } from '@/store/app';
+import { useTestStore } from '@/store/test';
+import { goBack } from '@/utils/navigate';
 import { confirm } from '@/utils/toast';
+
+/**
+ * 自动跳题延时
+ *
+ * 220ms 而不是更短：要留出"看到自己点的选项被选中"的时间，
+ * 太短会让人怀疑自己有没有点到（然后重复点击 —— 又回到竞态里）。
+ */
+const ADVANCE_DELAY_MS = 220;
 
 const appStore = useAppStore();
 const testStore = useTestStore();
 
 /** 提交中：防止重复提交 */
 const submitting = ref(false);
-/** 选项切换动画锚点 */
-const lastAnsweredId = ref<string | null>(null);
-
-const question = computed(() => testStore.currentQuestion);
 const showJumpPanel = ref(false);
 
+const question = computed(() => testStore.currentQuestion);
 const progressText = computed(() => `${testStore.answeredCount} / ${testStore.total}`);
+
+/**
+ * 标题随模块走（人格 / 情感 / 心理状态）
+ *
+ * ⚠ 本页是 `navigationStyle: custom`，**没有原生标题栏、也没有原生返回按钮**，
+ * 顶部这一行必须自己画 —— 顺带就有了"这是哪个模块"的位置：
+ * 用户在情感测评里看到"人格测试"会以为自己点错了入口。
+ */
+const moduleTitle = computed(() => presentationByTestCode(testStore.paper?.testCode).entranceTitle);
 
 const currentAnswer = computed<number | null>(() => {
   const current = question.value;
@@ -42,6 +77,16 @@ const currentAnswer = computed<number | null>(() => {
 /** 是否为最后一题 */
 const isLast = computed(() => testStore.currentIndex >= testStore.total - 1);
 
+/**
+ * 自动跳题控制器（见 `@/pkgTest/auto-advance` 的说明）
+ *
+ * ⚠ 这一段就是那次"静默漏答 4 题"的根因所在：原先写成 `setTimeout(() => next(), 180)`，
+ * 句柄没保存、取消不掉，手动翻页后它照样触发 → 连跳两题 → 中间那道题从未显示。
+ * 现在所有手动翻页路径（上一题 / 下一题 / 题号跳转 / 补答）都会先 `cancel()`。
+ */
+const autoAdvance = createAutoAdvance(ADVANCE_DELAY_MS, () => testStore.next());
+
+onUnmounted(() => autoAdvance.cancel());
 onLoad(() => {
   // 直接进入答题页（如从分享链接）时没有会话，退回介绍页
   if (!testStore.paper) {
@@ -55,20 +100,43 @@ const select = (value: number): void => {
   if (!current) return;
 
   testStore.answer(current.questionId, value);
-  lastAnsweredId.value = current.questionId;
 
   // 作答后自动跳下一题（最后一题停留，等待用户提交）
-  if (!isLast.value) {
-    setTimeout(() => testStore.next(), 180);
+  if (isLast.value) {
+    autoAdvance.cancel();
+    return;
   }
+
+  autoAdvance.schedule();
 };
 
-/** 上一题 / 下一题 */
-const goPrev = (): void => testStore.prev();
-const goNext = (): void => testStore.next();
+/** 退出答题（自定义导航栏没有原生返回键，必须自己给一个） */
+const quit = (): void => goBack('/pages/test/intro');
+
+/** 上一题 / 下一题（手动翻页一律先取消待执行的自动跳题） */
+const goPrev = (): void => {
+  autoAdvance.cancel();
+  testStore.prev();
+};
+
+const goNext = (): void => {
+  autoAdvance.cancel();
+  testStore.next();
+};
 
 /** 跳转到指定题号 */
 const jumpTo = (index: number): void => {
+  autoAdvance.cancel();
+  testStore.goTo(index);
+  showJumpPanel.value = false;
+};
+
+/** 跳到第一道未作答的题（漏答时的补救入口） */
+const gotoFirstUnanswered = (): void => {
+  const index = testStore.firstUnansweredIndex;
+  if (index < 0) return;
+
+  autoAdvance.cancel();
   testStore.goTo(index);
   showJumpPanel.value = false;
 };
@@ -78,17 +146,26 @@ const submit = async (): Promise<void> => {
   if (submitting.value) return;
 
   if (!testStore.isComplete) {
-    const unanswered = testStore.total - testStore.answeredCount;
-    const ok = await confirm({
-      content: `还有 ${unanswered} 道题未作答，未作答的题目会影响结果准确度。确定要提交吗？`,
-      confirmText: '继续作答',
-      cancelText: '仍要提交',
+    /**
+     * 未答完时**不给"仍要提交"这个选项**
+     *
+     * 服务端规则是"题量不完整即拒绝算分"（`40006`），所以"仍要提交"必然是死路：
+     * 用户点了、请求发了、被拒了，除了消耗信任没有任何作用。
+     * 唯一的出路是把缺的题补上，所以对话框只有一个动作：去补答。
+     */
+    const go = await confirm({
+      title: '还有题目没答',
+      content: `还有 ${testStore.unansweredCount} 道题未作答，答完才能生成结果。已为你跳到第一道未作答的题。`,
+      confirmText: '去补答',
+      cancelText: '知道了',
     });
-    // confirm 返回 true 表示点了「继续作答」，此处语义反转
-    if (ok) return;
+    if (go) gotoFirstUnanswered();
+    return;
   }
 
   submitting.value = true;
+  autoAdvance.cancel();
+
   try {
     const result = await testStore.submit();
     uni.redirectTo({
@@ -96,7 +173,17 @@ const submit = async (): Promise<void> => {
       url: `/pkgTest/pages/result?sessionId=${result.sessionId}`,
     });
   } catch (error) {
+    /**
+     * 服务端仍判定未答完（例如本地与服务端记录不一致）时，把用户送到缺题处
+     *
+     * 不做静默 `console.error`：那样用户只会看到"点了没反应" —— 这正是本次故障里
+     * "提交也提交不了"的由来。请求层已弹出服务端文案，这里只负责把动作接上。
+     */
     console.error('[quiz] 提交失败：', error);
+
+    if (testStore.firstUnansweredIndex >= 0) {
+      gotoFirstUnanswered();
+    }
   } finally {
     submitting.value = false;
   }
@@ -104,11 +191,13 @@ const submit = async (): Promise<void> => {
 
 /** 退出确认（避免误触丢失进度） */
 onHide(() => {
+  autoAdvance.cancel();
   // 切后台时立即同步一次，降低丢答案概率
   void testStore.syncAnswers();
 });
 
 onUnload(() => {
+  autoAdvance.cancel();
   void testStore.syncAnswers();
 });
 </script>
@@ -116,24 +205,19 @@ onUnload(() => {
 <template>
   <view class="quiz">
     <!--
-      顶部：进度 + 题号
-      ⚠ 本页在 pages.json 里是 `navigationStyle: custom`（自定义导航栏），
-      系统**不会**给状态栏留位置 —— 不自己加 `statusBarHeight` 的话，
-      进度条会直接贴在手机屏幕最上沿（刘海/状态栏上）。这里与首页保持一致的做法。
+      顶栏：返回 + 模块标题
+      ⚠ 本页是 `navigationStyle: custom`（自定义导航栏），系统**不会**给状态栏留位置，
+      不自己加 `statusBarHeight` 的话，标题会直接贴到刘海/状态栏上。
     -->
-    <view class="quiz__header" :style="{ paddingTop: `${appStore.statusBarHeight + 12}px` }">
-      <view class="quiz__progress-bar">
-        <view class="quiz__progress-inner" :style="{ width: `${testStore.progress}%` }" />
-      </view>
-      <view class="quiz__header-row">
-        <text class="quiz__counter">{{ progressText }}</text>
-        <text class="quiz__jump" @tap="showJumpPanel = true">题号</text>
-      </view>
+    <view class="quiz__nav-bar" :style="{ paddingTop: `${appStore.statusBarHeight + 8}px` }">
+      <text class="quiz__back" @tap="quit">‹</text>
+      <text class="quiz__title">{{ moduleTitle }}</text>
+      <text class="quiz__jump" @tap="showJumpPanel = true">题号</text>
     </view>
 
     <!-- 题目区 -->
     <view v-if="question" class="quiz__body">
-      <text class="quiz__index">第 {{ testStore.currentIndex + 1 }} 题</text>
+      <text class="quiz__index">第 {{ testStore.currentIndex + 1 }} 题 / 共 {{ testStore.total }} 题</text>
       <text class="quiz__content">{{ question.content }}</text>
 
       <view class="quiz__options">
@@ -144,6 +228,7 @@ onUnload(() => {
           @tap="select(option.value)"
         >
           <text class="quiz__option-label">{{ option.label }}</text>
+          <text class="quiz__option-check">{{ currentAnswer === option.value ? '✓' : '' }}</text>
         </view>
       </view>
     </view>
@@ -152,19 +237,46 @@ onUnload(() => {
       <text>题目加载中…</text>
     </view>
 
-    <!-- 底部操作 -->
+    <!--
+      底部：漏答提示 + 进度 + 操作
+      ⚠ 进度条从顶部移到底部（用户要求）：顶部留给题目本身，
+      进度属于"我做到哪了"的反馈，放在拇指附近的操作区更自然。
+    -->
     <view class="quiz__footer">
-      <button class="quiz__nav" :disabled="testStore.currentIndex === 0" @tap="goPrev">上一题</button>
-      <button v-if="!isLast" class="quiz__nav" @tap="goNext">下一题</button>
-      <button v-else class="quiz__submit" :disabled="submitting" @tap="submit">
-        {{ submitting ? '正在分析…' : '提交并生成画像' }}
-      </button>
+      <view v-if="!testStore.isComplete && testStore.answeredCount > 0" class="quiz__gap" @tap="gotoFirstUnanswered">
+        <text class="quiz__gap-text">还有 {{ testStore.unansweredCount }} 题未作答</text>
+        <text class="quiz__gap-action">去补答 ›</text>
+      </view>
+
+      <view class="quiz__progress">
+        <view class="quiz__progress-bar">
+          <view class="quiz__progress-inner" :style="{ width: `${testStore.progress}%` }" />
+        </view>
+        <text class="quiz__counter">{{ progressText }}</text>
+      </view>
+
+      <view class="quiz__actions">
+        <button
+          class="quiz__nav"
+          :class="{ 'is-disabled': testStore.currentIndex === 0 }"
+          :disabled="testStore.currentIndex === 0"
+          @tap="goPrev"
+        >
+          上一题
+        </button>
+
+        <button v-if="!isLast" class="quiz__nav quiz__nav--next" @tap="goNext">下一题</button>
+        <button v-else class="quiz__submit" :disabled="submitting" @tap="submit">
+          {{ submitting ? '正在分析…' : '提交并生成结果' }}
+        </button>
+      </view>
     </view>
 
     <!-- 题号面板 -->
     <view v-if="showJumpPanel" class="quiz__panel-mask" @tap="showJumpPanel = false">
       <view class="quiz__panel" @tap.stop>
         <text class="quiz__panel-title">跳转到题目</text>
+        <text class="quiz__panel-hint">高亮为已作答，灰色为未作答</text>
         <view class="quiz__panel-grid">
           <view
             v-for="(item, index) in testStore.paper?.questions ?? []"
@@ -190,21 +302,155 @@ onUnload(() => {
 .quiz {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
   padding: 0 $space-lg;
   background-color: $color-bg-card;
 
   /**
-   * 顶部内边距由模板按 `statusBarHeight` 动态设置（自定义导航栏需要自己让开状态栏），
-   * 这里只负责与题目区之间的间距 —— 两者都写 padding-top 会让人分不清谁在生效。
+   * 顶栏内边距由模板按 `statusBarHeight` 动态设置（自定义导航栏需要自己让开状态栏），
+   * 这里只负责高度与对齐 —— 两处都写 padding-top 会让人分不清谁在生效。
    */
-  &__header {
+  &__nav-bar {
+    @include flex-between;
     padding-bottom: $space-sm;
   }
 
+  &__back {
+    width: 60rpx;
+    font-size: 44rpx;
+    font-weight: $font-weight-medium;
+    line-height: 1;
+    color: $color-text-primary;
+  }
+
+  &__title {
+    flex: 1;
+    font-size: $font-size-md;
+    font-weight: $font-weight-semibold;
+    text-align: center;
+  }
+
+  &__body {
+    flex: 1;
+    padding-top: $space-lg;
+    overflow-y: auto;
+  }
+
+  &__index {
+    font-size: $font-size-sm;
+    color: $color-text-placeholder;
+  }
+
+  &__jump {
+    width: 60rpx;
+    font-size: $font-size-sm;
+    color: $color-primary;
+    text-align: right;
+  }
+
+  &__content {
+    display: block;
+    margin-top: $space-md;
+    font-size: $font-size-lg;
+    font-weight: $font-weight-semibold;
+    line-height: $line-height-base;
+  }
+
+  &__options {
+    margin-top: $space-xl;
+  }
+
+  /**
+   * 选项
+   *
+   * `@include flex-between` 而不是单纯 padding：勾选标记要贴右边，
+   * 与文字之间留出空间（否则长选项会把 ✓ 挤到换行处）
+   */
+  &__option {
+    @include flex-between;
+    min-height: 96rpx;
+    padding: $space-md $space-lg;
+    margin-bottom: $space-sm;
+    border: 2rpx solid $color-border;
+    border-radius: $radius-md;
+    transition: all 0.15s ease;
+
+    &.is-selected {
+      background-color: $color-primary-fade;
+      border-color: $color-primary;
+
+      .quiz__option-label {
+        font-weight: $font-weight-semibold;
+        color: $color-primary;
+      }
+
+      .quiz__option-check {
+        color: $color-primary;
+      }
+    }
+
+    &:active {
+      background-color: $color-bg-hover;
+    }
+  }
+
+  &__option-label {
+    flex: 1;
+    font-size: $font-size-base;
+    line-height: $line-height-base;
+    color: $color-text-primary;
+  }
+
+  &__option-check {
+    margin-left: $space-sm;
+    font-size: $font-size-md;
+    font-weight: $font-weight-semibold;
+  }
+
+  &__empty {
+    @include flex-center;
+    flex: 1;
+    color: $color-text-secondary;
+  }
+
+  &__footer {
+    padding-top: $space-sm;
+    background-color: $color-bg-card;
+    border-top: 1rpx solid $color-divider;
+
+    @include safe-area-padding-bottom($space-md);
+  }
+
+  &__gap {
+    @include flex-between;
+    padding: $space-xs $space-md;
+    margin-bottom: $space-sm;
+    background-color: $color-warning-fade;
+    border-radius: $radius-sm;
+  }
+
+  &__gap-text {
+    font-size: $font-size-xs;
+    color: $color-warning;
+  }
+
+  &__gap-action {
+    font-size: $font-size-xs;
+    font-weight: $font-weight-semibold;
+    color: $color-warning;
+  }
+
+  &__progress {
+    display: flex;
+    align-items: center;
+    gap: $space-sm;
+    margin-bottom: $space-sm;
+  }
+
   &__progress-bar {
+    flex: 1;
     overflow: hidden;
-    height: 8rpx;
+    height: 10rpx;
     background-color: $color-border;
     border-radius: $radius-round;
   }
@@ -216,95 +462,55 @@ onUnload(() => {
     transition: width 0.25s ease;
   }
 
-  &__header-row {
-    @include flex-between;
-    margin-top: $space-sm;
-  }
-
   &__counter {
-    font-size: $font-size-sm;
+    min-width: 120rpx;
+    font-size: $font-size-xs;
     color: $color-text-secondary;
+    text-align: right;
   }
 
-  &__jump {
-    font-size: $font-size-sm;
-    color: $color-primary;
-  }
-
-  &__body {
-    flex: 1;
-    padding-top: $space-xl;
-  }
-
-  &__index {
-    display: block;
-    font-size: $font-size-sm;
-    color: $color-text-placeholder;
-  }
-
-  &__content {
-    display: block;
-    margin-top: $space-sm;
-    font-size: $font-size-lg;
-    font-weight: $font-weight-semibold;
-    line-height: $line-height-base;
-  }
-
-  &__options {
-    margin-top: $space-xl;
-  }
-
-  &__option {
-    padding: $space-md $space-lg;
-    margin-bottom: $space-sm;
-    border: 2rpx solid $color-border;
-    border-radius: $radius-md;
-    transition: all 0.15s ease;
-
-    &.is-selected {
-      background-color: $color-primary-fade;
-      border-color: $color-primary;
-    }
-
-    &:active {
-      background-color: $color-bg-hover;
-    }
-  }
-
-  &__option-label {
-    font-size: $font-size-base;
-    color: $color-text-primary;
-  }
-
-  &__empty {
-    @include flex-center;
-    flex: 1;
-    color: $color-text-secondary;
-  }
-
-  &__footer {
+  &__actions {
     display: flex;
     gap: $space-sm;
-    padding: $space-md 0;
-
-    @include safe-area-padding-bottom($space-md);
   }
 
+  /**
+   * 次级按钮（上一题 / 下一题）
+   *
+   * ⚠ 小程序 `<button>` 有三个默认样式会毁掉居中：
+   *   ① `text-align: center` 只管水平，垂直方向靠 `line-height`（默认 2.5+ 会把文字顶出去）；
+   *   ② 默认 `padding: 0 14px` 与 `margin`；
+   *   ③ `::after` 的白边（`global.scss` 里已统一去掉，但 `display` 仍需自己设）。
+   * 因此这里**两条路都锁**：`flex` 居中（能生效时）+ `line-height` 等于按钮高度
+   * （flex 没作用到按钮内部文本节点时也不会跑偏）。
+   */
   &__nav {
+    @include flex-center;
     flex: 1;
     height: 88rpx;
     font-size: $font-size-base;
+    font-weight: $font-weight-medium;
+    line-height: 88rpx;
     color: $color-text-regular;
     background-color: $color-bg-hover;
     border-radius: $radius-round;
 
+    &.is-disabled,
     &[disabled] {
-      opacity: 0.4;
+      color: $color-text-placeholder;
+      background-color: $color-bg-page;
+    }
+
+    &--next {
+      color: $color-primary;
+      background-color: $color-primary-fade;
     }
   }
 
   &__submit {
-    flex: 2;
+    flex: 1.6;
+    // 与 `button-primary` 的 88rpx 等高：文字垂直居中的第二道保险（同 `&__nav`）
+    line-height: 88rpx;
 
     @include button-primary;
   }
@@ -333,9 +539,16 @@ onUnload(() => {
 
   &__panel-title {
     display: block;
-    margin-bottom: $space-md;
     font-size: $font-size-md;
     font-weight: $font-weight-semibold;
+  }
+
+  &__panel-hint {
+    display: block;
+    margin-top: $space-xxs;
+    margin-bottom: $space-md;
+    font-size: $font-size-xs;
+    color: $color-text-placeholder;
   }
 
   &__panel-grid {

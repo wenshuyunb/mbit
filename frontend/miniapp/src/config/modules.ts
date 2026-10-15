@@ -150,6 +150,17 @@ const FALLBACK_MODULE: ModulePresentation = {
 export const modulePresentation = (module: string | undefined | null): ModulePresentation =>
   MODULES[module as TestModuleKey] ?? FALLBACK_MODULE;
 
+/**
+ * 按**题库编码**反查模块展示配置（答题页标题用）
+ *
+ * 答题页手里只有 `paper.testCode`（`MBTI_LITE` / `EMOTION_LITE` / …），
+ * 而"这是哪个模块"的文案唯一来源在本文件。反查必须走这里：
+ * 在页面里写 `code === 'EMOTION_LITE' ? '情感测评' : '人格测试'` 就是第二份模块文案，
+ * 新增模块时必然漏改一处 —— 而漏改的表现是"做情感测评时标题写着人格测试"。
+ */
+export const presentationByTestCode = (testCode: string | undefined | null): ModulePresentation =>
+  Object.values(MODULES).find((item) => item.testCode === testCode) ?? FALLBACK_MODULE;
+
 /** 已上线、可展示在入口列表里的模块 */
 export const availableModules = (): ModulePresentation[] => Object.values(MODULES).filter((item) => item.available);
 
