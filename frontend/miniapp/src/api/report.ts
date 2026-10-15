@@ -27,6 +27,7 @@
  */
 
 import { http } from './request';
+import type { EmotionConclusion } from './test';
 import type { PaginatedData } from './types';
 
 /** 报告类型（与后端 `REPORT_TYPES` 一致） */
@@ -72,6 +73,61 @@ export interface ReportVisibility {
   isFullyUnlocked: boolean;
   isFullyLocked: boolean;
 }
+
+/**
+ * 情感画像快照（详情页画条形图用）
+ *
+ * ## 为什么报告详情要带画像数据
+ *
+ * 用户的实测反馈是「点开一看，哇，全是字，我是用户我看都不想看，累不累啊，
+ * 最好是图文并茂，一针见血」。而这份报告**本来就有数字** ——
+ * 正文里写着「焦虑轴 52、回避轴 0」「身体的接触 63、精心的时刻 62」
+ * 「服务的行动 5」，它们是最有说服力的部分，却全埋在段落正文里。
+ *
+ * 这一块把这些数字结构化下发，页面顶部就能画成条形图：
+ * **一眼看到自己是哪一种、两条轴各在哪儿、最在意什么。**
+ *
+ * ## 三条边界
+ *
+ *   · **只发编码与数值，不发中文标签** —— 标签的唯一来源是
+ *     `config/modules.ts` 的 `ATTACHMENT_STYLE_LABELS` 等（与结果页同一口径）；
+ *   · **不参与付费墙判定**：它描述的是"你的画像"（结果页早就给用户看过），
+ *     不是"报告写了什么"；被锁的始终是段落正文；
+ *   · 无画像时为 `null`（关系/成长报告本来就没有单一画像），前端按"不画图"降级。
+ */
+export interface EmotionProfileSnapshot {
+  kind: 'EMOTION';
+  /** `ANXIOUS` / `SECURE` / `AVOIDANT` / `FEARFUL` */
+  attachmentStyle: string;
+  attachmentAnxiety: number;
+  attachmentAvoidance: number;
+  /** 两轴的判定中线（系统配置，运营可调） */
+  thresholds: { anxiety: number; avoidance: number };
+  /** 五项爱的语言（键为 `LOVE_*` 编码） */
+  loveLanguageScores: Record<string, number>;
+  primaryLoveLanguages: string[];
+  conflictStyle: string;
+  /** 五种冲突风格（键为 `CONFLICT_*` 编码） */
+  conflictScores: Record<string, number>;
+  completionRate: number | null;
+  consistencyScore: number | null;
+  /** 与结果页同一份确定性结论（服务端同一个纯函数算出） */
+  conclusion: EmotionConclusion;
+}
+
+/** 人格画像快照（MBTI 四维 + 大五） */
+export interface PersonalityProfileSnapshot {
+  kind: 'PERSONALITY';
+  mbtiType: string;
+  mbtiConfidence: number;
+  /** 四维百分比（≥ 50 偏向正极字母），键为 `EI` / `SN` / `TF` / `JP` */
+  dimensions: Record<string, number>;
+  /** 大五得分，键为 `openness` 等英文小写 */
+  bigFive: Record<string, number>;
+  consistencyScore: number | null;
+}
+
+export type ReportProfileSnapshot = EmotionProfileSnapshot | PersonalityProfileSnapshot;
 
 /** 列表摘要统计（口径为**该用户全部报告**，不随筛选与翻页变化） */
 export interface ReportListSummary {
@@ -136,6 +192,13 @@ export interface ReportDetail {
   model: string | null;
   createdAt: string;
   finishedAt: string | null;
+  /**
+   * 生成这份报告时用的画像数值（画条形图用；无画像时为 `null`）
+   *
+   * ⚠ 老报告（后端上线本字段之前生成的）拿到的可能是 `undefined`，
+   * 页面必须容忍 —— 判断用 `report.profileSnapshot ?? null`，不要直接取属性。
+   */
+  profileSnapshot: ReportProfileSnapshot | null;
 }
 
 /** 创建报告的受理结果 */

@@ -22,6 +22,7 @@ import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { parseScoreMap } from '../../common/engine/score-map.util';
 import { buildEmotionConclusion, type EmotionConclusion } from '../emotion/emotion-conclusion.util';
+import { ATTACHMENT_THRESHOLD_CONFIG_KEYS, parseAttachmentThreshold } from '../emotion/attachment-threshold.util';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import type { EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
@@ -1605,29 +1606,21 @@ export class TestService {
    *
    * 读不到或值非法时返回 `undefined`，由引擎回落到 ECR 惯例的中位切分 50。
    * **不抛错**：一个可选的产品口径配置缺失，不该让用户提交不了测评。
+   *
+   * ⚠ **解析与校验在 `attachment-threshold.util.ts`**，不在这里：报告详情页
+   * 也要用同一份阈值画条形图，两处各写一遍迟早会出现"结果页说 52 是中等、
+   * 报告页说 52 是偏高"。本方法只负责查配置表。
    */
   private async loadAttachmentThreshold(): Promise<{ anxiety: number; avoidance: number } | undefined> {
     const rows = await this.prisma.systemConfig.findMany({
       where: {
-        key: { in: ['attachment_threshold_anxiety', 'attachment_threshold_avoidance'] },
+        key: { in: [...ATTACHMENT_THRESHOLD_CONFIG_KEYS] },
         deletedAt: null,
       },
       select: { key: true, value: true },
     });
 
-    // `system_configs.value` 是 `Text` 列 —— 配置值**一律以字符串存储**，
-    // 由 `valueType` 说明它该怎么解释。因此这里按字符串解析后校验范围
-    const readNumber = (key: string): number | undefined => {
-      const raw = rows.find((row) => row.key === key)?.value;
-      const value = raw === undefined ? Number.NaN : Number(raw);
-
-      return Number.isFinite(value) && value >= 0 && value <= 100 ? value : undefined;
-    };
-
-    const anxiety = readNumber('attachment_threshold_anxiety');
-    const avoidance = readNumber('attachment_threshold_avoidance');
-
-    return anxiety === undefined || avoidance === undefined ? undefined : { anxiety, avoidance };
+    return parseAttachmentThreshold(rows);
   }
 
   /**

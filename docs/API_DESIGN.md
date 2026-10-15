@@ -4999,6 +4999,68 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 6. **章节**：ADV-004 要求分段存储以支持「按段付费解锁、按段重生成、后台编辑」；本接口按 `order` 返回全部 6 段（未解锁段为元数据 + 锁定标记），便于前端渲染目录与渐进解锁。
 7. **不返回**：Prompt 全文、`ai_call_audits` 指纹、成本明细（这些仅在 admin 接口暴露）。
 
+**实现补充（2026-10-15）：`profileSnapshot` —— 详情页画条形图用的画像数值**
+
+用户的实测反馈是「点开一看，哇，全是字，我是用户我看都不想看，累不累啊，
+最好是图文并茂，一针见血」。报告正文里其实写满了数字（「焦虑轴 52、回避轴 0」
+「身体的接触 63、精心的时刻 62」「服务的行动 5」），但全埋在段落里 ——
+因此本接口**新增一个可选字段** `profileSnapshot`，把这些数字结构化下发。
+
+| 项       | 值                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 字段     | `data.profileSnapshot`                                                                                                                                                   |
+| 类型     | `EmotionProfileSnapshot \| PersonalityProfileSnapshot \| null`（判别字段 `kind`）                                                                                        |
+| 兼容性   | **纯新增**：老客户端忽略它即可；后端上线前生成的报告该字段为 `null`（前端按"不画图"降级）                                                                                |
+| 付费边界 | ⚠ **不参与解锁判定**。它描述的是"你的画像"（结果页早已给用户看过这些数字），不是"报告写了什么"；被锁的始终是 `sections[].content`                                        |
+| 标签     | **只发编码与数值，不发中文标签**（`ANXIOUS` / `LOVE_TOUCH` / `CONFLICT_*`）——标签的唯一来源是前端 `config/modules.ts`，与结果接口 `/tests/sessions/{id}/result` 同一口径 |
+| 取值来源 | 报告**绑定的那份画像**（`emotionProfileId` / `profileId`），不是"用户当前画像"：报告是某一份画像的产物，用户后来再测一次也不该让这份报告的图跟着变                       |
+
+```json
+{
+  "profileSnapshot": {
+    "kind": "EMOTION",
+    "attachmentStyle": "ANXIOUS",
+    "attachmentAnxiety": 52.38,
+    "attachmentAvoidance": 0,
+    "thresholds": { "anxiety": 50, "avoidance": 50 },
+    "loveLanguageScores": {
+      "LOVE_TIME": 62.07,
+      "LOVE_GIFTS": 6.25,
+      "LOVE_TOUCH": 63.16,
+      "LOVE_WORDS": 60,
+      "LOVE_SERVICE": 4.55
+    },
+    "primaryLoveLanguages": ["LOVE_TOUCH", "LOVE_TIME"],
+    "conflictStyle": "CONFLICT_COLLABORATING",
+    "conflictScores": {
+      "CONFLICT_AVOIDING": 0,
+      "CONFLICT_COMPETING": 20,
+      "CONFLICT_COMPROMISING": 20,
+      "CONFLICT_ACCOMMODATING": 50,
+      "CONFLICT_COLLABORATING": 100
+    },
+    "completionRate": 100,
+    "consistencyScore": 100,
+    "conclusion": {
+      "headline": "……",
+      "portrait": "……",
+      "needs": "……",
+      "conflict": "……",
+      "strengths": ["…"],
+      "suggestions": ["…"],
+      "note": "……"
+    }
+  }
+}
+```
+
+- `kind = 'PERSONALITY'` 时给 `mbtiType` / `mbtiConfidence` / `dimensions`（`EI`/`SN`/`TF`/`JP` 百分比）/ `bigFive` / `consistencyScore`；
+- `kind = 'EMOTION'` 时额外带 `conclusion` —— 与结果页**同一个纯函数**算出的那段确定性结论
+  （同一份画像在结果页与报告页必须得到同一段话，否则用户会以为数据出错了）；
+- 无画像（关系报告 / 成长报告）时为 `null`。
+
+判定与字段映射的全部细节见 `backend/src/modules/ai/report/report-profile-snapshot.util.ts`。
+
 #### 3.5.4 `GET /api/v1/reports/{id}/sections` — 报告分段列表 🔑 💎
 
 | 项   | 值                                                                     |

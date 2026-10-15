@@ -19,9 +19,22 @@ import { ErrorCode } from '../../../common/errors/error-code';
 import { CryptoService } from '../../../infra/crypto/crypto.service';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
 import { QUEUE_AI_REPORT } from '../../../infra/queue/queue.module';
+import {
+  ATTACHMENT_THRESHOLD_CONFIG_KEYS,
+  DEFAULT_ATTACHMENT_THRESHOLD,
+  parseAttachmentThreshold,
+} from '../../emotion/attachment-threshold.util';
 import { PromptService } from '../prompt/prompt.service';
 import type { SectionVisibility, VisibilitySummary } from './report-visibility';
 import { assertHasReadableSection, buildSectionViews, summarizeVisibility } from './report-visibility';
+import {
+  buildEmotionProfileSnapshot,
+  buildPersonalityProfileSnapshot,
+  type AttachmentThresholdView,
+  type EmotionSnapshotSource,
+  type PersonalitySnapshotSource,
+  type ReportProfileSnapshotView,
+} from './report-profile-snapshot.util';
 import {
   ACTIVE_REPORT_STATUSES,
   DEFAULT_PAGE_SIZE,
@@ -105,6 +118,14 @@ export interface ReportDetailView {
   readonly model: string | null;
   readonly createdAt: string;
   readonly finishedAt: string | null;
+  /**
+   * 生成这份报告时用的**画像数值**（详情页画条形图用；无画像时为 `null`）
+   *
+   * ⚠ 它**不参与付费墙判定**：这里放的是"你的画像"（用户自己在结果页已经看过的
+   * 那些数字），不是"报告写了什么"。真正被锁的始终是段落正文。
+   * 类型与边界见 `report-profile-snapshot.util.ts`。
+   */
+  readonly profileSnapshot: ReportProfileSnapshotView | null;
 }
 
 /** 列表解锁上下文（由 `EntitlementService` 提供） */
@@ -595,7 +616,37 @@ export class ReportService {
         model: true,
         createdAt: true,
         generationFinishedAt: true,
-        profile: { select: { mbtiType: true, engineVersion: true } },
+        profile: {
+          select: {
+            mbtiType: true,
+            engineVersion: true,
+            // 详情页画"四维倾向 + 大五"要用的全部数值
+            mbtiConfidence: true,
+            eiPercent: true,
+            snPercent: true,
+            tfPercent: true,
+            jpPercent: true,
+            openness: true,
+            conscientiousness: true,
+            extraversion: true,
+            agreeableness: true,
+            neuroticism: true,
+            consistencyScore: true,
+          },
+        },
+        emotionProfile: {
+          select: {
+            attachmentStyle: true,
+            attachmentAnxiety: true,
+            attachmentAvoidance: true,
+            loveLanguageScores: true,
+            primaryLoveLanguages: true,
+            conflictStyle: true,
+            conflictScores: true,
+            completionRate: true,
+            consistencyScore: true,
+          },
+        },
       },
     });
 
@@ -629,6 +680,8 @@ export class ReportService {
     // 一段都不可读属配置事故：显式失败，不下发空壳报告
     assertHasReadableSection(visibility);
 
+    const profileSnapshot = await this.buildProfileSnapshot(report);
+
     return {
       reportId: report.id,
       type: report.type,
@@ -645,7 +698,56 @@ export class ReportService {
       model: report.model,
       createdAt: report.createdAt.toISOString(),
       finishedAt: report.generationFinishedAt?.toISOString() ?? null,
+      profileSnapshot,
     };
+  }
+
+  /**
+   * 组装详情页要用的画像快照
+   *
+   * 三条设计取舍：
+   *
+   * ① **按挂载的画像取，不按用户取当前画像**：报告是"某一份画像的产物"，
+   *    用户后来又测了一次、画像换了版本之后，这份报告仍应展示**当初那份**数值
+   *    （否则报告正文写着"焦虑 52"，页面上的条形图却是新画像的 71）。
+   *    报告的 `emotionProfileId` / `profileId` 就是为此存在的。
+   * ② **报告类型决定取哪一份**：`EMOTION_REPORT` 读情感画像，人格类报告读人格画像。
+   *    两者都为空时返回 `null`，由前端降级（关系/成长报告本来就没有单一画像）。
+   * ③ **阈值读不到就用兜底**：`system_configs` 缺那两行时回落 50/50，
+   *    与引擎的口径一致（引擎同样以 50 为默认切分）。
+   */
+  private async buildProfileSnapshot(report: {
+    type: string;
+    profile: PersonalitySnapshotSource | null;
+    emotionProfile: EmotionSnapshotSource | null;
+  }): Promise<ReportProfileSnapshotView | null> {
+    if (report.type === 'EMOTION_REPORT') {
+      if (report.emotionProfile === null) return null;
+
+      const thresholds = await this.loadAttachmentThreshold();
+
+      return buildEmotionProfileSnapshot(report.emotionProfile, thresholds);
+    }
+
+    if (report.profile === null) return null;
+
+    return buildPersonalityProfileSnapshot(report.profile);
+  }
+
+  /**
+   * 依恋两轴阈值（系统配置）
+   *
+   * 解析与校验在 `attachment-threshold.util.ts`（与测评模块共用同一份规则），
+   * 这里只负责查配置表；读不到就用兜底值 —— 一个可选的产品口径配置缺失，
+   * 不该让报告详情打不开。
+   */
+  private async loadAttachmentThreshold(): Promise<AttachmentThresholdView> {
+    const rows = await this.prisma.systemConfig.findMany({
+      where: { key: { in: [...ATTACHMENT_THRESHOLD_CONFIG_KEYS] }, deletedAt: null },
+      select: { key: true, value: true },
+    });
+
+    return parseAttachmentThreshold(rows) ?? DEFAULT_ATTACHMENT_THRESHOLD;
   }
 
   /**

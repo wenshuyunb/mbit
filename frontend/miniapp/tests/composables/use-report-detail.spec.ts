@@ -49,6 +49,8 @@ const makeDetail = (lockedSections = 0, unlockedSections = 2): ReportDetail => (
   model: 'deepseek-chat',
   createdAt: '2026-10-10T12:00:00.000Z',
   finishedAt: '2026-10-10T12:00:52.400Z',
+  // 画像快照（详情页画条形图用）：本夹具只关心状态机，给 null 即可
+  profileSnapshot: null,
 });
 
 const makeProgress = (status: ReportProgress['status'], progress = 0): ReportProgress => ({

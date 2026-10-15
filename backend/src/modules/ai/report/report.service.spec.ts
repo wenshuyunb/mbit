@@ -31,10 +31,53 @@ interface Harness {
     personalityProfile: { findFirst: jest.Mock; findMany: jest.Mock };
     aiReport: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; findFirst: jest.Mock };
     reportSection: { findMany: jest.Mock };
+    systemConfig: { findMany: jest.Mock };
   };
   queue: { add: jest.Mock };
   prompts: { getTemplateMeta: jest.Mock };
 }
+
+/**
+ * 详情页要用的**人格画像行**（`getDetail` 的 select 形状）
+ *
+ * ⚠ 与 Prisma 的 select 逐字段对齐：`buildProfileSnapshot` 直接消费这些字段，
+ * 少一个就是 `NaN` 宽度条或 `undefined` 字段混进响应 —— 这类错在 mock 里
+ * 不会报错，只会在真机上表现成"条形图不显示"。
+ */
+const PERSONALITY_PROFILE_ROW = {
+  mbtiType: 'INFJ',
+  engineVersion: '1.0.0',
+  mbtiConfidence: 0.82,
+  eiPercent: 38,
+  snPercent: 24,
+  tfPercent: 71,
+  jpPercent: 66,
+  openness: 78,
+  conscientiousness: 64,
+  extraversion: 32,
+  agreeableness: 70,
+  neuroticism: 45,
+  consistencyScore: 88,
+};
+
+/** 详情页要用的**情感画像行** */
+const EMOTION_PROFILE_ROW = {
+  attachmentStyle: 'ANXIOUS',
+  attachmentAnxiety: 52.38,
+  attachmentAvoidance: 0,
+  loveLanguageScores: { LOVE_TIME: 62.07, LOVE_GIFTS: 6.25, LOVE_TOUCH: 63.16, LOVE_WORDS: 60, LOVE_SERVICE: 4.55 },
+  primaryLoveLanguages: ['LOVE_TOUCH', 'LOVE_TIME'],
+  conflictStyle: 'CONFLICT_COLLABORATING',
+  conflictScores: {
+    CONFLICT_AVOIDING: 0,
+    CONFLICT_COMPETING: 20,
+    CONFLICT_COMPROMISING: 20,
+    CONFLICT_ACCOMMODATING: 50,
+    CONFLICT_COLLABORATING: 100,
+  },
+  completionRate: 100,
+  consistencyScore: 100,
+};
 
 const createHarness = (): Harness => {
   const prisma = {
@@ -59,6 +102,8 @@ const createHarness = (): Harness => {
         progress: 100,
         errorCode: null,
         errorMessage: null,
+        profile: PERSONALITY_PROFILE_ROW,
+        emotionProfile: null,
       }),
     },
     reportSection: {
@@ -79,6 +124,8 @@ const createHarness = (): Harness => {
         },
       ]),
     },
+    // 依恋阈值（详情页画中线用）：默认读不到 → 回落 50/50，各用例按需覆盖
+    systemConfig: { findMany: jest.fn().mockResolvedValue([]) },
   };
 
   const queue = { add: jest.fn().mockResolvedValue({ id: REPORT_ID }) };
@@ -393,6 +440,148 @@ describe('ReportService.getDetail', () => {
 
     await expect(harness.service.getDetail(USER_ID, REPORT_ID, locked)).rejects.toMatchObject({
       code: ErrorCode.AI_REPORT_NOT_FOUND,
+    });
+  });
+
+  /**
+   * 画像快照（详情页画条形图用）
+   *
+   * 用户的实测反馈是「点开一看全是字，我是用户我看都不想看」——
+   * 而这份报告本来就有数字（焦虑轴 52、身体的接触 63……），只是全埋在正文里。
+   * 快照把这些**生成报告时用的画像数值**结构化下发，前端才能画出来。
+   *
+   * 这一组盯住三件事：**按报告类型取哪份画像**、**取不到就给 null 不编造**、
+   * 以及**它绝不能绕过付费墙**（快照里不含任何段落正文）。
+   */
+  describe('画像快照（profileSnapshot）', () => {
+    it('人格报告 → PERSONALITY：四维与大五逐字段对齐，供前端画条', async () => {
+      const harness = createHarness();
+
+      const view = await harness.service.getDetail(USER_ID, REPORT_ID, locked);
+
+      expect(view.profileSnapshot).toMatchObject({
+        kind: 'PERSONALITY',
+        mbtiType: 'INFJ',
+        mbtiConfidence: 0.82,
+        dimensions: { EI: 38, SN: 24, TF: 71, JP: 66 },
+        bigFive: { openness: 78, conscientiousness: 64, extraversion: 32, agreeableness: 70, neuroticism: 45 },
+        consistencyScore: 88,
+      });
+    });
+
+    it('情感报告 → EMOTION：两轴 + 五项爱语 + 五种冲突 + 确定性结论', async () => {
+      const harness = createHarness();
+      harness.prisma.aiReport.findFirst.mockResolvedValue({
+        id: REPORT_ID,
+        type: 'EMOTION_REPORT',
+        status: 'SUCCEEDED',
+        title: '情感测评报告｜焦虑型依恋',
+        summary: '引言',
+        sectionCount: 2,
+        createdAt: new Date('2026-10-10T00:00:00.000Z'),
+        generationFinishedAt: new Date('2026-10-10T00:01:00.000Z'),
+        profile: null,
+        emotionProfile: EMOTION_PROFILE_ROW,
+      });
+
+      const view = await harness.service.getDetail(USER_ID, REPORT_ID, locked);
+      const snapshot = view.profileSnapshot;
+
+      expect(snapshot).toMatchObject({
+        kind: 'EMOTION',
+        attachmentStyle: 'ANXIOUS',
+        attachmentAnxiety: 52.38,
+        attachmentAvoidance: 0,
+        primaryLoveLanguages: ['LOVE_TOUCH', 'LOVE_TIME'],
+        conflictStyle: 'CONFLICT_COLLABORATING',
+      });
+
+      if (snapshot?.kind !== 'EMOTION') throw new Error('期望情感快照');
+
+      // JSONB 列经 `parseScoreMap` 收窄后仍逐项保留
+      expect(snapshot.loveLanguageScores['LOVE_TOUCH']).toBe(63.16);
+      expect(snapshot.conflictScores['CONFLICT_COLLABORATING']).toBe(100);
+      // 结论与结果页**同一个纯函数**：同一份画像必须得到同一段话
+      expect(snapshot.conclusion.headline).toContain('被冷落');
+      expect(snapshot.conclusion.needs).toContain('身体的接触');
+      expect(snapshot.conclusion.suggestions.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('阈值：配置有值时用配置，读不到时回落 50/50（与引擎口径一致）', async () => {
+      const strict = createHarness();
+      strict.prisma.aiReport.findFirst.mockResolvedValue({
+        id: REPORT_ID,
+        type: 'EMOTION_REPORT',
+        status: 'SUCCEEDED',
+        title: null,
+        summary: null,
+        sectionCount: 2,
+        createdAt: new Date(),
+        generationFinishedAt: new Date(),
+        profile: null,
+        emotionProfile: EMOTION_PROFILE_ROW,
+      });
+      strict.prisma.systemConfig.findMany.mockResolvedValue([
+        { key: 'attachment_threshold_anxiety', value: '60' },
+        { key: 'attachment_threshold_avoidance', value: '40' },
+      ]);
+
+      const strictView = await strict.service.getDetail(USER_ID, REPORT_ID, locked);
+
+      expect(strictView.profileSnapshot?.kind === 'EMOTION' && strictView.profileSnapshot.thresholds).toEqual({
+        anxiety: 60,
+        avoidance: 40,
+      });
+
+      // 默认 harness 的 systemConfig 返回空数组 → 兜底
+      const fallback = createHarness();
+      fallback.prisma.aiReport.findFirst.mockResolvedValue({
+        id: REPORT_ID,
+        type: 'EMOTION_REPORT',
+        status: 'SUCCEEDED',
+        title: null,
+        summary: null,
+        sectionCount: 2,
+        createdAt: new Date(),
+        generationFinishedAt: new Date(),
+        profile: null,
+        emotionProfile: EMOTION_PROFILE_ROW,
+      });
+
+      const fallbackView = await fallback.service.getDetail(USER_ID, REPORT_ID, locked);
+
+      expect(fallbackView.profileSnapshot?.kind === 'EMOTION' && fallbackView.profileSnapshot.thresholds).toEqual({
+        anxiety: 50,
+        avoidance: 50,
+      });
+    });
+
+    it('【关键】没有挂画像时返回 null（关系/成长报告本来就没有单一画像，不许编造）', async () => {
+      const harness = createHarness();
+      harness.prisma.aiReport.findFirst.mockResolvedValue({
+        id: REPORT_ID,
+        type: 'RELATIONSHIP_REPORT',
+        status: 'SUCCEEDED',
+        title: null,
+        summary: null,
+        sectionCount: 2,
+        createdAt: new Date(),
+        generationFinishedAt: new Date(),
+        profile: null,
+        emotionProfile: null,
+      });
+
+      const view = await harness.service.getDetail(USER_ID, REPORT_ID, locked);
+
+      expect(view.profileSnapshot).toBeNull();
+    });
+
+    it('【关键】快照不含任何段落正文（付费墙边界不因为多下发一段元数据而松动）', async () => {
+      const harness = createHarness();
+
+      const view = await harness.service.getDetail(USER_ID, REPORT_ID, locked);
+
+      expect(JSON.stringify(view.profileSnapshot)).not.toContain(PAID_CONTENT);
     });
   });
 });
