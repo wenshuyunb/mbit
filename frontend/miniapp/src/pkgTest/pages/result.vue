@@ -611,8 +611,8 @@ const goMyReportDetail = (): void => {
         <view class="result__next-item" @tap="goChat">
           <text class="result__next-icon">💬</text>
           <view class="result__next-body">
-            <text class="result__next-title">和 AI 助手聊聊</text>
-            <text class="result__next-desc">带着你的画像，说说最近在关系里的困扰</text>
+            <text class="result__next-title">和 AI 管家聊聊（会员）</text>
+            <text class="result__next-desc">带着你三个模块的测评结果，一起把结论梳理清楚</text>
           </view>
           <text class="result__next-arrow">›</text>
         </view>

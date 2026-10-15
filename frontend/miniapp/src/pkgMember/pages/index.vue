@@ -40,7 +40,7 @@ const selectedProduct = computed(
 
 /** 权益说明：优先用服务端下发的运营标签，为空时才退回本地兜底文案 */
 const FALLBACK_BENEFITS = [
-  'AI 情感助手不限次对话',
+  'AI 管家不限次对话（可读三个模块）',
   '深度报告不限次重新生成',
   '报告 PDF 导出与保存',
   '历史人格数据与成长曲线',

@@ -53,11 +53,15 @@ export const TEST_SESSION_STATUS = {
   EXPIRED: 'EXPIRED',
 } as const;
 
-/** 报告类型 */
-export const REPORT_TYPES = {
-  MBTI: 'MBTI',
-  RELATIONSHIP: 'RELATIONSHIP',
-} as const;
+/**
+ * 报告类型的取值**不在这里** —— 见 `@/api/report` 的 `ReportType`
+ *
+ * 这里原先有一个 `REPORT_TYPES = { MBTI, RELATIONSHIP }`，两个问题：
+ * ① 取值与后端 `REPORT_TYPES` **完全对不上**（真实值是 `MBTI_REPORT` /
+ *    `BIG_FIVE_REPORT` / `RELATIONSHIP_REPORT` / `GROWTH_SUMMARY` / `EMOTION_REPORT`）；
+ * ② 全仓**没有任何引用**（列表页用的是服务端下发的 `typeName`）。
+ * 一个没人用又写错的常量不是"备用"，是下一个人的陷阱 —— 已删除。
+ */
 
 /** 分享文案（默认值；实际以后端 /system/config 下发为准，便于运营调整） */
 export const DEFAULT_SHARE = {

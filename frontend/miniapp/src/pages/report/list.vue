@@ -132,7 +132,7 @@ onReachBottom(() => {
       v-else-if="!loading"
       icon="📖"
       title="还没有报告"
-      description="完成一次人格测试，即可生成属于你的深度解读报告"
+      description="完成人格或情感测评后，即可生成属于你的深度解读报告"
       action-text="开始测试"
       @action="goTest"
     />

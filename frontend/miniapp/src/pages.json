@@ -96,7 +96,7 @@
         {
           "path": "pages/index",
           "style": {
-            "navigationBarTitleText": "AI 情感助手",
+            "navigationBarTitleText": "AI 管家",
             "disableScroll": true
           }
         }
