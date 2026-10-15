@@ -12,20 +12,26 @@
  * | 适用人群 | 文件                              | 状态        |
  * | -------- | --------------------------------- | ----------- |
  * | `MALE`   | `questions.emotion-scenarios.male.ts` | ✅ 已交付 24 场景 |
- * | `FEMALE` | `questions.emotion-scenarios.female.ts` | ⏳ 待交付 |
- * | `NEUTRAL`| `questions.emotion-scenarios.neutral.ts` | ⏳ 待交付 |
+ * | `FEMALE` | `questions.emotion-scenarios.female.ts` | ✅ 已交付 24 场景 |
+ * | `NEUTRAL`| `questions.emotion-scenarios.neutral.ts` | ✅ 已交付 24 场景 |
  *
- * 中性套给"不想说"的用户；它与男/女两套**同等完整**，不是降级版。
- * 未交付的两套加进来时，只需在本文件补一行 import 与一条映射 ——
- * 覆盖率单测是按 `EMOTION_SCENARIO_SETS` 逐套跑的，加进来即自动纳入检查。
+ * 中性套给"不想说"的用户，也**包括**不愿被归入男/女两类的用户 ——
+ * 因此它与另两套**同等完整**（同样 24 个场景、同样 12 个维度覆盖），不是降级版：
+ * 走这一套的人拿到的画像与报告质量必须一致。
+ *
+ * 覆盖率单测按 `EMOTION_SCENARIO_SETS` 逐套跑，新增一套会自动纳入检查。
  */
 
 import type { SeedAudience, SeedScenarioQuestion } from '../types';
+import { EMOTION_SCENARIOS_FEMALE } from './questions.emotion-scenarios.female';
 import { EMOTION_SCENARIOS_MALE } from './questions.emotion-scenarios.male';
+import { EMOTION_SCENARIOS_NEUTRAL } from './questions.emotion-scenarios.neutral';
 
 /** 已交付的场景题库（按适用人群） */
 export const EMOTION_SCENARIO_SETS: Partial<Record<SeedAudience, SeedScenarioQuestion[]>> = {
   MALE: EMOTION_SCENARIOS_MALE,
+  FEMALE: EMOTION_SCENARIOS_FEMALE,
+  NEUTRAL: EMOTION_SCENARIOS_NEUTRAL,
 };
 
 /** 尚未交付的适用人群（seed 与单测据此提示"还差哪一套"） */
