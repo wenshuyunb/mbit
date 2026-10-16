@@ -12,7 +12,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
-import { CurrentUser } from '../../common/decorators';
+import { CurrentUser, Public } from '../../common/decorators';
 import { ZodiacFortuneQueryDto, ZodiacMatchQueryDto } from './dto/zodiac.dto';
 import { ZodiacService, type DailyFortuneResponse, type ZodiacProfileView } from './zodiac.service';
 import type { MonthlyFortuneView, WeeklyFortuneView, ZodiacMatchView } from './zodiac-fortune.util';
@@ -24,13 +24,21 @@ export class ZodiacController {
   constructor(private readonly zodiacService: ZodiacService) {}
 
   @Get('signs')
+  /**
+   * ⚠ `@Public()` 不可省（2026-10-16 修）
+   *
+   * 全局 `JwtAuthGuard` 注册在 `APP_GUARD` 上，**默认拒绝所有未标记的接口**；
+   * 用户实测时这个接口返回 401，就是漏了这一个装饰器 ——
+   * 而它在文档里写的是"不需要登录即可访问"，文档与实现因此直接对不上。
+   */
+  @Public()
   @Throttle({ global: { limit: 60, ttl: 60_000 } })
   @ApiOperation({
     summary: '十二星座档案',
     description: [
       '返回十二星座的**文化常识**档案：日期区间、元素、守护星、关键词、性格与爱情/事业/友情的倾向、优势与需要留意的地方。',
       '',
-      '⚠ 本接口的内容**不含任何预测**，是星座文化的通识描述；不需要登录即可访问。',
+      '⚠ 本接口的内容**不含任何预测**，是星座文化的通识描述；**不需要登录**即可访问。',
       '',
       '日期区间采用**国际通用的固定区间**（与用户对"我是几号到几号"的认知一致），',
       '不是天文黄道日期 —— 后者每年漂 ±1 天，反而会让用户觉得算错了。',
@@ -118,6 +126,8 @@ export class ZodiacController {
   }
 
   @Get('match')
+  /** 同上：配对不需要知道"你是谁"，因此也公开（用户常想看朋友的组合） */
+  @Public()
   @Throttle({ global: { limit: 60, ttl: 60_000 } })
   @ApiOperation({
     summary: '星座配对',

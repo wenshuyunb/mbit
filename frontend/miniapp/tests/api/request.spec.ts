@@ -371,12 +371,75 @@ describe('请求层', () => {
         getAccessToken: () => 'expired-token',
         refreshAccessToken: async () => null,
         onUnauthorized,
+        /**
+         * ⚠ 必须显式声明"没有重登能力"（`undefined`）
+         *
+         * `registerRequestHooks` 是**合并**语义：不传这个键就会沿用前一个用例注册的
+         * `ensureAuthReady`，于是请求层会走"静默重登后重放"分支 ——
+         * 而那个分支在测试里是拿不到新令牌的。显式置空，测的才是这条用例想测的东西。
+         */
+        ensureAuthReady: undefined,
       });
 
       enqueue(errorBody(ERROR_CODES.TOKEN_EXPIRED, '登录状态已过期', 401));
 
       await expect(request({ url: '/users/me', showError: false })).rejects.toThrow(ApiError);
       expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * 【关键】续期做不了时的兜底：**静默重登一次 + 用新令牌重放**（2026-10-16 新增）
+     *
+     * 用户实测报的"所有接口都 401"就是这个场景：storage 里只剩过期的 access token
+     * （或 access/refresh 双双失效）→ 首屏请求 401 → 续期返回 null →
+     * 旧实现只清会话并把 401 抛给页面，而登录随后其实成功了，
+     * **首屏那批数据却永远不会回来**。这条用例把"重登后重放"钉住。
+     */
+    it('【关键】续期不可用时静默重登一次并用新令牌重放', async () => {
+      let currentToken: string | null = 'expired-token';
+      const ensureAuthReady = vi.fn(async () => {
+        currentToken = 'fresh-token';
+
+        return true;
+      });
+      const onUnauthorized = vi.fn();
+
+      registerRequestHooks({
+        getAccessToken: () => currentToken,
+        // 没有可用的 refresh token（用户清过缓存/令牌双双过期）
+        refreshAccessToken: async () => null,
+        ensureAuthReady,
+        onUnauthorized,
+      });
+
+      enqueue(errorBody(ERROR_CODES.UNAUTHORIZED, '请先登录', 401), okBody({ id: 'u1' }));
+
+      const result = await request<{ id: string }>({ url: '/users/me', showError: false });
+
+      expect(result).toEqual({ id: 'u1' });
+      expect(ensureAuthReady).toHaveBeenCalledTimes(1);
+      // 重登成功就不该再清会话
+      expect(onUnauthorized).not.toHaveBeenCalled();
+      // 第二次请求必须带上新令牌
+      expect(captured[1]?.header?.['Authorization']).toBe('Bearer fresh-token');
+    });
+
+    it('重登也没拿到新令牌时不重放，原样抛出 401（避免"假成功"）', async () => {
+      const onUnauthorized = vi.fn();
+      registerRequestHooks({
+        getAccessToken: () => 'expired-token',
+        refreshAccessToken: async () => null,
+        // 重登失败：令牌没变
+        ensureAuthReady: async () => false,
+        onUnauthorized,
+      });
+
+      enqueue(errorBody(ERROR_CODES.UNAUTHORIZED, '请先登录', 401));
+
+      await expect(request({ url: '/users/me', showError: false })).rejects.toThrow(ApiError);
+      expect(onUnauthorized).toHaveBeenCalledTimes(1);
+      // 只发了原始那一次请求，没有用同一个令牌再打一次
+      expect(captured).toHaveLength(1);
     });
 
     it('refreshToken 已失效时不尝试刷新（避免无效请求）', async () => {

@@ -141,24 +141,31 @@ export interface ZodiacMatch {
   disclaimer: string;
 }
 
-/** 十二星座档案（公开接口，不需要登录） */
-export const listZodiacProfiles = (): Promise<ZodiacProfile[]> => http.get<ZodiacProfile[]>('/zodiac/signs');
+/** 十二星座档案（**公开接口**：后端已标 `@Public()`，前端也不需要带令牌） */
+export const listZodiacProfiles = (): Promise<ZodiacProfile[]> =>
+  http.get<ZodiacProfile[]>('/zodiac/signs', undefined, { needAuth: false, showError: false });
 
 /** 我的星座（未设置生日时后端返回 `30019`） */
 export const getMyZodiac = (): Promise<ZodiacMe> => http.get<ZodiacMe>('/zodiac/me', undefined, { showError: false });
 
-/** 今日运势 */
+/**
+ * 今日运势
+ *
+ * ⚠ `showError: false`：**没设生日**时后端返回 `400 / 30019`，而那是本模块的
+ * **正常流程**（页面据此展示"先选出生日期"的卡片）。不关掉统一提示的话，
+ * 用户一进页面就先看到一个红色报错，然后才看到引导卡 —— 顺序反了。
+ */
 export const getDailyFortune = (date: string, birthday?: string): Promise<DailyFortune> =>
-  http.get<DailyFortune>('/zodiac/daily', birthday === undefined ? { date } : { date, birthday });
+  http.get<DailyFortune>('/zodiac/daily', birthday === undefined ? { date } : { date, birthday }, { showError: false });
 
 /** 本周运势 */
 export const getWeeklyFortune = (date: string): Promise<WeeklyFortune> =>
-  http.get<WeeklyFortune>('/zodiac/weekly', { date });
+  http.get<WeeklyFortune>('/zodiac/weekly', { date }, { showError: false });
 
 /** 本月运势 */
 export const getMonthlyFortune = (date: string): Promise<MonthlyFortune> =>
-  http.get<MonthlyFortune>('/zodiac/monthly', { date });
+  http.get<MonthlyFortune>('/zodiac/monthly', { date }, { showError: false });
 
-/** 星座配对（顺序无关） */
+/** 星座配对（**公开接口**，顺序无关） */
 export const getZodiacMatch = (a: ZodiacSign, b: ZodiacSign): Promise<ZodiacMatch> =>
-  http.get<ZodiacMatch>('/zodiac/match', { a, b });
+  http.get<ZodiacMatch>('/zodiac/match', { a, b }, { needAuth: false });

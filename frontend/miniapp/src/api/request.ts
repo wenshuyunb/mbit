@@ -351,6 +351,14 @@ const execute = async (options: RequestOptions): Promise<unknown> => {
 
   let tokenUsed: string | null | undefined = options.needAuth === false ? null : hooks.getAccessToken();
 
+  /**
+   * 本次请求是否已经"续期/重登"过
+   *
+   * 两个作用：① 避免续期与重登各来一轮；② **保证每个请求最多重放一次** ——
+   * 登录本身坏掉时（如微信侧不可用），没有这个标记会打成死循环。
+   */
+  let relogged = false;
+
   try {
     let attempt = 0;
 
@@ -394,6 +402,7 @@ const execute = async (options: RequestOptions): Promise<unknown> => {
 
           if (newToken) {
             tokenUsed = newToken;
+            relogged = true;
 
             // 用新凭证重放一次（不再重试，避免死循环）
             const replayHeaders = buildHeaders(options, requestId, newToken);
@@ -410,6 +419,59 @@ const execute = async (options: RequestOptions): Promise<unknown> => {
               return replay.body.data;
             }
             throw toApiError(replay);
+          }
+
+          /**
+           * 情况三：**连续期都做不了**（没有 refresh token，或它已失效）——
+           * 静默重登一次并用新令牌重放
+           *
+           * ## 为什么必须有这一段（2026-10-16 修，用户报"全都是 401"）
+           *
+           * 实测的故障链是：
+           *   ① 小程序被重新编译 / 清缓存后，storage 里可能**只剩过期的 access token**
+           *      （或 access 与 refresh 都过期）；
+           *   ② 首屏那批请求带着这个过期令牌发出去 → 401；
+           *   ③ 401 分支尝试续期 → 没有可用的 refresh token → 返回 null；
+           *   ④ 于是走到 `hooks.onUnauthorized()`：**清掉会话**，并把 401 抛给页面。
+           *
+           * 结果是：登录其实随后自动成功了（`silentLogin` 会新建会话），但**首屏那批数据
+           * 永远不会回来** —— 用户看到的就是"所有接口 401"，而首页一直空着。
+           *
+           * 重登后重放把这条链接上：用户不必手动下拉刷新。
+           * `relogged` 保证**每个请求最多重登一次**（否则登录本身有问题时会打成死循环）；
+           * 续期成功后同样置位，避免"续期拿到的新令牌又失效"时再走一轮重登。
+           */
+          if (!relogged && hooks.ensureAuthReady !== undefined) {
+            relogged = true;
+            await hooks.ensureAuthReady().catch(() => undefined);
+
+            const reloginToken = hooks.getAccessToken();
+
+            /**
+             * ⚠ **只有拿到的确实是一个新令牌才重放**
+             *
+             * 重登没成功时（`silentLogin` 返回 false，令牌还是原来那个），
+             * 用同一个令牌再打一次必然还是 401 —— 白白多发一次请求，
+             * 更糟的是它会掩盖原本的错误：调用方拿到的可能是一次"假成功"。
+             * 因此这里比一次令牌，不同才重放，否则让原始 401 正常抛出去。
+             */
+            if (reloginToken && reloginToken !== (tokenUsed ?? null)) {
+              tokenUsed = reloginToken;
+
+              const replay = await rawRequest({
+                url,
+                method,
+                data: options.data,
+                headers: buildHeaders(options, requestId, reloginToken),
+                timeoutMs,
+                cancelKey: options.cancelKey,
+              });
+
+              if (replay.statusCode >= 200 && replay.statusCode < 300 && replay.body?.code === ERROR_CODES.SUCCESS) {
+                return replay.body.data;
+              }
+              throw toApiError(replay);
+            }
           }
         }
 
