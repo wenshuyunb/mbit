@@ -68,6 +68,7 @@ import { StorageModule } from './modules/storage/storage.module';
 // 用户端系统配置（`GET /system/config`、`/system/disclaimers`）：小程序所有页面都依赖它
 import { SystemModule } from './modules/system/system.module';
 import { TestModule } from './modules/test/test.module';
+import { ZodiacModule } from './modules/zodiac/zodiac.module';
 import { UserModule } from './modules/user/user.module';
 
 @Module({
@@ -181,6 +182,15 @@ import { UserModule } from './modules/user/user.module';
     RelationshipModule,
     StorageModule,
     TestModule,
+    /**
+     * 星座运势（2026-10-16 新增）
+     *
+     * ⚠ 它与三个测评模块**完全隔离**：不进测评框架、不写任何画像、
+     * 不影响任何测评结论（ADR-038 + 用户明确要求"完全隔离"）。
+     * 它只依赖全局的 `PrismaService`（读用户的出生日期）与 `SystemModule`
+     *（读娱乐性质声明），因此放在业务模块末尾，不与测评链发生任何关系。
+     */
+    ZodiacModule,
     // 用户端系统配置（公开接口；小程序每个页面都依赖功能开关与合规免责声明）
     SystemModule,
     // 后台管理基础层（独立 realm：AdminJwtStrategy + AdminAuthGuard + RolesGuard + 审计）

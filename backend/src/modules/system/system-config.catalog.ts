@@ -121,6 +121,17 @@ const DISCLAIMER_CONFIDENCE_NOTICE =
 const DISCLAIMER_CRISIS_NOTICE =
   '如果你正经历严重的心理困扰或有伤害自己的念头，请立即联系上方的专业热线，或告知身边可信任的人。SoulMap 无法提供危机干预。';
 /**
+ * 星座运势的娱乐性质声明（2026-10-16 新增）
+ *
+ * ⚠ 三个必须包含的语义，缺一条这段话就起不到合规作用：
+ *   ① **定性**：这是娱乐与文化解读，不是预测；
+ *   ② **不可作为依据**：不构成任何建议、预测或决策依据（尤其不能拿来指导
+ *      投资、医疗、法律这类真实决定）；
+ *   ③ **不涉及个人处境**：星座只按出生日期划分，与你的实际状况无关。
+ */
+const DISCLAIMER_ZODIAC =
+  '星座内容属于娱乐性质的传统文化解读，仅供消遣参考，不构成任何预测、建议或决策依据，也与你的个人处境无关。请勿据此安排工作、财务、健康或人际关系上的重要决定。';
+/**
  * AI 助手会话首屏提示（合规文案，契约 §3.7.1 响应字段 `systemNotice`）
  *
  * 必须与 `modules/ai/chat/chat.types.ts` 的 `DEFAULT_SYSTEM_NOTICE` 逐字一致：
@@ -573,6 +584,25 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     defaultValue: '如有紧急危险，请拨打 120 或前往最近的急诊。',
     description: '危机资源块末尾的紧急处置提示',
     requiresConfirmPassword: false,
+    impactScope: 'GLOBAL',
+    isPublic: true,
+  },
+  {
+    /**
+     * 星座运势的娱乐性质声明（2026-10-16 新增）
+     *
+     * 星座内容天然带"预测"色彩，而《互联网信息服务管理办法》禁止宣扬封建迷信、
+     * 小程序平台对"运势预测"另有拒绝情形。因此这句话是**合规文案**：
+     * 既要能随监管口径独立迭代（改配置、不发版），又要**要求二次确认密码**
+     * （`requiresConfirmPassword: true`）—— 与其它免责声明同一档，避免被随手改弱。
+     */
+    key: 'disclaimer.zodiac',
+    group: 'DISCLAIMER',
+    label: '星座内容声明',
+    valueType: ConfigValueType.STRING,
+    defaultValue: DISCLAIMER_ZODIAC,
+    description: '星座运势模块必须展示的娱乐性质声明（不构成预测、建议或决策依据）',
+    requiresConfirmPassword: true,
     impactScope: 'GLOBAL',
     isPublic: true,
   },

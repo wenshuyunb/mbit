@@ -140,6 +140,13 @@ export const ERROR_CODES = {
 
   CONSENT_REQUIRED: 30002,
   AGE_RESTRICTED: 30009,
+  /**
+   * 尚未设置出生日期（星座运势的前置条件）
+   *
+   * 与后端 `error-code.ts` 的 `ZODIAC_BIRTHDAY_REQUIRED` 同步。
+   * 星座页据此**精确分支**（弹出生日期选择器），而不是把所有 4xx 都当成"加载失败"。
+   */
+  ZODIAC_BIRTHDAY_REQUIRED: 30019,
 
   TEST_SESSION_EXPIRED: 40004,
   TEST_SESSION_ALREADY_SUBMITTED: 40005,

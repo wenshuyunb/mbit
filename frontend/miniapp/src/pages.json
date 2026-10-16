@@ -115,6 +115,31 @@
       ]
     },
     {
+      "root": "pkgZodiac",
+      "name": "zodiac",
+      "pages": [
+        {
+          "path": "pages/index",
+          "style": {
+            "navigationBarTitleText": "星座运势",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
+          "path": "pages/signs",
+          "style": {
+            "navigationBarTitleText": "十二星座档案"
+          }
+        },
+        {
+          "path": "pages/match",
+          "style": {
+            "navigationBarTitleText": "星座配对"
+          }
+        }
+      ]
+    },
+    {
       "root": "pkgWebview",
       "name": "webview",
       "pages": [

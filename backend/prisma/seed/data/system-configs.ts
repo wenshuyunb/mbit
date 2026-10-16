@@ -83,6 +83,16 @@ const DISCLAIMER_AI_CONTENT =
 /** AI 生成标识（生成式 AI 内容监管要求，与目录一致） */
 const DISCLAIMER_AI_GENERATED_NOTICE = '本内容由人工智能生成。';
 
+/**
+ * 星座运势的娱乐性质声明（与目录 `DISCLAIMER_ZODIAC` 逐字一致）
+ *
+ * ⚠ 两处必须同值：库里的行会**覆盖**目录默认值成为真值，而
+ * `system-configs.spec.ts` 会逐字比对这两处 —— 不同就测试失败。
+ * 这是有意的：合规文案不允许出现"文档说 A、线上发 B"。
+ */
+const DISCLAIMER_ZODIAC =
+  '星座内容属于娱乐性质的传统文化解读，仅供消遣参考，不构成任何预测、建议或决策依据，也与你的个人处境无关。请勿据此安排工作、财务、健康或人际关系上的重要决定。';
+
 /** 危机提示（危险内容拦截后必须与转介资源一同展示，与目录一致） */
 const DISCLAIMER_CRISIS_NOTICE =
   '如果你正经历严重的心理困扰或有伤害自己的念头，请立即联系上方的专业热线，或告知身边可信任的人。SoulMap 无法提供危机干预。';
@@ -220,6 +230,16 @@ export const SYSTEM_CONFIGS: SeedSystemConfig[] = [
     valueType: ConfigValueType.STRING,
     group: 'DISCLAIMER',
     description: 'AI 内容的显式标识（生成式 AI 内容监管要求）',
+    isPublic: true,
+    isEditable: true,
+  },
+  {
+    key: 'disclaimer.zodiac',
+    value: DISCLAIMER_ZODIAC,
+    valueType: ConfigValueType.STRING,
+    group: 'DISCLAIMER',
+    description: '星座运势模块必须展示的娱乐性质声明（不构成预测、建议或决策依据）',
+    // 合规文案：星座内容天然带"预测"色彩，这句话必须随内容一起下发，前端不得硬编码
     isPublic: true,
     isEditable: true,
   },

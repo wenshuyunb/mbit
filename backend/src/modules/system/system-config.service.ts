@@ -452,6 +452,13 @@ export class SystemConfigService {
       confidenceNotice: this.readString(map, 'disclaimer.confidenceNotice', ''),
       safetyResources: this.readJson<unknown[]>(map, 'disclaimer.safetyResources', []),
       crisisNotice: this.readString(map, 'disclaimer.crisisNotice', ''),
+      /**
+       * 星座运势的娱乐性质声明（2026-10-16 新增）
+       *
+       * 放在这里而不是写死在前端：星座内容天然带"预测"色彩，这句话是**合规文案**，
+       * 必须能独立迭代（口径收紧时改配置即可，不必发版），也与其它免责声明同一处下发。
+       */
+      zodiac: this.readString(map, 'disclaimer.zodiac', ''),
       // 小程序 store 的直接消费字段（别名）：报告页脚声明
       reportFooter: this.readString(map, 'disclaimer.personality', ''),
     };

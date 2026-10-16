@@ -88,6 +88,14 @@ export const ErrorCode = {
   AVATAR_INVALID: 30016,
   CONSENT_VERSION_STALE: 30017,
   PHONE_ALREADY_BOUND: 30018,
+  /**
+   * 尚未设置出生日期（星座运势模块的前置条件）
+   *
+   * 放在**用户段**而不是给星座模块新开一段：需要补的是"用户资料里的一项"，
+   * 与 `USER_PROFILE_INCOMPLETE` 同类。前端据此**精确分支**（弹出生日期选择器），
+   * 因此不能复用通用的 `10002 RESOURCE_NOT_FOUND` —— 那会与"星座不存在"混在一起。
+   */
+  ZODIAC_BIRTHDAY_REQUIRED: 30019,
 
   // ------------------------------------------------------- 测试与人格 40
   TEST_DEFINITION_NOT_FOUND: 40000,
@@ -273,6 +281,7 @@ export const ERROR_HTTP_STATUS: Record<number, number> = {
   30016: 400,
   30017: 409,
   30018: 409,
+  30019: 400,
 
   40000: 404,
   40001: 409,
@@ -445,6 +454,7 @@ export const ERROR_MESSAGE: Record<number, string> = {
   30016: '头像文件不合法',
   30017: '协议版本已更新，请重新阅读并确认',
   30018: '该手机号已绑定其他账号',
+  30019: '请先选择你的出生日期',
 
   40000: '测试不存在',
   40001: '该测试已下架',

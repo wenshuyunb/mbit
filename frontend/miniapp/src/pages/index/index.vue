@@ -140,6 +140,21 @@ const entrances = computed(() =>
       url: '/pkgChat/pages/index',
       enabled: appStore.features.aiChat,
     },
+    {
+      /**
+       * 星座运势入口（2026-10-16）
+       *
+       * ⚠ 它是**内容娱乐模块**，不是第四个测评：不进测评框架、不写画像、
+       * 与三个测评模块完全隔离（用户明确要求"完全隔离"）。
+       * 因此文案刻意不带"测"字 —— 写成"测测你的星座"会让人以为这又是一份测评报告。
+       */
+      key: 'zodiac',
+      title: '星座运势',
+      desc: '选一次出生日期，看看今天的你',
+      icon: '✨',
+      url: '/pkgZodiac/pages/index',
+      enabled: true,
+    },
   ].filter((item) => item.enabled),
 );
 
