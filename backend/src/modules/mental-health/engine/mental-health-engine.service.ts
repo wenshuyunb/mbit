@@ -58,6 +58,17 @@ import {
 const DEFAULT_HIGHLIGHT_COUNT = 2;
 
 /**
+ * 单维"值得留意"的起评分（与 `DEFAULT_LEVEL_THRESHOLDS.band` 的第三档分界一致）
+ *
+ * ⚠ 这是**代码里的结构性判据**（"单项是否抬高整体档位"），不是"分数→单维档位"
+ * 那条产品口径 —— 后者仍由系统配置的阈值决定。改这个值等于改口径，必须一起改单测。
+ */
+const NOTABLE_MIN_SCORE = 70;
+
+/** 单项极高（比 NOTABLE 再高这么多）时，即使只有一项也把整体抬到 NOTABLE */
+const EXTREME_MARGIN = 15;
+
+/**
  * 结论里**绝不出现**的说法
  *
  * 放在代码里而不是只写在文档里：文案是最容易被后来者"顺手润色"的地方，
@@ -197,7 +208,12 @@ export class MentalHealthEngine {
             2,
           );
 
-    const overallLevel = MentalHealthEngine.resolveOverallLevel(overallScore, thresholds.overall);
+    const overallLevel = MentalHealthEngine.resolveOverallLevel(
+      overallScore,
+      thresholds.overall,
+      dimensions,
+      usableDimensions,
+    );
     const highlightedDimensions = MentalHealthEngine.pickHighlighted(dimensions, usableDimensions, highlightCount);
 
     const conclusion =
@@ -250,14 +266,54 @@ export class MentalHealthEngine {
     return 'NOTABLE';
   }
 
-  /** 整体档位（三档，描述性） */
-  static resolveOverallLevel(overallScore: number, thresholds: readonly [number, number]): MentalHealthOverallLevel {
+  /**
+   * 整体档位（三档，描述性）
+   *
+   * ## 为什么不能只看六维均值（2026-10-16 修）
+   *
+   * 只看均值会造出**自相矛盾的结果**，而且实测就撞上了：用户"睡眠困扰 100、
+   * 紧张不安 100、其余四项 0"，均值 = 33.3 → 整体判为「整体比较平稳」——
+   * 页面上同时出现"两项比较突出（100 分）"与"整体比较平稳"。
+   * 用户的原话是「看不出个所以然来」，这就是最典型的成因：
+   * **结论与眼前的分数打架，用户不知道该信哪一个。**
+   *
+   * 因此整体档位取"均值档位"与"单项档位"的**较高者**：
+   *   · 有任何一项达到 NOTABLE（≥ 单维第三档分界）→ 整体至少 MILD；
+   *   · 有两项以上达到 NOTABLE、或有一项极高（≥ 单维 NOTABLE + 15）→ 整体 NOTABLE。
+   *
+   * 这与"六维方向一致、越高越值得留意"的前提一致：一项很高就是**值得留意**，
+   * 不该被另外四项很低"平均掉"。均值仍然下发（`overallScore`），
+   * 只是不再单独决定档位措辞。
+   */
+  static resolveOverallLevel(
+    overallScore: number,
+    thresholds: readonly [number, number],
+    dimensions?: Record<string, MentalHealthDimensionResult>,
+    usableDimensions?: readonly string[],
+  ): MentalHealthOverallLevel {
     const [goodMax, mildMax] = thresholds;
 
-    if (overallScore < goodMax) return 'GOOD';
-    if (overallScore < mildMax) return 'MILD';
+    const byMean: MentalHealthOverallLevel =
+      overallScore < goodMax ? 'GOOD' : overallScore < mildMax ? 'MILD' : 'NOTABLE';
 
-    return 'NOTABLE';
+    if (dimensions === undefined) return byMean;
+
+    const notableScores = (usableDimensions ?? Object.keys(dimensions))
+      .map((key) => dimensions[key])
+      .filter((item): item is MentalHealthDimensionResult => item !== undefined && item.usable)
+      .map((item) => item.score)
+      .filter((score) => score >= NOTABLE_MIN_SCORE);
+
+    if (notableScores.length === 0) return byMean;
+
+    const byDimension: MentalHealthOverallLevel =
+      notableScores.length >= 2 || Math.max(...notableScores) >= NOTABLE_MIN_SCORE + EXTREME_MARGIN
+        ? 'NOTABLE'
+        : 'MILD';
+
+    const rank: Record<MentalHealthOverallLevel, number> = { GOOD: 0, MILD: 1, NOTABLE: 2 };
+
+    return rank[byDimension] > rank[byMean] ? byDimension : byMean;
   }
 
   /**

@@ -201,6 +201,42 @@ const conflictStyleLabel = computed(() => {
  */
 const qualityNotice = computed(() => result.value?.result.quality.notice ?? null);
 
+/**
+ * 心理状态的解读层（每维人话 / 重点项 / 三条建议 / 求助指引 / 复测引导）
+ *
+ * 服务端由**确定性规则**生成（不是 AI 写的）：同一份作答任何时候都得到同一份内容。
+ * 老结果（后端上线这个字段之前生成的）拿不到它 → 页面按"只有分数与结论"降级渲染，
+ * 而不是渲染一片空白。
+ */
+const mentalHealthReport = computed(() =>
+  result.value?.module === 'MENTAL_HEALTH' ? (result.value.result.report ?? null) : null,
+);
+
+/**
+ * 拨打心理援助热线
+ *
+ * 号码由服务端下发（`report.support.hotline.number`），前端**不硬编码** ——
+ * 号码是政策性的，写死在前端意味着改号要发版。
+ * 拨号失败（部分机型/开发者工具不支持）时退化为"把号码展示出来让用户自己拨"，
+ * 不能什么都不做。
+ */
+const callHotline = (): void => {
+  const number = mentalHealthReport.value?.support.hotline.number;
+  if (!number) return;
+
+  uni.makePhoneCall({
+    phoneNumber: number,
+    fail: () => {
+      uni.showModal({
+        title: '心理援助热线',
+        content: `可以直接拨打 ${number}（${mentalHealthReport.value?.support.hotline.name ?? ''}）`,
+        showCancel: false,
+        confirmText: '知道了',
+      });
+    },
+  });
+};
+
 onLoad(async (query) => {
   const id = query?.['sessionId'];
   if (typeof id === 'string') {
@@ -382,8 +418,12 @@ const goMyReportDetail = (): void => {
       自定义导航栏（pages.json 里本页是 navigationStyle: custom）
       —— 系统不会给返回按钮，必须自己画；顶部内边距还要加上状态栏高度，
       否则内容会顶到刘海/状态栏上。
+
+      ⚠ `+ 8`（2026-10-16 加）：只加状态栏高度时，标题正好贴在状态栏下沿，
+      视觉上像被上端"顶住"了。再加 8px 留出呼吸空间 —— 与答题页同一口径。
+      用户反馈的原话是「评测报告的 UI 请整体往下移动，已经被手机的上端遮挡了」。
     -->
-    <view class="result__navbar" :style="{ paddingTop: `${appStore.statusBarHeight}px` }">
+    <view class="result__navbar" :style="{ paddingTop: `${appStore.statusBarHeight + 8}px` }">
       <view class="result__navbar-back" @tap="onBack">
         <text class="result__navbar-back-icon">‹</text>
       </view>
@@ -540,13 +580,75 @@ const goMyReportDetail = (): void => {
           <text class="result__notice-text">{{ qualityNotice }}</text>
         </view>
 
-        <!-- 文字结论：本模块的核心交付物，由**服务端**生成 -->
+        <!--
+          文字结论 + 去污名化的一句（本模块的核心交付物，由**服务端**规则生成）
+
+          用户的实测反馈是「看不出个所以然来」—— 只给分数与档位是"有数字没有含义"。
+          这里先给结论，再紧跟一句"这很常见、不是你的性格问题"：
+          自评结果最容易造出的副作用是"我是不是有问题"，市面上的产品几乎都会在同一屏里
+          放一句这样的话。
+        -->
         <view v-if="mentalHealth?.result.conclusion" class="card result__section">
           <text class="result__section-title">给你的结论</text>
           <text class="result__conclusion">{{ mentalHealth.result.conclusion }}</text>
+          <text v-if="mentalHealthReport?.endorsement" class="result__endorsement">
+            {{ mentalHealthReport.endorsement }}
+          </text>
         </view>
 
-        <!-- 六个维度：结论的依据 -->
+        <!--
+          最值得留意的 1–2 项：**大卡片**
+          六条分数平铺时用户读完记不住任何一条；这里先把重点单独抬出来。
+        -->
+        <view v-if="(mentalHealthReport?.highlights ?? []).length > 0" class="result__highlights">
+          <text class="result__highlights-title">最值得留意的是</text>
+          <view v-for="item in mentalHealthReport?.highlights ?? []" :key="item.key" class="card result__highlight">
+            <view class="result__highlight-head">
+              <text class="result__highlight-name">{{ item.label }}</text>
+              <text class="result__highlight-band">{{ item.bandLabel }} · {{ item.score }}</text>
+            </view>
+            <text class="result__highlight-meaning">{{ item.meaning }}</text>
+            <text class="result__highlight-common">{{ item.commonExperience }}</text>
+          </view>
+        </view>
+
+        <!--
+          三条当天就能做的小事（**建议必须具体**）
+          每条写清三件事：做什么 / 为什么有用 / 什么时候做 —— 只写"多休息"等于没写。
+        -->
+        <view v-if="(mentalHealthReport?.suggestions ?? []).length > 0" class="card result__section">
+          <text class="result__section-title">这周可以试试的三件事</text>
+          <view v-for="(item, index) in mentalHealthReport?.suggestions ?? []" :key="index" class="result__advice-item">
+            <text class="result__advice-index">{{ index + 1 }}</text>
+            <view class="result__advice-body">
+              <text class="result__advice-action">{{ item.action }}</text>
+              <text class="result__advice-why">{{ item.reason }}</text>
+              <view class="result__advice-meta">
+                <text class="result__advice-when">什么时候做：{{ item.when }}</text>
+                <text class="result__advice-from">针对：{{ item.dimensionLabel }}</text>
+              </view>
+            </view>
+          </view>
+        </view>
+
+        <!--
+          什么时候找人聊聊（**三档都给**，含官方热线）
+          这是"建设性"里最重要的一条：自评的意义不只是让人知道自己怎么了，
+          还要知道什么时候该找专业帮助、去哪里找。热线号码由服务端下发，前端不硬编码。
+        -->
+        <view v-if="mentalHealthReport?.support" class="card result__section result__support">
+          <text class="result__section-title">{{ mentalHealthReport.support.title }}</text>
+          <text class="result__support-text">{{ mentalHealthReport.support.text }}</text>
+          <view class="result__hotline" @tap="callHotline">
+            <view class="result__hotline-body">
+              <text class="result__hotline-name">{{ mentalHealthReport.support.hotline.name }}</text>
+              <text class="result__hotline-note">{{ mentalHealthReport.support.hotline.note }}</text>
+            </view>
+            <text class="result__hotline-number">{{ mentalHealthReport.support.hotline.number }}</text>
+          </view>
+        </view>
+
+        <!-- 六个维度：完整得分 + 每维一句人话 -->
         <view class="card result__section">
           <text class="result__section-title">六个维度的得分</text>
           <view v-for="item in mentalHealthDimensions" :key="item.key" class="result__score-row">
@@ -563,6 +665,19 @@ const goMyReportDetail = (): void => {
             <text class="result__score-value">{{ item.score }}</text>
           </view>
           <text class="result__section-hint"> 分数越高表示这一项越值得留意。六项一起看，比单看某一项更有意义。 </text>
+
+          <!-- 每维一句人话：分数有了，含义也要有 -->
+          <view class="result__reading-list">
+            <view v-for="item in mentalHealthReport?.readings ?? []" :key="item.key" class="result__reading">
+              <text class="result__reading-title">{{ item.label }}</text>
+              <text class="result__reading-text">{{ item.meaning }}</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 复测引导：单次分数只是快照，趋势才有意义 -->
+        <view v-if="mentalHealthReport?.retestHint" class="card result__section result__retest">
+          <text class="result__retest-text">{{ mentalHealthReport.retestHint }}</text>
         </view>
 
         <!-- 免责声明：由服务端下发，前端只负责展示 -->
@@ -724,6 +839,208 @@ const goMyReportDetail = (): void => {
     font-size: $font-size-base;
     line-height: $line-height-loose;
     color: $color-text-regular;
+  }
+
+  // ------------------------------------------------- 心理状态：解读层（2026-10-16）
+  /**
+   * 去污名化的一句
+   *
+   * 自评结果最容易造出的副作用是"我是不是有问题"。这句话的位置有讲究：
+   * 必须紧跟在结论之后（用户刚读完"你有几项比较突出"的那一刻），
+   * 而不是藏在页面底部 —— 藏起来就等于没写。
+   */
+  &__endorsement {
+    display: block;
+    padding: $space-md;
+    margin-top: $space-md;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+    background-color: $color-primary-fade;
+    border-radius: $radius-md;
+  }
+
+  &__highlights {
+    margin-bottom: $space-md;
+  }
+
+  &__highlights-title {
+    display: block;
+    margin-bottom: $space-sm;
+    font-size: $font-size-md;
+    font-weight: $font-weight-semibold;
+  }
+
+  /** 重点项大卡片：六条分数平铺时用户记不住任何一条，先把重点抬出来 */
+  &__highlight {
+    margin-bottom: $space-sm;
+    border-left: 8rpx solid $color-secondary;
+  }
+
+  &__highlight-head {
+    @include flex-between;
+  }
+
+  &__highlight-name {
+    font-size: $font-size-md;
+    font-weight: $font-weight-semibold;
+  }
+
+  &__highlight-band {
+    font-size: $font-size-sm;
+    color: $color-secondary;
+  }
+
+  &__highlight-meaning {
+    display: block;
+    margin-top: $space-sm;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+  }
+
+  &__highlight-common {
+    display: block;
+    padding-left: $space-md;
+    margin-top: $space-sm;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-secondary;
+    border-left: 4rpx solid $color-border-strong;
+  }
+
+  /** 建议卡：做什么（加粗）+ 为什么 + 什么时候做 */
+  &__advice-item {
+    display: flex;
+    align-items: flex-start;
+    margin-top: $space-md;
+  }
+
+  &__advice-body {
+    flex: 1;
+  }
+
+  &__advice-action {
+    display: block;
+    font-size: $font-size-base;
+    font-weight: $font-weight-medium;
+    line-height: $line-height-base;
+    color: $color-text-primary;
+  }
+
+  &__advice-why {
+    display: block;
+    margin-top: $space-xs;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-secondary;
+  }
+
+  &__advice-meta {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: $space-xs;
+  }
+
+  &__advice-when,
+  &__advice-from {
+    padding: 2rpx $space-xs;
+    margin-right: $space-xs;
+    font-size: $font-size-xs;
+    color: $color-primary;
+    background-color: $color-primary-fade;
+    border-radius: $radius-xs;
+  }
+
+  &__advice-from {
+    color: $color-text-secondary;
+    background-color: $color-bg-hover;
+  }
+
+  /** 求助卡：整个块在视觉上要和"建议"区分开（它的分量更重） */
+  &__support {
+    border: 2rpx solid $color-secondary-fade;
+    background-color: $color-secondary-fade;
+  }
+
+  &__support-text {
+    display: block;
+    margin-top: $space-sm;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-regular;
+  }
+
+  &__hotline {
+    @include flex-between;
+    padding: $space-md;
+    margin-top: $space-md;
+    background-color: $color-bg-card;
+    border-radius: $radius-md;
+  }
+
+  &__hotline-body {
+    flex: 1;
+    margin-right: $space-sm;
+  }
+
+  &__hotline-name {
+    display: block;
+    font-size: $font-size-sm;
+    font-weight: $font-weight-medium;
+  }
+
+  &__hotline-note {
+    display: block;
+    margin-top: $space-xxs;
+    font-size: $font-size-xs;
+    line-height: $line-height-base;
+    color: $color-text-secondary;
+  }
+
+  &__hotline-number {
+    font-size: $font-size-lg;
+    font-weight: $font-weight-bold;
+    color: $color-secondary;
+  }
+
+  /** 每维一句人话（分数有了，含义也要有） */
+  &__reading-list {
+    padding-top: $space-md;
+    margin-top: $space-md;
+    border-top: 2rpx solid $color-divider;
+  }
+
+  &__reading {
+    margin-bottom: $space-md;
+  }
+
+  &__reading-title {
+    display: block;
+    font-size: $font-size-sm;
+    font-weight: $font-weight-semibold;
+  }
+
+  &__reading-text {
+    display: block;
+    margin-top: $space-xxs;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-secondary;
+  }
+
+  /** 复测引导：单次分数只是快照 */
+  &__retest {
+    background-color: transparent;
+    border: 2rpx dashed $color-border-strong;
+    box-shadow: none;
+  }
+
+  &__retest-text {
+    display: block;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-secondary;
   }
 
   /** 免责声明：弱化但不隐藏（合规文案必须可读） */

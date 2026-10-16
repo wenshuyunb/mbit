@@ -161,7 +161,16 @@ onShareTimeline(() => ({
 }));
 
 onShow(() => {
+  /**
+   * 系统尺寸（状态栏/胶囊）已在 `App.vue` 的 `onLaunch` 初始化过一次；
+   * 这里**保留**再算一次是有意的：横竖屏切换、分屏、以及部分机型在 onLaunch
+   * 阶段拿到的窗口信息并不准确，回首页时刷新一次成本极低。
+   *
+   * ⚠ 但**不能只在这里初始化** —— 从分享/消息直接进入子包页面时首页不会挂载，
+   * 那样 `statusBarHeight` 会停在默认值，自定义导航栏就会被状态栏遮住（已踩过）。
+   */
   appStore.initSystemMetrics();
+
   // 回前台超过 5 分钟则刷新，保证画像与报告状态不过期
   if (appStore.shouldRefresh()) {
     void refresh();

@@ -23,6 +23,10 @@ import { ErrorCode } from '../../common/errors/error-code';
 import { parseScoreMap } from '../../common/engine/score-map.util';
 import { buildEmotionConclusion, type EmotionConclusion } from '../emotion/emotion-conclusion.util';
 import { ATTACHMENT_THRESHOLD_CONFIG_KEYS, parseAttachmentThreshold } from '../emotion/attachment-threshold.util';
+import {
+  buildMentalHealthReportExtras,
+  type MentalHealthReportExtras,
+} from '../mental-health/mental-health-report.util';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import type { EmotionEngineOutput } from '../emotion/engine/emotion-engine.types';
@@ -262,6 +266,14 @@ export interface MentalHealthSubmitResultView extends SubmitResultEnvelope {
     overallLevel: string;
     overallLabel: string;
     conclusion: string;
+    /**
+     * 解读层：每维人话解释 / 重点项 / 去污名化一句 / 三条可做的小事 /
+     * 分档求助指引 / 复测引导（见 `mental-health-report.util.ts`）
+     *
+     * ⚠ 它由同一份输出**纯函数算出**，不落库、不调模型：
+     * 提交响应与"再次读取结果"两条路径永远一致。
+     */
+    report: MentalHealthReportExtras;
     quality: SubmitQualityView;
     disclaimer: string;
   };
@@ -1608,6 +1620,29 @@ export class TestService {
       overallLevel: output.overallLevel,
       overallLabel: MENTAL_HEALTH_OVERALL_LABELS[output.overallLevel],
       conclusion: output.conclusion,
+      /**
+       * 解读层（**看得到所以然**的那一半）
+       *
+       * 只有分数与一段结论时，用户的实测反馈是「看不出个所以然来、
+       * 没有建设性建议」。这一块补上：每维一句人话、去污名化的一句、
+       * 三条当天可做的小事、分档的求助指引、以及"两周后再测一次"。
+       *
+       * ⚠ 它是**纯函数**从同一份输出算出来的（不调模型、不落库），
+       * 因此提交响应与"再次读取结果"两条路径永远一致 —— 与结论文本同一口径。
+       */
+      report: buildMentalHealthReportExtras(
+        Object.fromEntries(
+          MENTAL_HEALTH_DIMENSIONS.map((dimension) => [
+            dimension,
+            {
+              score: output.dimensions[dimension].score,
+              band: output.dimensions[dimension].band,
+              usable: output.dimensions[dimension].usable,
+            },
+          ]),
+        ),
+        output.overallLevel,
+      ),
       quality: {
         consistencyScore: output.quality.consistencyScore,
         completionRate: output.quality.completionRate,
@@ -2009,6 +2044,28 @@ export class TestService {
         overallLevel: profile.overallLevel,
         overallLabel: MENTAL_HEALTH_OVERALL_LABELS[overallLevel] ?? profile.overallLevel,
         conclusion: profile.conclusion,
+        /**
+         * 解读层同样从**落库快照**算（不重新跑引擎）：
+         * 与提交响应必须是同一份输出 —— 用户从结果页返回、或从「我的报告」再看一次，
+         * 看到的小事与求助指引不能变。
+         */
+        report: buildMentalHealthReportExtras(
+          Object.fromEntries(
+            MENTAL_HEALTH_DIMENSIONS.map((dimension) => {
+              const item = (stored[dimension] ?? {}) as { score?: unknown; band?: unknown; usable?: unknown };
+
+              return [
+                dimension,
+                {
+                  score: typeof item.score === 'number' ? item.score : 0,
+                  band: typeof item.band === 'string' ? item.band : 'MILD',
+                  usable: item.usable !== false,
+                },
+              ];
+            }),
+          ),
+          profile.overallLevel,
+        ),
         quality: {
           consistencyScore: profile.consistencyScore ?? 0,
           completionRate: profile.completionRate ?? 0,

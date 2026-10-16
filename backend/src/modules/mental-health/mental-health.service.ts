@@ -21,6 +21,7 @@ import { Injectable } from '@nestjs/common';
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { buildMentalHealthReportExtras, type MentalHealthReportExtras } from './mental-health-report.util';
 import {
   MENTAL_HEALTH_DIMENSION_LABELS,
   MENTAL_HEALTH_DIMENSIONS,
@@ -63,6 +64,15 @@ export interface MentalHealthProfileView {
   overallLabel: string;
   /** 文字结论（**只描述、不建议**，由确定性规则生成） */
   conclusion: string;
+  /**
+   * 解读层（2026-10-16 补）：每维一句人话解释、最值得留意的 1–2 项、
+   * 去污名化的一句、三条当天可做的小事、分档的求助指引（含官方热线）、复测引导
+   *
+   * 用户的实测反馈是「心理评测报告没有特色、没有建设性建议、看不出个所以然」——
+   * 这一段补的就是"看得出所以然 + 拿得走东西"。
+   * 边界与文案规则见 `mental-health-report.util.ts` 的头注释。
+   */
+  report: MentalHealthReportExtras;
   quality: {
     consistencyScore: number;
     completionRate: number;
@@ -172,6 +182,22 @@ export class MentalHealthService {
       overallLevel,
       overallLabel: MENTAL_HEALTH_OVERALL_LABELS[overallLevel] ?? overallLevel,
       conclusion: profile.conclusion,
+      /**
+       * 解读层：每维一句人话 + 重点项 + 去污名化一句 + 三条当天可做的小事 +
+       * 分档求助指引（含官方热线）+ 复测引导
+       *
+       * 与结果页、提交响应**同一个纯函数、同一份落库快照**：
+       * 三个入口看到的内容必须逐字相同（同一份画像不允许出现两种说法）。
+       */
+      report: buildMentalHealthReportExtras(
+        Object.fromEntries(
+          dimensions.map((dimension) => [
+            dimension.key,
+            { score: dimension.score, band: dimension.band, usable: true },
+          ]),
+        ),
+        profile.overallLevel,
+      ),
       quality: {
         consistencyScore,
         completionRate: profile.completionRate ?? 0,

@@ -159,16 +159,66 @@ export interface MbtiDimensionResult {
 export type TestSessionResult = PersonalitySessionResult | EmotionSessionResult | MentalHealthSessionResult;
 
 /**
- * 心理健康测评的算分结果（ADR-038 阶段 4）
+ * 心理状态自评的**解读层**（2026-10-16 补）
  *
- * ⚠ 这个结果里有**两样别处没有的东西**，都是产品要求：
- *   · `conclusion` —— 文字结论，服务端用**确定性规则**生成（不是 AI 现编的），
- *     且**只描述、不建议**；
+ * 用户的实测反馈是「心理评测报告没有特色，没有建设性建议，我看不出个所以然来」。
+ * 改版前那一屏只有档位一句话 + 六条分数 + 一段结论：**分数有了，含义没有；
+ * 结论有了，下一步没有**。这一块补的就是这两件事，全部由服务端**确定性规则**生成
+ * （不是 AI 写的，同一份作答任何时候都得到同一份内容）：
+ *
+ *   · `readings`    每维一句人话 + 一句"偏高时通常是什么体验"（让用户对号入座）
+ *   · `highlights`  最值得留意的 1–2 项（前端做成大卡片，一屏先给重点）
+ *   · `endorsement` 去污名化的一句（"这很常见，不是你的性格问题"）
+ *   · `suggestions` 三条**当天就能做**的小事，每条含 做什么 / 为什么 / 什么时候做
+ *   · `support`     分档的求助指引 + 官方心理援助热线（**三档都给**）
+ *   · `retestHint`  两周后再测一次（把单次分数变成趋势）
+ */
+export interface MentalHealthReportExtras {
+  readings: Array<{
+    key: string;
+    label: string;
+    score: number;
+    band: string;
+    bandLabel: string;
+    usable: boolean;
+    /** 这一维在测什么 */
+    meaning: string;
+    /** 这一维偏高时，通常是什么体验 */
+    commonExperience: string;
+  }>;
+  highlights: MentalHealthReportExtras['readings'];
+  endorsement: string;
+  suggestions: Array<{
+    /** 做什么（当天可做的动作） */
+    action: string;
+    /** 为什么有用（扣回这一维的测量含义） */
+    reason: string;
+    /** 什么时候做（可自检的时机） */
+    when: string;
+    /** 它针对哪一维 */
+    dimension: string;
+    dimensionLabel: string;
+  }>;
+  support: {
+    title: string;
+    text: string;
+    hotline: { name: string; number: string; note: string };
+  };
+  retestHint: string;
+}
+
+/**
+ * 心理健康测评的算分结果（ADR-038 阶段 4 → 2026-10-16 加厚）
+ *
+ * ⚠ 这个结果里有**三样别处没有的东西**，都是产品要求：
+ *   · `conclusion` —— 文字结论，服务端用**确定性规则**生成（不是 AI 现编的）；
+ *   · `report` —— 解读层（每维人话 / 重点项 / 可执行建议 / 求助指引 / 复测引导），
+ *     同样由确定性规则生成；
  *   · `disclaimer` —— 合规声明（含「本结果仅供参考」），由服务端下发，
  *     前端**不得**硬编码。
  *
- * 本模块**没有**任何报告字段：它不提供 AI 报告
- * （见 `config/modules.ts` 里 `reportType: null` 的说明）。
+ * 本模块**没有** AI 报告（见 `config/modules.ts` 里 `reportType: null` 的说明）：
+ * 一份"AI 深度解读"几乎不可能只陈述而不越界，因此它的解读是**规则生成**的。
  */
 export interface MentalHealthSessionResult extends SessionResultEnvelope {
   module: 'MENTAL_HEALTH';
@@ -187,8 +237,10 @@ export interface MentalHealthSessionResult extends SessionResultEnvelope {
     overallScore: number;
     overallLevel: string;
     overallLabel: string;
-    /** 文字结论（只描述、不建议） */
+    /** 文字结论 */
     conclusion: string;
+    /** 解读层（每维人话 / 重点项 / 三条建议 / 求助指引 / 复测引导） */
+    report: MentalHealthReportExtras;
     quality: SessionQuality;
     /** 合规声明（含「本结果仅供参考」） */
     disclaimer: string;

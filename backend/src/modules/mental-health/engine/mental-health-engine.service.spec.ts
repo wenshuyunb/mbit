@@ -19,6 +19,7 @@ import {
   MENTAL_HEALTH_DIMENSIONS,
   MENTAL_HEALTH_ENGINE_VERSION,
   type MentalHealthDimension,
+  type MentalHealthDimensionResult,
 } from './mental-health-engine.types';
 import type { EngineAnswer, EngineQuestion } from '../../../common/engine/assessment.types';
 
@@ -104,6 +105,72 @@ describe('MentalHealthEngine.resolveOverallLevel（整体档位）', () => {
     );
 
     expect([...levels].sort()).toEqual(['GOOD', 'MILD', 'NOTABLE']);
+  });
+
+  /**
+   * 单项抬高整体档位（2026-10-16 修）
+   *
+   * 只看均值会造出自相矛盾的结果，而且实测撞上过：用户"睡眠 100、紧张 100、
+   * 其余四项 0"，均值 33.3 → 判「整体比较平稳」，而页面上同时写着"两项比较突出"。
+   * 用户的原话是「看不出个所以然来」—— 结论与眼前的分数打架就是最典型的成因。
+   */
+  describe('单项抬高整体（结论不许与分数打架）', () => {
+    const dimension = (score: number, usable = true): MentalHealthDimensionResult => ({
+      score,
+      band: score >= 70 ? 'NOTABLE' : score >= 50 ? 'MILD' : score >= 30 ? 'SLIGHT' : 'CALM',
+      usable,
+    });
+
+    /** 造六维：把指定维度设成给定分数，其余给 `rest` */
+    const withDimensions = (scores: Record<string, number>, rest = 0): Record<string, MentalHealthDimensionResult> =>
+      Object.fromEntries(
+        ['MH_STRESS', 'MH_MOOD', 'MH_ANXIETY', 'MH_SLEEP', 'MH_ENERGY', 'MH_LONELINESS'].map((key) => [
+          key,
+          dimension(scores[key] ?? rest),
+        ]),
+      );
+
+    it('均值低但有一项 ≥70 → 至少 MILD（不许说"整体平稳"）', () => {
+      const dimensions = withDimensions({ MH_SLEEP: 72 });
+
+      // 均值 (72 + 0×5) / 6 = 12 → 按均值是 GOOD
+      expect(MentalHealthEngine.resolveOverallLevel(12, thresholds, dimensions, Object.keys(dimensions))).toBe('MILD');
+    });
+
+    it('两项 ≥70 → NOTABLE（这正是用户实测的那个画像）', () => {
+      const dimensions = withDimensions({ MH_ANXIETY: 100, MH_SLEEP: 100 });
+
+      expect(MentalHealthEngine.resolveOverallLevel(33.33, thresholds, dimensions, Object.keys(dimensions))).toBe(
+        'NOTABLE',
+      );
+    });
+
+    it('只有一项但极高（≥85）→ 也抬到 NOTABLE', () => {
+      const dimensions = withDimensions({ MH_MOOD: 90 });
+
+      expect(MentalHealthEngine.resolveOverallLevel(15, thresholds, dimensions, Object.keys(dimensions))).toBe(
+        'NOTABLE',
+      );
+    });
+
+    it('均值本身更高时不降级（抬高是单向的）', () => {
+      const dimensions = withDimensions({ MH_SLEEP: 72 });
+
+      expect(MentalHealthEngine.resolveOverallLevel(80, thresholds, dimensions, Object.keys(dimensions))).toBe(
+        'NOTABLE',
+      );
+    });
+
+    it('不传维度信息时退回纯均值（向后兼容）', () => {
+      expect(MentalHealthEngine.resolveOverallLevel(20, thresholds)).toBe('GOOD');
+    });
+
+    it('`usable: false` 的占位分不抬高整体（没有数据就不该影响结论）', () => {
+      const dimensions = withDimensions({ MH_SLEEP: 90 });
+      dimensions['MH_SLEEP'] = dimension(90, false);
+
+      expect(MentalHealthEngine.resolveOverallLevel(15, thresholds, dimensions, Object.keys(dimensions))).toBe('GOOD');
+    });
   });
 });
 

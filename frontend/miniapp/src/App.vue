@@ -3,6 +3,7 @@
  * 应用根组件
  *
  * 职责（Phase 0）：
+ *   · **启动时初始化系统尺寸**（状态栏高度 / 胶囊按钮）—— 自定义导航栏靠它让开刘海
  *   · 启动时执行一次静默登录（wx.login → 换取 token，不弹授权框）
  *   · 拉取系统配置（功能开关、免责声明、分享文案），失败不阻塞启动
  *   · 全局错误兜底：onError / onUnhandledRejection 上报
@@ -18,6 +19,19 @@ import { useAppStore } from '@/store/app';
 onLaunch(() => {
   const appStore = useAppStore();
   const authStore = useAuthStore();
+
+  /**
+   * ⚠ 系统尺寸必须在这里初始化，**不能只在首页初始化**（2026-10-16 修）
+   *
+   * 原先这行只写在 `pages/index/index.vue` 里，于是**从分享/消息直接进入子包页面**时
+   * （也就是首页从未挂载的路径）`statusBarHeight` 停留在默认值 20，
+   * 而 `pages/result`、`pages/quiz` 是 `navigationStyle: custom` ——
+   * 系统不给导航栏，页面靠这个值让开状态栏。值偏小 → 标题与返回按钮被状态栏挡住。
+   *
+   * 用户报的就是这个：「评测报告的 UI 被手机的上端遮挡了」。
+   * 放在 `onLaunch` 里是**一次且必然发生**的；放在某个页面里则取决于用户从哪儿进来。
+   */
+  appStore.initSystemMetrics();
 
   // 系统配置与登录并行，互不阻塞；任一失败只记录日志，不影响进入首页
   void Promise.allSettled([appStore.loadSystemConfig(), authStore.silentLogin()]).then((results) => {
