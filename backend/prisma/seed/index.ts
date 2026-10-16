@@ -12,7 +12,7 @@
  *   · **失败即退出**：任何一步失败都以非 0 退出码结束，避免 CI 误判为成功
  */
 
-import { PrismaClient, type Dimension, type Prisma, type QuestionType } from '@prisma/client';
+import { PrismaClient, type Dimension, type Prisma, type QuestionAudience, type QuestionType } from '@prisma/client';
 import { argon2id, hash as argonHash } from 'argon2';
 
 import {
@@ -22,8 +22,9 @@ import {
   ADMIN_ROLE_PERMISSIONS,
   ALL_ADMIN_PERMISSIONS,
 } from '../../src/modules/admin/rbac/admin-permission.constants';
-import { BIG_FIVE_QUESTIONS, MBTI_QUESTIONS, MENTAL_HEALTH_QUESTIONS } from './data';
+import { BIG_FIVE_QUESTIONS, MBTI_QUESTIONS } from './data';
 import { ALL_EMOTION_SCENARIOS, EMOTION_SCENARIO_SETS, PENDING_AUDIENCES } from './data/questions.emotion-scenarios';
+import { ALL_MENTAL_HEALTH_SCENES, buildMentalHealthOptions } from './data/questions.mental-health-scenes';
 import { MEMBERSHIP_PLANS, PRODUCTS } from './data/catalog';
 import { RELATIONSHIP_STYLE_RULES } from './data/relationship-rules';
 import { COMPATIBILITY_WEIGHTS } from './data/compatibility-weights';
@@ -48,8 +49,8 @@ const QUESTION_SETS: Array<{ definitionCode: string; questions: SeedQuestion[] }
   { definitionCode: 'BIG_FIVE_50', questions: BIG_FIVE_QUESTIONS },
   // ⚠ 情感模块（EMOTION_LITE）**不在这里**：它已改成沉浸式场景题（ADR-039），
   // 由 `seedEmotionScenarios()` 按适用人群灌入。原 52 题李克特量表题库已退役。
-  // 心理健康模块（ADR-038 阶段 4）：24 题，六个维度
-  { definitionCode: 'MENTAL_HEALTH_LITE', questions: MENTAL_HEALTH_QUESTIONS },
+  // ⚠ 心理状态自评（MENTAL_HEALTH_LITE）同理（2026-10-15）：已改成
+  // 「这两周的一天」时间轴式情境自评，由 `seedMentalHealthScenes()` 灌入。
 ];
 
 interface SeedSummary {
@@ -75,6 +76,10 @@ interface SeedSummary {
   adminRolePermissions?: number;
   /** 场景题数（ADR-039） */
   scenarioQuestions?: number;
+  /** 心理状态自评的情境题幕数（2026-10-15 改版） */
+  mentalHealthScenes?: number;
+  /** 心理状态自评退役的旧量表题数 */
+  retiredMentalHealthQuestions?: number;
   /** 已退役的情感量表题数（ADR-039；退役 = `isActive: false`，历史作答仍可追溯） */
   retiredLikertQuestions?: number;
 }
@@ -407,6 +412,124 @@ const seedEmotionScenarios = async (): Promise<{ questions: number; options: num
   });
 
   return { questions: ALL_EMOTION_SCENARIOS.length, options: optionCount, retired: retired.count };
+};
+
+/**
+ * 灌入心理状态自评的沉浸式场景题库，并**退役**旧的 24 题李克特量表题库
+ *
+ * ## 为什么改（用户拍板）
+ *
+ * 「心理状态自评也要取消普通问卷作答，换一种方式」。新版是
+ * **「这两周的一天」时间轴**：6 个生活时刻 × 4 幕（早上醒来 → 出门通勤 →
+ * 白天做事 → 跟人相处 → 晚上一个人 → 躺下之后），一屏一幕。
+ *
+ * ## 与情感场景题库的三处差别（不是复制粘贴就能改对的地方）
+ *
+ *   ① **不做性别分卷**（ADR-039 ⓕ）：`audience` 一律 `ALL`。情感场景题按性别分三套，
+ *      因为恋爱处境确有性别角色差异；近两周的压力、睡眠、精力没有这种差异，
+ *      分开问反而在暗示"某个性别更容易出问题"。
+ *   ② **有正反向题**：每维 2 正 + 2 反，写反了不会报错，只会让该维度**静默反向**
+ *      —— 因此 `reverseScored` 从种子里逐题带下来（情感场景题恒为 false）。
+ *   ③ **选项是统一的四档频率**：由 `buildMentalHealthOptions()` 生成，
+ *      分值挂在选项的 `scoreMap` 上（1–4，键为该题维度），
+ *      引擎据此推导量程 `{1,4}`，再由 `reverseScored` 翻到同一极。
+ *
+ * ## 计分口径一个字都没动
+ *
+ * 仍是六个维度、每维 4 题、四档作答；档位阈值（30/50/70）、整体档位、
+ * 确定性结论文案全部沿用。换的只是**问法**：从"这段时间我常被事情压得喘不过气"
+ * 变成"闹钟响了第三遍你才撑起来——这两周，这样的早晨大概有多少？"
+ *
+ * ## 为什么退役旧题而不是删掉
+ *
+ * `test_answers.question_id` 外键指向 `questions`，历史作答必须能追溯到题目；
+ * 物理删除会让旧会话的作答明细变成孤儿。因此退役 = `isActive: false`
+ * （抽题条件里有 `isActive: true`，不会再被选中），历史数据仍然完整可查。
+ * 这与情感模块 52 题量表的下场完全一致。
+ */
+const seedMentalHealthScenes = async (): Promise<{ questions: number; options: number; retired: number }> => {
+  if (ALL_MENTAL_HEALTH_SCENES.length === 0) return { questions: 0, options: 0, retired: 0 };
+
+  const definition = await prisma.testDefinition.findUnique({
+    where: { code: 'MENTAL_HEALTH_LITE' },
+    select: { id: true },
+  });
+
+  if (!definition) {
+    throw new Error('未找到测试定义 MENTAL_HEALTH_LITE（请先执行 seedDefinitions）');
+  }
+
+  const orders = new Set(ALL_MENTAL_HEALTH_SCENES.map((scene) => scene.order));
+
+  // `order` 必须全局唯一：旧题库是"维度内 0–3"，六个维度各写一遍 → 大量并列，
+  // 试卷顺序取决于数据库对并列行的返回次序 —— 这里在灌库阶段就把它挡住
+  if (orders.size !== ALL_MENTAL_HEALTH_SCENES.length) {
+    throw new Error(
+      `心理状态题库的 order 有重复（${ALL_MENTAL_HEALTH_SCENES.length} 幕只有 ${orders.size} 个不同的值）。` +
+        '试卷按 order 排序，重复会让顺序不确定。',
+    );
+  }
+
+  let optionCount = 0;
+
+  for (const scene of ALL_MENTAL_HEALTH_SCENES) {
+    const questionData = {
+      testDefinitionId: definition.id,
+      content: scene.content,
+      scenarioPrompt: scene.prompt,
+      // 不做性别分卷：本模块的题目对所有人是同一套（ADR-039 ⓕ）
+      audience: 'ALL' as QuestionAudience,
+      type: 'FORCED_CHOICE' as QuestionType,
+      dimension: scene.dimension as Dimension,
+      weight: 1,
+      // 逐题带下来：本模块每维 2 正 2 反，写反了会让该维度静默反向
+      reverseScored: scene.reverseScored,
+      order: scene.order,
+      isActive: true,
+      tags: [scene.moment, ...scene.tags],
+    };
+
+    const saved = await prisma.question.upsert({
+      where: { code: scene.code },
+      create: { code: scene.code, ...questionData },
+      update: questionData,
+      select: { id: true },
+    });
+
+    const options = buildMentalHealthOptions(scene.dimension);
+
+    for (const [index, option] of options.entries()) {
+      const optionData = {
+        label: option.label,
+        value: index + 1,
+        scoreMap: option.scores as Prisma.InputJsonValue,
+        feedback: option.feedback,
+        isActive: true,
+      };
+
+      await prisma.questionOption.upsert({
+        where: { questionId_order: { questionId: saved.id, order: index } },
+        create: { questionId: saved.id, order: index, ...optionData },
+        update: optionData,
+      });
+      optionCount += 1;
+    }
+  }
+
+  // 退役旧量表题（24 题 LIKERT5）：抽题不会再选到它，历史作答仍可追溯
+  const retired = await prisma.question.updateMany({
+    where: { testDefinitionId: definition.id, type: 'LIKERT5' },
+    data: { isActive: false },
+  });
+
+  // 题量回填为 24 幕；预计耗时同步（旧值 4 分钟对应"24 句自评"，
+  // 新版每幕要多读一段处境，按 6 分钟估）
+  await prisma.testDefinition.update({
+    where: { code: 'MENTAL_HEALTH_LITE' },
+    data: { questionCount: ALL_MENTAL_HEALTH_SCENES.length, estimatedMinutes: 6 },
+  });
+
+  return { questions: ALL_MENTAL_HEALTH_SCENES.length, options: optionCount, retired: retired.count };
 };
 
 const seedRelationshipRules = async (): Promise<number> => {
@@ -849,6 +972,11 @@ async function main(): Promise<void> {
   summary.scenarioQuestions = scenarios.questions;
   summary.retiredLikertQuestions = scenarios.retired;
 
+  // 心理状态自评同样改成沉浸式情境题（2026-10-15）；它的退役题数与情感分开统计
+  const mentalHealthScenes = await seedMentalHealthScenes();
+  summary.mentalHealthScenes = mentalHealthScenes.questions;
+  summary.retiredMentalHealthQuestions = mentalHealthScenes.retired;
+
   // 顺序不可颠倒：商品通过 membershipPlanId 引用套餐
   summary.membershipPlans = await seedMembershipPlans();
   summary.products = await seedProducts();
@@ -879,6 +1007,8 @@ async function main(): Promise<void> {
       `  匹配权重 : ${summary.compatibilityWeights ?? 0}`,
       `  场景题   : ${summary.scenarioQuestions ?? 0}（男/女/中性各 24，按性别抽一套）`,
       `  退役量表 : ${summary.retiredLikertQuestions ?? 0} 道（情感模块改用场景题；行保留，历史作答仍可追溯）`,
+      `  心理情境 : ${summary.mentalHealthScenes ?? 0} 幕（「这两周的一天」6 个时刻 × 4 幕，不分性别）`,
+      `  退役自评 : ${summary.retiredMentalHealthQuestions ?? 0} 道（心理状态改用情境题；行保留，历史作答仍可追溯）`,
       `  会员套餐 : ${summary.membershipPlans ?? 0}`,
       `  商品     : ${summary.products ?? 0}`,
       `  权限点   : ${summary.adminPermissions ?? 0}`,

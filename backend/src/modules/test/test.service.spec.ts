@@ -1174,12 +1174,14 @@ describe('TestService', () => {
   // ==========================================================================
 
   describe('创建会话', () => {
-    const seedDefinition = (): void => {
+    const seedDefinition = (overrides: Record<string, unknown> = {}): void => {
       prisma.testDefinition.findFirst.mockResolvedValue({
         id: DEFINITION_ID,
         code: 'MBTI_LITE',
         version: '1.0.0',
         questionCount: 1,
+        module: 'PERSONALITY',
+        ...overrides,
       });
       prisma.question.findMany.mockResolvedValue([
         {
@@ -1262,6 +1264,41 @@ describe('TestService', () => {
           data: { paperSnapshot: { audience?: string } };
         };
         expect(createArgs.data.paperSnapshot.audience).toBe('FEMALE');
+      });
+    });
+
+    /**
+     * 试卷顺序（2026-10-15 心理状态自评改版）
+     *
+     * 量表题乱序的目的是打散"同一维度连着问"的作答定势；但心理状态自评的
+     * 24 幕**本身就是一条叙事**（早上醒来 → … → 躺下之后），乱序会让用户
+     * 从"躺下之后"跳回"早上醒来"，沉浸感直接归零 —— 而沉浸感是那次改版的全部意义。
+     *
+     * 默认（未列出的模块）保持乱序，与既有行为一致；这两条一正一反把规则钉住。
+     */
+    describe('试卷是否乱序', () => {
+      const shuffledFlagOf = (): boolean | undefined => {
+        const args = prisma.testSession.create.mock.calls[0]?.[0] as {
+          data: { paperSnapshot: { shuffled?: boolean } };
+        };
+
+        return args?.data?.paperSnapshot?.shuffled;
+      };
+
+      it('量表模块保持乱序（打散"同维度连着问"的作答定势）', async () => {
+        seedDefinition({ module: 'PERSONALITY' });
+
+        await service.createSession(USER_ID, 'MBTI_LITE', {});
+
+        expect(shuffledFlagOf()).toBe(true);
+      });
+
+      it('【关键】心理状态自评不乱序（24 幕是一条时间轴，打散了就没有沉浸感）', async () => {
+        seedDefinition({ module: 'MENTAL_HEALTH' });
+
+        await service.createSession(USER_ID, 'MENTAL_HEALTH_LITE', {});
+
+        expect(shuffledFlagOf()).toBe(false);
       });
     });
 

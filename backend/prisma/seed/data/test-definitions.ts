@@ -99,7 +99,8 @@ export const TEST_DEFINITIONS: SeedTestDefinition[] = [
     category: 'MENTAL_HEALTH',
     module: 'MENTAL_HEALTH',
     description:
-      '从压力、情绪、紧张、睡眠、精力、支持感六个方面，看看你近期（近两周）的状态，并给出一段文字结论。约 4 分钟完成。本结果仅供参考。',
+      '跟着一天走一遍：早上醒来、出门通勤、白天做事、跟人相处、晚上一个人、躺下之后 —— 24 幕生活情境，' +
+      '从压力、情绪、紧张、睡眠、精力、支持感六个方面看看你近两周的状态，并给出一段文字结论。约 6 分钟完成。本结果仅供参考。',
     version: '1.0.0',
     status: 'ACTIVE',
     isActive: true,

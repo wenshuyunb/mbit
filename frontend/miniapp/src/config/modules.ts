@@ -103,7 +103,7 @@ const MODULES: Readonly<Record<TestModuleKey, ModulePresentation>> = {
   MENTAL_HEALTH: {
     key: 'MENTAL_HEALTH',
     entranceTitle: '心理状态自评',
-    entranceDesc: '约 4 分钟，看看近两周的状态',
+    entranceDesc: '约 6 分钟，跟着一天走一遍',
     icon: '🌱',
     /**
      * ⚠ 文案的三条边界（合规与产品定位，改动前请先读 `mental-health.module.ts`）：
@@ -112,10 +112,15 @@ const MODULES: Readonly<Record<TestModuleKey, ModulePresentation>> = {
      *   ② 说明"只给结论、不给建议"—— 这是用户拍板的产品形态，
      *      提前讲清楚比让用户读完才发现"怎么没有建议"更好；
      *   ③ 明写"仅供参考"—— 与后端下发的免责声明口径一致。
+     *
+     * 2026-10-15 改版：作答形式从"24 句自评"改成**「这两周的一天」24 幕情境**
+     *（早上醒来 → … → 躺下之后）。介绍页必须说清"跟着一天走"，
+     * 否则用户会以为是那种一路划到底的量表。
      */
-    introTitle: '心理状态自评｜看看近两周的你',
+    introTitle: '心理状态自评｜跟着一天走一遍',
     introDesc:
-      '从压力、情绪、紧张、睡眠、精力、支持感六个方面，看看你近期的状态，并给出一段文字结论。本模块只做状态描述，不给建议、不做判定，结果仅供参考。',
+      '从早上醒来、出门通勤、白天做事，到跟人相处、晚上一个人、躺下之后 —— 24 幕生活情境，' +
+      '看看近两周的你是什么状态，并给出一段文字结论。本模块只做状态描述，不给建议、不做判定，结果仅供参考。',
     introMetricLabel: '个维度',
     introMetricValue: '6',
     resultTitle: '状态自评结果',

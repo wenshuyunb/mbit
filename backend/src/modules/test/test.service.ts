@@ -52,6 +52,22 @@ import type { PaperAudience, PaperQuestion, PaperSnapshot } from './test.types';
 // 响应类型
 // ============================================================================
 
+/**
+ * 哪些模块的试卷**不**乱序
+ *
+ * 量表题乱序的目的是打散"同一维度连着问"的作答定势；但心理状态自评的 24 幕
+ * **本身就是一条叙事**：早上醒来 → 出门通勤 → 白天做事 → 跟人相处 →
+ * 晚上一个人 → 躺下之后。乱序会让用户从"躺下之后"跳到"早上醒来"，
+ * 沉浸感直接归零 —— 而沉浸感正是这次改版的全部意义（用户拍板）。
+ *
+ * 默认（未列出的模块）保持乱序，与既有行为一致；新增模块若要保序，
+ * 必须把自己的模块名加进来，并在模块文档里说明理由。
+ */
+const NO_SHUFFLE_MODULES: ReadonlySet<string> = new Set(['MENTAL_HEALTH']);
+
+/** 该模块的试卷是否乱序 */
+const shouldShuffleQuestions = (module: string): boolean => !NO_SHUFFLE_MODULES.has(module);
+
 /** 测试定义视图 */
 export interface TestDefinitionView {
   code: string;
@@ -503,7 +519,9 @@ export class TestService {
 
     const definition = await this.prisma.testDefinition.findFirst({
       where: { code, isActive: true, status: 'ACTIVE', deletedAt: null },
-      select: { id: true, code: true, version: true, questionCount: true },
+      // `module` 用于决定试卷是否乱序（见 `NO_SHUFFLE_MODULES`）：心理状态自评的
+      // 24 幕是一条时间轴叙事，乱序会把它打散
+      select: { id: true, code: true, version: true, questionCount: true, module: true },
     });
 
     if (!definition) {
@@ -639,7 +657,7 @@ export class TestService {
           feedback: option.feedback,
         })),
       })),
-      { audience },
+      { shuffled: shouldShuffleQuestions(definition.module), audience },
     );
     const now = new Date();
     const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
