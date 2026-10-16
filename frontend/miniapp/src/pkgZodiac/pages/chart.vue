@@ -179,6 +179,23 @@ const openCityPanel = async (): Promise<void> => {
   }
 };
 
+/**
+ * 关闭城市面板
+ *
+ * ⚠ 必须是一个**具名方法**，不能写成 `@tap="cityPanelOpen = false"`。
+ * 微信小程序编译器会把内联语句编译成一个"方法名"，实测生成的是名为 `false` 的方法，
+ * 运行时报 `does not have a method "false" to handle event "tap"` ——
+ * 而页面看起来一切正常，只有点遮罩时才在控制台报错。
+ */
+const closeCityPanel = (): void => {
+  cityPanelOpen.value = false;
+};
+
+/** 面板自身吞掉点击（配合 `@tap.stop`，避免点面板也关掉它） */
+const stopPropagation = (): void => {
+  // 空实现即目的：`.stop` 会编译成 catchtap，这里只是给它一个明确的具名处理函数
+};
+
 const searchCity = async (keyword: string): Promise<void> => {
   cityKeyword.value = keyword;
 
@@ -255,6 +272,14 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
         </view>
       </picker>
       <button class="chart__setup-button" :disabled="saving" @tap="saveBirthday">开始</button>
+    </view>
+
+    <!-- 兜底：拿到响应但既没有完整盘也没有预览（理论上不该发生）
+         —— 星盘页是这个模块唯一"必须看到内容"的页面，任何情况都不能给用户一片空白 -->
+    <view v-else-if="!chart && !preview" class="card chart__state">
+      <text class="chart__state-title">星盘暂时取不到</text>
+      <text class="chart__state-desc">可能是网络问题，稍后再试一次；如果一直这样，请把这一页截图发我。</text>
+      <button class="chart__state-action" @tap="bootstrap">重新加载</button>
     </view>
 
     <template v-else-if="data">
@@ -449,9 +474,13 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
     </template>
 
     <!-- 出生城市选择面板 -->
-    <view v-if="cityPanelOpen" class="chart__mask" @tap="cityPanelOpen = false">
-      <view class="chart__panel" @tap.stop>
-        <text class="chart__panel-title">选择出生城市</text>
+    <view v-if="cityPanelOpen" class="chart__mask" @tap="closeCityPanel">
+      <view class="chart__panel" @tap.stop="stopPropagation">
+        <view class="chart__panel-head">
+          <text class="chart__panel-title">选择出生城市</text>
+          <text class="chart__panel-close" @tap="closeCityPanel">关闭</text>
+        </view>
+        <text class="chart__panel-hint">上升星座取决于当地的星空，所以要精确到城市</text>
         <input
           class="chart__panel-input"
           type="text"
@@ -487,6 +516,13 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
   &__state-title {
     display: block;
     margin-bottom: $space-md;
+  }
+
+  &__state-desc {
+    display: block;
+    font-size: $font-size-sm;
+    line-height: $line-height-loose;
+    color: $color-text-secondary;
   }
 
   &__state-action,
@@ -909,15 +945,45 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
     left: 0;
     display: flex;
     flex-direction: column;
-    max-height: 70vh;
+    /**
+     * ⚠ 这里是**确定高度**（`height`），不是 `max-height`。
+     *
+     * 面板里的城市列表是竖向 `scroll-view`，它需要**确定的可用高度**才能滚动、
+     * 也才能显示出内容。第一版写的是 `max-height: 70vh` —— 父级高度由内容决定，
+     * 而列表自身是 `height: 0; flex: 1`，flex 没有可分配的空间 → 列表高度 0，
+     * 用户看到的就是「选择出生城市」+ 一个输入框，其余一片空白（实测反馈为"白屏"）。
+     *
+     * 聊天页能用 `height: 0; flex: 1` 是因为它的父级有确定的 flex 高度链；
+     * 这里是绝对定位面板，必须自己把高度定下来。
+     */
+    height: 62vh;
     padding: $space-lg $space-md;
+    padding-bottom: calc(#{$space-lg} + #{$safe-area-bottom});
     background-color: $color-bg-card;
     border-radius: $radius-lg $radius-lg 0 0;
+  }
+
+  &__panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
   }
 
   &__panel-title {
     font-size: $font-size-md;
     font-weight: $font-weight-semibold;
+  }
+
+  &__panel-close {
+    font-size: $font-size-sm;
+    color: $color-text-secondary;
+  }
+
+  &__panel-hint {
+    display: block;
+    margin-top: $space-xxs;
+    font-size: $font-size-xs;
+    color: $color-text-placeholder;
   }
 
   &__panel-input {
@@ -929,9 +995,9 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
   }
 
   &__panel-list {
-    // 与聊天页同样的坑：只给 flex:1 的话，scroll-view 会按内容撑开而不滚动
+    // 面板已有确定高度，因此这里的 flex: 1 能分到真实高度；
+    // min-height: 0 是必须的，否则 flex 项的最小尺寸会按内容撑开
     flex: 1;
-    height: 0;
     min-height: 0;
     margin-top: $space-sm;
   }

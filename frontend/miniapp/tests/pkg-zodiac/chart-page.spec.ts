@@ -27,6 +27,90 @@ const PAGES_JSON = resolve(process.cwd(), 'src/pages.json');
 const source = readFileSync(CHART_PAGE, 'utf8');
 const pagesJson = readFileSync(PAGES_JSON, 'utf8');
 
+/**
+ * 只取模板部分：样式与脚本里的 `=` 不该被下面的规则误伤
+ *
+ * ⚠ 必须用 **lastIndexOf**：本页用了嵌套 `<template v-else-if>`，
+ * 取第一个 `</template>` 会把模板截断在中间 —— 第一版就是这样，
+ * 结果「事件绑定不得用内联语句」这条守卫**检查不到页面下半部分**，
+ * 而真正的 bug（`@tap="cityPanelOpen = false"`）恰好就在下半部分。
+ * 一条检查不全的守卫比没有守卫更危险：它会让人以为已经守住了。
+ */
+const templateOnly = (): string => source.slice(source.indexOf('<template>'), source.lastIndexOf('</template>'));
+const template = templateOnly();
+
+/** 抽出 `&__xxx { … }` 的声明块（到第一个 `}` 为止；这些块里没有嵌套规则） */
+const styleBlockOf = (selector: string): string => {
+  const start = source.indexOf(selector);
+  if (start < 0) return '';
+
+  const end = source.indexOf('}', start);
+
+  return source.slice(start, end);
+};
+
+describe('星盘页：用户实测踩过的两个坑（都必须有守卫）', () => {
+  /**
+   * 【坑一】`@tap="cityPanelOpen = false"` 这种**内联语句**会被微信编译器
+   * 编译成一个"方法名"，实测生成的是名为 `false` 的方法，运行时控制台报：
+   * `does not have a method "false" to handle event "tap"`。
+   * 页面看起来正常，只有点下去才报错 —— 类型检查、构建、单测全都发现不了。
+   */
+  it('事件绑定必须是具名方法或方法调用，不能写内联语句', () => {
+    const handlers = [...templateOnly().matchAll(/@[a-z]+(?:\.[a-z]+)*="([^"]+)"/g)].map((match) => match[1]);
+    expect(handlers.length).toBeGreaterThan(5);
+
+    for (const handler of handlers) {
+      // 允许：methodName / methodName(arg) / methodName(a.b) / 传入 $event 的调用
+      expect(`${handler} -> ${/^[A-Za-z_$][\w$]*(\([^)]*\))?$/.test(handler)}`).toBe(`${handler} -> true`);
+    }
+  });
+
+  /**
+   * 【坑二】面板里的城市列表是竖向 `scroll-view`，它需要**确定的可用高度**。
+   * 第一版面板只写了 `max-height: 70vh`（高度由内容决定），列表自身是
+   * `height: 0; flex: 1` → flex 没有可分配空间 → 列表高度 0，
+   * 用户看到的只有标题和输入框，其余一片空白（实测反馈为"白屏"）。
+   *
+   * 规则：面板必须自己把高度定下来（有 `height:`），列表用 `flex: 1` + `min-height: 0`。
+   */
+  it('城市面板自身必须是确定高度，否则列表高度为 0（就是白屏）', () => {
+    const panel = styleBlockOf('&__panel {');
+
+    expect(panel).toMatch(/(^|[^-a-z])height:/);
+    expect(panel).not.toMatch(/^\s*max-height:/m);
+  });
+
+  it('城市列表用 flex 分配高度，且带 min-height: 0（否则会被内容撑开）', () => {
+    const list = styleBlockOf('&__panel-list {');
+
+    expect(list).toContain('flex: 1');
+    expect(list).toContain('min-height: 0');
+    // 不该再出现独立的 `height: 0`（那是聊天页的写法，依赖父级有确定高度链）
+    expect(list).not.toMatch(/(^|[^-a-z])height:\s*0/);
+  });
+
+  it('面板有明确的关闭入口（不能只靠点遮罩，那个入口刚刚才修好）', () => {
+    expect(source).toContain('closeCityPanel');
+    expect(template).toContain('@tap="closeCityPanel"');
+  });
+
+  it('模板切片确实覆盖到页面下半部分（防止守卫本身被截断而失效）', () => {
+    // 城市面板在模板最后，如果切片方式退化成 `indexOf`，这里会失败
+    expect(template).toContain('chart__panel-list');
+    expect(template).toContain('chart__disclaimer-text');
+  });
+
+  it('任何分支下都有可见内容（不留白屏）', () => {
+    // 分支顺序：loading → loadError → needsBirthday → 既无 chart 也无 preview 的兜底 → data
+    expect(template).toContain('v-if="loading"');
+    expect(template).toContain('v-else-if="loadError"');
+    expect(template).toContain('v-else-if="needsBirthday"');
+    expect(template).toContain('v-else-if="!chart && !preview"');
+    expect(template).toContain('v-else-if="data"');
+  });
+});
+
 describe('星盘页：页面注册', () => {
   it('已在 pkgZodiac 分包里注册（否则 navigateTo 会静默失败）', () => {
     expect(pagesJson).toContain('"path": "pages/chart"');

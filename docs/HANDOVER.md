@@ -2133,3 +2133,42 @@ vitest 275 例 / `build:mp-weixin` 成功。
 详见 `CONTRACT_DRIFT_AUDIT.md` §30。
 
 **待用户实测**：星盘页在开发者工具里的实际观感（城市选择面板、时间选择器、非会员引导卡的文案）。
+
+---
+
+### 3.32 🔴 星盘页「选城市时白屏」+ 控制台 method "false"（用户实测报回）
+
+用户原话：「我点击我的星盘跳出让我选城市，但是页面只有白屏啊」，控制台另有
+`Component "pkgZodiac/pages/chart" does not have a method "false" to handle event "tap"`。
+
+两个症状、两个根因：
+
+1. **`@tap` 里写裸赋值**：微信编译器会从事件表达式里**提取方法名** ——
+   方法引用（`@tap="saveTime"`）和方法调用（`@tap="pickCity(city)"`）都能取对，
+   而 `@tap="cityPanelOpen = false"` 被取成了 `false`，于是去找名为 `false` 的方法。
+   改为具名方法 `closeCityPanel`。
+2. **「白屏」的真身是列表高度为 0**：面板是绝对定位弹层，只写了 `max-height: 70vh`
+   （高度由内容决定），而列表是 `scroll-view { height: 0; flex: 1 }` → 没有可分配空间
+   → 高度 0。聊天页能用这套写法是因为它的父级有确定的 flex 高度链。
+   改为面板**确定高度** `height: 62vh` + 列表 `flex: 1; min-height: 0`，
+   并在标题栏补了「关闭」入口（原来只能点遮罩关，而那一行正是报错的那一行）。
+
+另加兜底：`v-if` 链补一个「既无 chart 也无 preview」的分支，任何情况下都不留白屏。
+
+#### ⚠ 教训：检查不全的守卫比没有守卫更危险
+
+我给这两个坑写的第一版结构守卫**全部通过**，而 bug 就在代码里 ——
+因为模板切片用了 `indexOf('</template>')`，而本页是**嵌套** `<template v-else-if>`，
+切片在页面下半部分之前就断了，城市面板恰好在最下面。
+改成 `lastIndexOf` 之后，还**把 bug 临时塞回去确认守卫会变红**，才算有效；
+另加一条元测试保证切片覆盖到页面下半部分。
+
+> 写「读文件做断言」的守卫时，必须验证**它在 bug 存在时会失败**。
+> 永远为真的断言（或范围不对的断言）比没有守卫更糟。
+
+**门禁**：小程序 vue-tsc 0 / **vitest 22 套 296 例** / `build:mp-weixin` 通过；
+并在**编译产物**里复核（面板 `height:62vh`、内联箭头事件处理器 0 个、兜底卡片存在）。
+
+⚠ 注意：开发者工具打开的是 `dist/build/mp-weixin`（`project.config.json` 只在该目录里），
+因此改完前端必须跑 `pnpm build:mp-weixin`，光有 dev 监听不够。
+详见 `CONTRACT_DRIFT_AUDIT.md` §31。
