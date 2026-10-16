@@ -1948,3 +1948,47 @@ NOTABLE 档文案（「有幾个方面」）。两者都已修，并**加断言*
 后端 tsc 0 / eslint 0 / **jest 136 套 3124 例** / prettier 干净；
 小程序 vue-tsc 0 / vitest 271 例 / `build:mp-weixin` 成功。
 预览脚本：`.runlogs/preview-mental-health-report.cjs`。详见 `CONTRACT_DRIFT_AUDIT.md` §26。
+
+---
+
+### 3.28 ✅ AI 管家「对话框拖不动」修复（根因是两行 CSS）
+
+**用户反馈**：「AI 管家能回答，但对话框没有办法拖动，就像卡死了一样」。
+
+**判断**：能回答 → 接口/会话/配额都没问题，是渲染层。而"卡死"意味着
+**手指怎么拉都不动**，不是"内容显示不全"。
+
+**根因**：聊天页的消息流是全仓唯一的竖向 `scroll-view`，而它只写了 `flex: 1`：
+
+```scss
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.chat__body {
+  flex: 1;
+} /* ← 没有确定高度 */
+```
+
+1. `scroll-view` 竖滚必须有**确定高度**；
+2. 只写 `flex: 1` 时，flex 项的自动最小尺寸是**内容高度**（`min-height: auto`）→
+   消息一多，盒子长到跟内容一样高，**内部没有可滚区域**；
+3. 而这一页在 `pages.json` 里是 `disableScroll: true`（页面级滚动关闭）→
+   **两边都滚不动**。
+
+短对话完全正常，**只有回复够长才出现** —— 自测最容易漏掉的那一类。
+
+**修法**：`.chat__body { flex: 1; height: 0; min-height: 0; }` +
+`.chat { overflow: hidden; }`（页面既然滚不动，溢出必须裁掉）。
+
+**防回归**：新增 `tests/pkg-chat/chat-scroll.spec.ts`（4 例）用**结构断言**盯住这两行 ——
+这类缺陷类型检查、单测、构建、页面渲染全都发现不了，而修复只是一行
+`min-height: 0`，后来者顺手清理掉也不会报错。
+
+> 通用经验：**"滚不动"先看高度是不是确定的**。`scroll-view` / `overflow: auto`
+> 的容器只要高度由内容决定，它就没有可滚区域；flex 里的 `min-height: auto`
+> 正是"高度由内容决定"最常见的来源。
+
+**门禁**：小程序 vue-tsc 0 / **vitest 21 套 275 例** / `build:mp-weixin` 成功；后端未改动。
+详见 `CONTRACT_DRIFT_AUDIT.md` §27。

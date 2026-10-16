@@ -361,6 +361,14 @@ const send = async (content?: string): Promise<void> => {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /**
+   * ⚠ 必须裁掉溢出（与 pages.json 的 `disableScroll: true` 配套）
+   *
+   * 本页页面级滚动是**关闭**的（输入框固定在底部、消息列表自己滚）。
+   * 一旦有内容把容器撑出视口，页面既滚不动、又看不到下半截 ——
+   * 用户看到的就是"界面卡死了"。裁掉之后溢出只可能发生在 scroll-view 内部。
+   */
+  overflow: hidden;
   background-color: $color-bg-page;
 
   &__quota {
@@ -379,8 +387,30 @@ const send = async (content?: string): Promise<void> => {
     color: $color-primary;
   }
 
+  /**
+   * 消息列表（竖向 `scroll-view`）
+   *
+   * ## ⚠ `min-height: 0` + `height: 0` 是"聊天页不能滚动"的修复（2026-10-16）
+   *
+   * 用户的反馈是「AI 能回答，但对话框没有办法拖动，就像卡死了一样」。
+   * 根因是这段 CSS，不是交互逻辑：
+   *
+   *   · `scroll-view` 竖滚**必须有确定的高度**（微信官方要求给固定 height）；
+   *   · 只写 `flex: 1` 时，flex 项的自动最小尺寸是**内容高度**（`min-height: auto`），
+   *     于是消息一多，这个盒子就长到跟内容一样高 —— 它内部**没有可滚的区域**；
+   *   · 而页面又是 `disableScroll: true`（不能滚）→ **两边都滚不动**，
+   *     手指怎么拉都不动，表现就是"卡死"。
+   *
+   * `min-height: 0` 允许它缩到比内容更小，`height: 0` 让高度完全由 flex 分配决定，
+   * 两者一起用是微信基础库里最稳的写法（只写其中一个在部分机型上仍会被内容撑开）。
+   *
+   * 单测 `tests/pkg-chat/chat-scroll.spec.ts` 会把这两条声明钉住 ——
+   * 这类缺陷类型检查、单测、构建**全都发现不了**，只能靠结构断言防回归。
+   */
   &__body {
     flex: 1;
+    height: 0;
+    min-height: 0;
     padding: $space-lg;
   }
 
