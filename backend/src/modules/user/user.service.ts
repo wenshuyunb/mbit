@@ -129,6 +129,8 @@ export interface MeView {
   genderDeclared: boolean;
   birthday: string | null;
   ageRange: string | null;
+  /** 星盘用的出生信息（时间 / 城市 / 经纬度 / 时区） */
+  birthInfo: BirthInfoView;
   phoneBound: boolean;
   phoneMasked: string | null;
   status: string;
@@ -153,9 +155,49 @@ export interface ProfileUpdatedView {
   genderDeclared: boolean;
   birthday: string | null;
   ageRange: string | null;
+  birthInfo: BirthInfoView;
   version: number;
   updatedAt: string;
 }
+
+/**
+ * 星盘用的出生信息（`GET /users/me` 与 `PATCH /users/me` 共用）
+ *
+ * ⚠ 这几个字段**不是画像**：不进任何测评，也不参与任何评分（ADR-038 模块隔离）。
+ * 它们唯一的用途是算出本命星盘（星座运势模块），因此单独成块，别混进 profile。
+ */
+export interface BirthInfoView {
+  birthTime: string | null;
+  birthPlace: string | null;
+  birthLatitude: number | null;
+  birthLongitude: number | null;
+  birthTimezoneOffset: number | null;
+  /**
+   * 是否已具备算星盘的**全部**条件：生日 + 出生时间 + 出生地经纬度。
+   *
+   * 由服务端算好下发，而不是让前端去拼条件 —— 前端只要看这一个布尔值就能决定
+   * 是展示星盘还是展示"补全信息"的引导，避免三处条件各写一遍、各漏一处。
+   */
+  chartReady: boolean;
+}
+
+/** 从数据库行构造 `BirthInfoView` */
+const toBirthInfoView = (row: {
+  birthday: Date | null;
+  birthTime: string | null;
+  birthPlace: string | null;
+  birthLatitude: number | null;
+  birthLongitude: number | null;
+  birthTimezoneOffset: number | null;
+}): BirthInfoView => ({
+  birthTime: row.birthTime,
+  birthPlace: row.birthPlace,
+  birthLatitude: row.birthLatitude,
+  birthLongitude: row.birthLongitude,
+  birthTimezoneOffset: row.birthTimezoneOffset,
+  chartReady:
+    row.birthday !== null && row.birthTime !== null && row.birthLatitude !== null && row.birthLongitude !== null,
+});
 
 /** 注销状态（GET/DELETE /users/me/deletion、POST 响应共用） */
 export interface DeletionStatusView {
@@ -334,6 +376,11 @@ export class UserService {
         gender: true,
         genderDeclaredAt: true,
         birthday: true,
+        birthTime: true,
+        birthPlace: true,
+        birthLatitude: true,
+        birthLongitude: true,
+        birthTimezoneOffset: true,
         phoneEnc: true,
         phoneHash: true,
         status: true,
@@ -359,6 +406,7 @@ export class UserService {
       genderDeclared: Boolean(user.genderDeclaredAt),
       birthday: user.birthday ? user.birthday.toISOString().slice(0, 10) : null,
       ageRange: toAgeRange(user.birthday),
+      birthInfo: toBirthInfoView(user),
       phoneBound: user.phoneHash !== null,
       // 契约规则 1：只返回脱敏手机号。phoneEnc 解密后立即脱敏，明文不出本方法作用域
       phoneMasked: maskPhone(this.crypto.tryDecrypt(user.phoneEnc)),
@@ -495,6 +543,8 @@ export class UserService {
       }
     }
 
+    this.applyBirthChartFields(dto, data);
+
     // ---------------------------------------------------------------- 乐观锁
     const where: { id: string; version?: number } = { id: userId };
     if (dto.expectedVersion !== undefined) {
@@ -524,6 +574,11 @@ export class UserService {
         gender: true,
         genderDeclaredAt: true,
         birthday: true,
+        birthTime: true,
+        birthPlace: true,
+        birthLatitude: true,
+        birthLongitude: true,
+        birthTimezoneOffset: true,
         version: true,
         updatedAt: true,
       },
@@ -541,9 +596,66 @@ export class UserService {
       genderDeclared: Boolean(fresh.genderDeclaredAt),
       birthday: fresh.birthday ? fresh.birthday.toISOString().slice(0, 10) : null,
       ageRange: toAgeRange(fresh.birthday),
+      birthInfo: toBirthInfoView(fresh),
       version: fresh.version,
       updatedAt: fresh.updatedAt.toISOString(),
     };
+  }
+
+  /**
+   * 写入星盘用的出生信息（ADR-040）
+   *
+   * ## 唯一一条跨字段规则：经纬度必须成对
+   *
+   * DTO 只能逐个字段校验，管不了"给了纬度没给经度"。半份坐标是**没有意义**的
+   * （算不出当地恒星时），但它会静悄悄存进库，然后在算星盘时才表现成
+   * "上升星座算不出来" —— 用户完全不知道为什么。所以这里直接拒绝，
+   * 把错误暴露在写入的那一刻。
+   *
+   * ## 清空语义
+   *
+   * 传 `null` 表示清空。任一坐标传 `null`（或只传一侧）时**两个一起清**：
+   * 用户点"删除出生地"时前端通常只发一个字段，此时保留半个坐标同样是脏数据。
+   */
+  private applyBirthChartFields(dto: UpdateProfileDto, data: Record<string, unknown>): void {
+    if (dto.birthTime !== undefined) {
+      data.birthTime = dto.birthTime;
+    }
+
+    if (dto.birthPlace !== undefined) {
+      data.birthPlace = dto.birthPlace;
+    }
+
+    if (dto.birthTimezoneOffset !== undefined) {
+      data.birthTimezoneOffset = dto.birthTimezoneOffset;
+    }
+
+    const latitudeTouched = dto.birthLatitude !== undefined;
+    const longitudeTouched = dto.birthLongitude !== undefined;
+
+    if (!latitudeTouched && !longitudeTouched) return;
+
+    const latitude = dto.birthLatitude ?? null;
+    const longitude = dto.birthLongitude ?? null;
+
+    // 只给了一侧且非空 → 拒绝（半个坐标算不出星盘，属于必然出错的输入）
+    if (latitude !== null && longitude === null && !longitudeTouched) {
+      throw BusinessException.badRequest(ErrorCode.PARAM_INVALID, 'birthLatitude 与 birthLongitude 必须同时提供');
+    }
+    if (longitude !== null && latitude === null && !latitudeTouched) {
+      throw BusinessException.badRequest(ErrorCode.PARAM_INVALID, 'birthLatitude 与 birthLongitude 必须同时提供');
+    }
+
+    // 只要有一侧为 null（或只传了一侧），就连同另一侧一起清空
+    if (latitude === null || longitude === null) {
+      data.birthLatitude = null;
+      data.birthLongitude = null;
+
+      return;
+    }
+
+    data.birthLatitude = latitude;
+    data.birthLongitude = longitude;
   }
 
   // ==========================================================================

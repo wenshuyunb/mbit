@@ -141,6 +141,163 @@ export interface ZodiacMatch {
   disclaimer: string;
 }
 
+// ============================================================================
+// 本命星盘（ADR-040）
+// ============================================================================
+
+/** 出生城市（`GET /zodiac/cities`） */
+export interface BirthCity {
+  name: string;
+  region: string;
+  latitude: number;
+  longitude: number;
+  /** 时区偏移（小时）；中国 1986–1991 年夏令时由后端按日期判定，这里给该城市的基础时区 */
+  timezoneOffset: number;
+}
+
+/** 星盘上一个天体（完整盘才有） */
+export interface ChartPosition {
+  key: string;
+  name: string;
+  symbol: string;
+  longitude: number;
+  sign: ZodiacSign;
+  signName: string;
+  degree: number;
+  minute: number;
+  /** 展示串，例如 `狮子座 22°09′` */
+  position: string;
+  /** 整宫制宫位（1–12）；缺出生时间或城市时为 null */
+  house: number | null;
+  retrograde: boolean;
+  /** 位置是否不可靠（缺出生时间时的月亮） */
+  uncertain: boolean;
+}
+
+/** 十二宫之一 */
+export interface ChartHouse {
+  index: number;
+  cusp: number;
+  sign: ZodiacSign;
+  signName: string;
+  position: string;
+}
+
+/** 一条相位 */
+export interface ChartAspect {
+  from: string;
+  to: string;
+  fromName: string;
+  toName: string;
+  key: string;
+  name: string;
+  symbol: string;
+  nature: 'HARMONIOUS' | 'TENSE' | 'NEUTRAL';
+  separation: number;
+  orb: number;
+  orbText: string;
+}
+
+/** 元素 / 宫位类型分布的一项 */
+export interface ChartDistributionEntry {
+  key: string;
+  label: string;
+  description: string;
+  count: number;
+  percent: number;
+  signs: ZodiacSign[];
+}
+
+/** 完整星盘（**会员**才有） */
+export interface NatalChart {
+  hasBirthTime: boolean;
+  hasBirthPlace: boolean;
+  moment: {
+    localDateTime: string;
+    utcDateTime: string;
+    timezoneOffset: number;
+    place: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    timezoneInferred: boolean;
+  };
+  positions: ChartPosition[];
+  angles: {
+    ascendant: ChartPosition | null;
+    midheaven: ChartPosition | null;
+  };
+  houses: ChartHouse[] | null;
+  aspects: ChartAspect[];
+  elementDistribution: ChartDistributionEntry[];
+  modeDistribution: ChartDistributionEntry[];
+  dominantElement: ChartDistributionEntry | null;
+  dominantMode: ChartDistributionEntry | null;
+  missingElements: string[];
+  missingModes: string[];
+  stelliums: { sign: ZodiacSign; signName: string; bodies: string[] }[];
+  chartRuler: { planetName: string; position: string; signName: string } | null;
+  houseSystem: 'WHOLE_SIGN';
+  precisionNote: string;
+  noTimeNotice: string | null;
+  noPlaceNotice: string | null;
+}
+
+/** 非会员能看到的预览（只有星座名，没有度数） */
+export interface ChartPreviewBody {
+  sign: ZodiacSign;
+  signName: string;
+  elementLabel: string;
+  uncertain: boolean;
+}
+
+export interface ChartPreview {
+  sun: ChartPreviewBody;
+  moon: ChartPreviewBody;
+  ascendant: ChartPreviewBody | null;
+  hasBirthTime: boolean;
+  hasBirthPlace: boolean;
+}
+
+/** 星盘响应 */
+export interface ZodiacChart {
+  /** 非会员才有；会员为 null */
+  preview: ChartPreview | null;
+  /** 会员才有；非会员为 null（**不是打码，是不返回**） */
+  chart: NatalChart | null;
+  access: {
+    isMember: boolean;
+    chartUnlocked: boolean;
+    lockedSections: string[];
+    membershipHint: string;
+    expireAt: string | null;
+  };
+  birthInfo: {
+    birthday: string;
+    birthTime: string | null;
+    birthPlace: string | null;
+    birthLatitude: number | null;
+    birthLongitude: number | null;
+    placeResolvedFrom: 'USER_INPUT' | 'CITY_TABLE' | 'MISSING';
+  };
+  disclaimer: string;
+}
+
+/** 出生城市搜索（**公开接口**；关键词为空时返回热门城市） */
+export const searchBirthCities = (keyword?: string): Promise<BirthCity[]> =>
+  http.get<BirthCity[]>('/zodiac/cities', keyword === undefined || keyword.length === 0 ? undefined : { keyword }, {
+    needAuth: false,
+    showError: false,
+  });
+
+/**
+ * 本命星盘
+ *
+ * ⚠ `showError: false`：没设生日时后端返回 `400 / 30019`，那是本模块的**正常流程**
+ * （页面据此展示"先选出生日期"的引导），不能让用户先看到一个红色报错。
+ */
+export const getNatalChart = (): Promise<ZodiacChart> =>
+  http.get<ZodiacChart>('/zodiac/chart', undefined, { showError: false });
+
 /** 十二星座档案（**公开接口**：后端已标 `@Public()`，前端也不需要带令牌） */
 export const listZodiacProfiles = (): Promise<ZodiacProfile[]> =>
   http.get<ZodiacProfile[]>('/zodiac/signs', undefined, { needAuth: false, showError: false });

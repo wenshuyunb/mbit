@@ -762,27 +762,32 @@ erDiagram
 
 **用途**：用户主数据。只存放「用户是谁」的最小必要信息，**不存放微信登录凭证**（凭证在 `wechat_accounts`）。是 IDOR 防护（所有业务查询强制带 `userId`）与账号匿名化的收口点。
 
-| 字段名              | 类型                          | 可空 | 默认值       | 说明                                                                                   |
-| ------------------- | ----------------------------- | ---- | ------------ | -------------------------------------------------------------------------------------- |
-| `id`                | `String @db.Uuid`             | 否   | `uuid(7)`    | 主键，UUIDv7                                                                           |
-| `nickname`          | `String @db.VarChar(64)`      | 是   | `—`          | 昵称，来源为微信 `type="nickname"` 组件；用户未授权时为 NULL，前端展示「SoulMap 用户」 |
-| `avatarUrl`         | `String @db.VarChar(512)`     | 是   | `—`          | 头像 OSS URL（私有 Bucket 的 CDN 地址）                                                |
-| `gender`            | `enum UserGender`             | 否   | `UNKNOWN`    | 性别，用于报告文案（可选填）                                                           |
-| `birthday`          | `DateTime @db.Date`           | 是   | `—`          | 生日（仅日期）。用于年龄区间与未成年人拦截（架构 §14.3）                               |
-| `ageVerified`       | `Boolean`                     | 否   | `false`      | 是否已完成年龄声明（≥18 岁校验），false 时禁用情侣匹配模块                             |
-| `phoneEnc`          | `String @db.VarChar(512)`     | 是   | `—`          | 手机号密文（AES-256-GCM，含 IV + AuthTag），仅用于账号找回与客服核身                   |
-| `phoneHash`         | `String @db.VarChar(64)`      | 是   | `—`          | 手机号 + 服务端盐的 SHA-256，用于「同手机号去重」而不解密                              |
-| `status`            | `enum UserStatus`             | 否   | `ACTIVE`     | 账号状态                                                                               |
-| `inviterUserId`     | `String @db.Uuid`             | 是   | `—`          | 邀请人（自关联）。裂变系数 K（架构 §1.4）归因的唯一依据                                |
-| `registerChannel`   | `String @db.VarChar(32)`      | 是   | `—`          | 注册来源渠道（`invite` / `poster` / `search` / `share`）                               |
-| `lastLoginAt`       | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 最近登录时间（活跃统计）                                                               |
-| `lastLoginIp`       | `String @db.VarChar(64)`      | 是   | `—`          | 最近登录 IP（风控；仅存 IPv4/IPv6 文本，不存地理位置）                                 |
-| `exportRequestedAt` | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 最近一次数据导出申请时间（限流用，架构 §9.4）                                          |
-| `anonymizedAt`      | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 匿名化完成时间（注销冷静期到期后写入）                                                 |
-| `version`           | `Int`                         | 否   | `0`          | 乐观锁                                                                                 |
-| `createdAt`         | `DateTime @db.Timestamptz(3)` | 否   | `now()`      | 创建时间（UTC）                                                                        |
-| `updatedAt`         | `DateTime @db.Timestamptz(3)` | 否   | `@updatedAt` | 更新时间（UTC）                                                                        |
-| `deletedAt`         | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 软删除时间                                                                             |
+| 字段名                | 类型                          | 可空 | 默认值       | 说明                                                                                                          |
+| --------------------- | ----------------------------- | ---- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `id`                  | `String @db.Uuid`             | 否   | `uuid(7)`    | 主键，UUIDv7                                                                                                  |
+| `nickname`            | `String @db.VarChar(64)`      | 是   | `—`          | 昵称，来源为微信 `type="nickname"` 组件；用户未授权时为 NULL，前端展示「SoulMap 用户」                        |
+| `avatarUrl`           | `String @db.VarChar(512)`     | 是   | `—`          | 头像 OSS URL（私有 Bucket 的 CDN 地址）                                                                       |
+| `gender`              | `enum UserGender`             | 否   | `UNKNOWN`    | 性别，用于报告文案（可选填）                                                                                  |
+| `birthday`            | `DateTime @db.Date`           | 是   | `—`          | 生日（仅日期）。用于年龄区间与未成年人拦截（架构 §14.3）；星座模块只用月日                                    |
+| `birthTime`           | `String @db.VarChar(5)`       | 是   | `—`          | 出生时刻 `HH:mm`（**本地时间**，按 `birthTimezoneOffset` 折算 UTC）。上升星座与宫位必需                       |
+| `birthPlace`          | `String @db.VarChar(64)`      | 是   | `—`          | 出生地名称（从内置城市表选择，或用户手输）。仅用于展示与复盘                                                  |
+| `birthLatitude`       | `Float`                       | 是   | `—`          | 出生地纬度（度，北正南负）。**上升星座只与纬度有关，与经度无关**                                              |
+| `birthLongitude`      | `Float`                       | 是   | `—`          | 出生地经度（度，东正西负）。与出生时刻一起定出当地恒星时                                                      |
+| `birthTimezoneOffset` | `Float`                       | 是   | `—`          | 出生地当时的时区偏移（小时，如中国 `8`）。海外出生必需；国内默认 8，1986–1991 夏季由应用层按当年夏令时自动 +1 |
+| `ageVerified`         | `Boolean`                     | 否   | `false`      | 是否已完成年龄声明（≥18 岁校验），false 时禁用情侣匹配模块                                                    |
+| `phoneEnc`            | `String @db.VarChar(512)`     | 是   | `—`          | 手机号密文（AES-256-GCM，含 IV + AuthTag），仅用于账号找回与客服核身                                          |
+| `phoneHash`           | `String @db.VarChar(64)`      | 是   | `—`          | 手机号 + 服务端盐的 SHA-256，用于「同手机号去重」而不解密                                                     |
+| `status`              | `enum UserStatus`             | 否   | `ACTIVE`     | 账号状态                                                                                                      |
+| `inviterUserId`       | `String @db.Uuid`             | 是   | `—`          | 邀请人（自关联）。裂变系数 K（架构 §1.4）归因的唯一依据                                                       |
+| `registerChannel`     | `String @db.VarChar(32)`      | 是   | `—`          | 注册来源渠道（`invite` / `poster` / `search` / `share`）                                                      |
+| `lastLoginAt`         | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 最近登录时间（活跃统计）                                                                                      |
+| `lastLoginIp`         | `String @db.VarChar(64)`      | 是   | `—`          | 最近登录 IP（风控；仅存 IPv4/IPv6 文本，不存地理位置）                                                        |
+| `exportRequestedAt`   | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 最近一次数据导出申请时间（限流用，架构 §9.4）                                                                 |
+| `anonymizedAt`        | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 匿名化完成时间（注销冷静期到期后写入）                                                                        |
+| `version`             | `Int`                         | 否   | `0`          | 乐观锁                                                                                                        |
+| `createdAt`           | `DateTime @db.Timestamptz(3)` | 否   | `now()`      | 创建时间（UTC）                                                                                               |
+| `updatedAt`           | `DateTime @db.Timestamptz(3)` | 否   | `@updatedAt` | 更新时间（UTC）                                                                                               |
+| `deletedAt`           | `DateTime @db.Timestamptz(3)` | 是   | `—`          | 软删除时间                                                                                                    |
 
 **索引与约束**
 
@@ -4673,6 +4678,31 @@ model User {
   /// （包括选择"不想说"）。改性别不重置该时间。
   genderDeclaredAt  DateTime?  @map("gender_declared_at") @db.Timestamptz(3)
   birthday          DateTime?  @db.Date
+  /// ==================== 出生信息（星座星盘用，2026-10-16 新增） ====================
+  ///
+  /// ## 为什么要存这些（而不是每次让用户重填）
+  ///
+  /// 专业星盘需要**出生时刻 + 出生地经纬度**才能算出上升星座与宫位：
+  ///   · 上升星座只与**纬度**有关（与经度无关），但对时间极其敏感
+  ///     （每 2 小时左右换一个星座），因此必须精确到**分钟**；
+  ///   · 宫位需要当地恒星时，而恒星时 = 出生时刻（折算 UTC）+ **经度**。
+  ///
+  /// ## 三条设计取舍
+  ///
+  ///   ① **存 `HH:mm` 字符串而不是 DateTime**：出生时刻是"当地人看到的钟表时间"，
+  ///      不是绝对时刻。折成 UTC 需要时区信息，而时区本身也存着（见下一列）——
+  ///      用 DateTime 会让"本地 08:30 出生于乌鲁木齐"被静默当成东八区同一瞬间。
+  ///   ② **经纬度分开存浮点数**，不存单一字符串：上升点计算只用纬度、
+  ///      恒星时只用经度，分开存可以各自校验范围（纬度 ±90、经度 ±180）。
+  ///   ③ **时区偏移存成数字**而不是时区名：中国用户占绝大多数，
+  ///      而"1986–1991 年中国实行过夏令时"这类历史规则由应用层处理
+  ///      （见 `zodiac-astro.util.ts` 的 `resolveTimezoneOffset`），
+  ///      库里只记录**当时实际生效**的偏移。
+  birthTime         String?    @map("birth_time") @db.VarChar(5)
+  birthPlace        String?    @map("birth_place") @db.VarChar(64)
+  birthLatitude     Float?     @map("birth_latitude")
+  birthLongitude    Float?     @map("birth_longitude")
+  birthTimezoneOffset Float?   @map("birth_timezone_offset")
   ageVerified       Boolean    @default(false) @map("age_verified")
   phoneEnc          String?    @map("phone_enc") @db.VarChar(512)
   phoneHash         String?    @unique @map("phone_hash") @db.VarChar(64)

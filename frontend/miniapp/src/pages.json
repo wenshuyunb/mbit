@@ -136,6 +136,12 @@
           "style": {
             "navigationBarTitleText": "星座配对"
           }
+        },
+        {
+          "path": "pages/chart",
+          "style": {
+            "navigationBarTitleText": "我的本命星盘"
+          }
         }
       ]
     },

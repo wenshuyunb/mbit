@@ -21,7 +21,10 @@ import { Injectable } from '@nestjs/common';
 import { BusinessException } from '../../common/errors/business.exception';
 import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { EntitlementService } from '../membership/entitlement.service';
 import { SystemConfigService } from '../system/system-config.service';
+import { findCityByName, searchCities, type BirthCity } from './zodiac-city.data';
+import { buildNatalChart, CHART_LOCKED_SECTIONS, CHART_MEMBERSHIP_HINT, type NatalChart } from './zodiac-chart.util';
 import { ZODIAC_PROFILES } from './zodiac-content';
 import {
   buildDailyFortune,
@@ -50,11 +53,70 @@ export interface DailyFortuneResponse extends DailyFortuneView {
   readonly disclaimer: string;
 }
 
+/** 星盘对非会员开放的那一部分（"三巨头"只给星座名，不给度数） */
+export interface ChartPreviewBody {
+  readonly sign: ZodiacSign;
+  readonly signName: string;
+  readonly elementLabel: string;
+  /** 位置是否不可靠（缺出生时间时的月亮） */
+  readonly uncertain: boolean;
+}
+
+export interface ChartPreview {
+  readonly sun: ChartPreviewBody;
+  readonly moon: ChartPreviewBody;
+  readonly ascendant: ChartPreviewBody | null;
+  readonly hasBirthTime: boolean;
+  readonly hasBirthPlace: boolean;
+}
+
+/**
+ * 星盘接口的解锁信息
+ *
+ * ⚠ `preview` 与 `chart` 是**互斥**的：非会员拿 `preview`（只有三个星座名），
+ * 会员拿完整 `chart`。非会员的 `chart` 恒为 `null` —— 不是在完整数据上打码，
+ * 而是根本不返回，避免"前端忘记隐藏字段"这类泄露（打码式的权限控制迟早出错）。
+ */
+export interface ChartAccess {
+  readonly isMember: boolean;
+  /** 完整星盘是否解锁 */
+  readonly chartUnlocked: boolean;
+  readonly lockedSections: readonly string[];
+  /** 面向用户的解锁说明（服务端下发，前端不得硬编码） */
+  readonly membershipHint: string;
+  /** 会员到期时间（非会员为 null） */
+  readonly expireAt: string | null;
+}
+
+/** 星盘响应 */
+export interface ZodiacChartResponse {
+  readonly preview: ChartPreview | null;
+  readonly chart: NatalChart | null;
+  readonly access: ChartAccess;
+  /** 出生信息是否齐全（不齐时前端引导补全） */
+  readonly birthInfo: {
+    readonly birthday: string;
+    readonly birthTime: string | null;
+    readonly birthPlace: string | null;
+    readonly birthLatitude: number | null;
+    readonly birthLongitude: number | null;
+    /** 城市是用户填的，还是按城市名从内置城市表补出来的 */
+    readonly placeResolvedFrom: 'USER_INPUT' | 'CITY_TABLE' | 'MISSING';
+  };
+  readonly disclaimer: string;
+}
+
+/** 会员才能看的星盘区块（文案在 `zodiac-chart.util.ts`，与其它用户可见文案一起过审） */
+const LOCKED_SECTIONS = CHART_LOCKED_SECTIONS;
+
+const MEMBERSHIP_HINT = CHART_MEMBERSHIP_HINT;
+
 @Injectable()
 export class ZodiacService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly systemConfig: SystemConfigService,
+    private readonly entitlement: EntitlementService,
   ) {}
 
   /** 十二星座档案（纯文化常识，不含预测；按固定顺序返回） */
@@ -124,7 +186,134 @@ export class ZodiacService {
     return { ...buildZodiacMatch(a, b), disclaimer: await this.loadDisclaimer() };
   }
 
+  /**
+   * 本命星盘（会员给完整盘，非会员只给"三巨头"的星座名）
+   *
+   * ## 为什么要读账号里的出生信息，而不是让前端传
+   *
+   * 出生日期/时间/城市是**用户资料**，不是请求参数。放账号里有两个好处：
+   *   ① 用户不必每次重新选（用户拍板"存进账号"）；
+   *   ② 星盘只可能由**服务端**算，前端拿不到经纬度也伪造不了一份盘，
+   *      会员门槛才是有意义的（若让前端传坐标，等于把数据权交出去了）。
+   *
+   * ## 出生城市的兜底
+   *
+   * 经纬度为空但城市名已知时，按城市名去内置城市表补坐标 —— 用于兼容
+   * "只填了城市名"的历史数据。补不出来就**不算四轴**，交给前端引导补全，
+   * 绝不拿某个默认城市去猜（见 `zodiac-chart.util.ts` 的说明）。
+   */
+  async getChart(userId: string): Promise<ZodiacChartResponse> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: {
+        birthday: true,
+        birthTime: true,
+        birthPlace: true,
+        birthLatitude: true,
+        birthLongitude: true,
+        birthTimezoneOffset: true,
+      },
+    });
+
+    if (!user) {
+      throw BusinessException.notFound(ErrorCode.USER_NOT_FOUND);
+    }
+
+    if (user.birthday === null) {
+      throw BusinessException.badRequest(ErrorCode.ZODIAC_BIRTHDAY_REQUIRED, '请先选择你的出生日期');
+    }
+
+    const birthday = user.birthday.toISOString().slice(0, 10);
+
+    // 坐标缺失时按城市名补；补到了就一并把该城市的时区偏移也用上
+    const needsCityLookup = user.birthLatitude === null || user.birthLongitude === null;
+    const city: BirthCity | null = needsCityLookup && user.birthPlace !== null ? findCityByName(user.birthPlace) : null;
+
+    const latitude = user.birthLatitude ?? city?.latitude ?? null;
+    const longitude = user.birthLongitude ?? city?.longitude ?? null;
+    const timezoneOffset = user.birthTimezoneOffset ?? city?.timezoneOffset ?? null;
+
+    const chart = buildNatalChart({
+      birthday,
+      birthTime: user.birthTime,
+      birthPlace: user.birthPlace,
+      birthLatitude: latitude,
+      birthLongitude: longitude,
+      birthTimezoneOffset: timezoneOffset,
+    });
+
+    const membership = await this.entitlement.getMembership(userId);
+    const disclaimer = await this.loadDisclaimer();
+
+    const preview: ChartPreview = {
+      sun: this.toPreviewBody(chart, 'SUN'),
+      moon: this.toPreviewBody(chart, 'MOON'),
+      ascendant: chart.angles.ascendant === null ? null : this.toPreviewBody(chart, 'ASCENDANT'),
+      hasBirthTime: chart.hasBirthTime,
+      hasBirthPlace: chart.hasBirthPlace,
+    };
+
+    return {
+      // 会员给完整盘（chart），非会员给预览（preview）—— 两者互斥，不做"打码"
+      preview: membership.isMember ? null : preview,
+      chart: membership.isMember ? chart : null,
+      access: {
+        isMember: membership.isMember,
+        chartUnlocked: membership.isMember,
+        lockedSections: membership.isMember ? [] : LOCKED_SECTIONS,
+        membershipHint: MEMBERSHIP_HINT,
+        expireAt: membership.expireAt,
+      },
+      birthInfo: {
+        birthday,
+        birthTime: user.birthTime,
+        birthPlace: user.birthPlace,
+        birthLatitude: latitude,
+        birthLongitude: longitude,
+        placeResolvedFrom:
+          user.birthLatitude !== null && user.birthLongitude !== null
+            ? 'USER_INPUT'
+            : latitude !== null && longitude !== null
+              ? 'CITY_TABLE'
+              : 'MISSING',
+      },
+      disclaimer,
+    };
+  }
+
+  /** 出生城市搜索（给"出生地"选择器用；数据是内置静态表，不查库） */
+  searchBirthCities(keyword: string | undefined): readonly BirthCity[] {
+    return searchCities(keyword ?? '');
+  }
+
   // ------------------------------------------------------------------ 内部
+
+  /**
+   * 从一个天体的位置构造预览条目
+   *
+   * ⚠ 预览**只给星座**，不给度数、不给宫位、不给相位 —— 度数就是专业用户
+   * 真正想要的东西，免费给出去会员门槛就形同虚设。同时这里刻意只用
+   * `sign` / `signName` / 元素 / 是否不可靠这几个字段，避免以后有人"顺手"
+   * 把整个 `ChartPosition` 塞进预览里。
+   */
+  private toPreviewBody(chart: NatalChart, key: 'SUN' | 'MOON' | 'ASCENDANT'): ChartPreviewBody {
+    const position =
+      key === 'ASCENDANT' ? chart.angles.ascendant : (chart.positions.find((item) => item.key === key) ?? null);
+
+    if (position === null) {
+      // 理论上不可达（太阳与月亮恒存在）；给一个明确错误而不是 undefined 泄漏到响应里
+      throw new BusinessException(ErrorCode.INTERNAL_ERROR, `星盘缺少 ${key} 的位置`);
+    }
+
+    const profile = ZODIAC_PROFILES[position.sign];
+
+    return {
+      sign: position.sign,
+      signName: position.signName,
+      elementLabel: ZODIAC_ELEMENT_LABELS[profile.element].label,
+      uncertain: position.uncertain,
+    };
+  }
 
   private toProfileView(sign: ZodiacSign): ZodiacProfileView {
     const profile = ZODIAC_PROFILES[sign];

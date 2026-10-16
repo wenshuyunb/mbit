@@ -13,6 +13,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Length,
@@ -119,6 +120,86 @@ export class UpdateProfileDto {
   @IsDateString({ strict: true }, { message: 'birthday 必须是 YYYY-MM-DD 格式' })
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'birthday 必须是 YYYY-MM-DD 格式' })
   birthday?: string | null;
+
+  // --------------------------------------------------------------------------
+  // 星盘用的出生信息（ADR-040）
+  //
+  // ⚠ 这四项是**为了算上升星座**才存的，因此校验规则按"能不能算出正确结果"来定，
+  // 而不是"格式看起来对不对"：
+  //   · birthTime 必须到分钟（上升点每 4 分钟走约 1°，只给小时会差一整个宫位）；
+  //   · 经纬度必须成对出现（只有一半算不出恒星时，等于没给）；
+  //   · 时区偏移单独存：1986–1991 年中国实行过夏令时，海外出生还要按当地时区，
+  //     统一按 +8 折算会让那几年夏天出生的人上升点整整错一个小时。
+  // --------------------------------------------------------------------------
+
+  @ApiPropertyOptional({
+    description: '出生时间（HH:mm，24 小时制）；与出生城市一起用于计算上升星座与宫位',
+    example: '14:30',
+    nullable: true,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'birthTime 必须是 HH:mm 格式（24 小时制）' })
+  birthTime?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '出生城市名称（仅用于回显与后续换城市，最长 64 字符）。' +
+      '⚠ 清空出生地时要**连经纬度一起传 null**：只清城市名会让服务端少了经度，算不出上升点',
+    example: '杭州',
+    nullable: true,
+    maxLength: 64,
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString({ message: 'birthPlace 必须是字符串或 null' })
+  @Length(1, 64, { message: '出生城市名称长度需在 1–64 个字符之间' })
+  birthPlace?: string | null;
+
+  @ApiPropertyOptional({
+    description: '出生地纬度（-90 ~ 90，南半球为负）；**必须与 birthLongitude 同时提供**',
+    example: 30.2741,
+    nullable: true,
+    minimum: -90,
+    maximum: 90,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 6 }, { message: 'birthLatitude 必须是数字' })
+  @Min(-90, { message: 'birthLatitude 必须在 -90 ~ 90 之间' })
+  @Max(90, { message: 'birthLatitude 必须在 -90 ~ 90 之间' })
+  birthLatitude?: number | null;
+
+  @ApiPropertyOptional({
+    description: '出生地经度（-180 ~ 180，西半球为负）；**必须与 birthLatitude 同时提供**',
+    example: 120.1551,
+    nullable: true,
+    minimum: -180,
+    maximum: 180,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 6 }, { message: 'birthLongitude 必须是数字' })
+  @Min(-180, { message: 'birthLongitude 必须在 -180 ~ 180 之间' })
+  @Max(180, { message: 'birthLongitude 必须在 -180 ~ 180 之间' })
+  birthLongitude?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      '出生地的**标准**时区偏移（小时，东八区为 8）。' +
+      '**不要**替服务端算夏令时：中国 1986–1991 年实行过夏令时，服务端会按出生日期自动叠加。' +
+      '海外出生填该城市的标准时区（如东京 9、纽约 -5）',
+    example: 8,
+    nullable: true,
+    minimum: -12,
+    maximum: 14,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'birthTimezoneOffset 必须是数字' })
+  @Min(-12, { message: 'birthTimezoneOffset 必须在 -12 ~ 14 之间' })
+  @Max(14, { message: 'birthTimezoneOffset 必须在 -12 ~ 14 之间' })
+  birthTimezoneOffset?: number | null;
 
   @ApiPropertyOptional({
     description: '乐观锁版本号（来自上次 GET/PATCH 响应）；不传则「最后写入者胜」',

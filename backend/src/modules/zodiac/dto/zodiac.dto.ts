@@ -7,7 +7,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, Matches } from 'class-validator';
+import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 import { ZODIAC_SIGNS, type ZodiacSign } from '../zodiac.types';
 
@@ -45,4 +45,29 @@ export class ZodiacMatchQueryDto {
   @ApiProperty({ description: '对方星座', enum: ZODIAC_SIGNS, example: 'VIRGO' })
   @IsIn(ZODIAC_SIGNS, { message: 'b 取值不合法' })
   b!: ZodiacSign;
+}
+
+/**
+ * 星盘 query
+ *
+ * 目前**不接受任何参数** —— 出生信息一律从账号里读（见 `ZodiacService.getChart`）。
+ * 保留这个 DTO 是为了：① Swagger 上有一个明确的空参数对象；
+ * ② 将来若要支持"临时看别人的盘"（不写库），参数加在这里就行。
+ *
+ * ⚠ 刻意**不提供** `birthday`/`latitude` 这类覆盖参数：星盘是会员功能，
+ * 一旦允许请求方自带出生数据，前端就能绕过会员门槛自行拼出完整盘。
+ */
+export class ZodiacChartQueryDto {}
+
+/** 出生城市搜索 query */
+export class ZodiacCityQueryDto {
+  @ApiPropertyOptional({
+    description: '关键词（城市名或省份，如 `杭州` / `浙江` / `Hangzhou`）；为空时返回热门城市',
+    example: '杭州',
+    maxLength: 32,
+  })
+  @IsOptional()
+  @IsString({ message: 'keyword 必须是字符串' })
+  @MaxLength(32, { message: 'keyword 最长 32 个字符' })
+  keyword?: string;
 }

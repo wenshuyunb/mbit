@@ -13,9 +13,15 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { Throttle } from '@nestjs/throttler';
 
 import { CurrentUser, Public } from '../../common/decorators';
-import { ZodiacFortuneQueryDto, ZodiacMatchQueryDto } from './dto/zodiac.dto';
-import { ZodiacService, type DailyFortuneResponse, type ZodiacProfileView } from './zodiac.service';
+import { ZodiacChartQueryDto, ZodiacCityQueryDto, ZodiacFortuneQueryDto, ZodiacMatchQueryDto } from './dto/zodiac.dto';
+import {
+  ZodiacService,
+  type DailyFortuneResponse,
+  type ZodiacChartResponse,
+  type ZodiacProfileView,
+} from './zodiac.service';
 import type { MonthlyFortuneView, WeeklyFortuneView, ZodiacMatchView } from './zodiac-fortune.util';
+import type { BirthCity } from './zodiac-city.data';
 import type { ZodiacSign } from './zodiac.types';
 
 @ApiTags('星座运势')
@@ -123,6 +129,64 @@ export class ZodiacController {
     @Query() query: ZodiacFortuneQueryDto,
   ): Promise<MonthlyFortuneView> {
     return this.zodiacService.getMonthly(userId, query.date, query.birthday);
+  }
+
+  @Get('chart')
+  @ApiBearerAuth('user-token')
+  @Throttle({ global: { limit: 60, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '本命星盘（会员给完整盘，非会员给三巨头预览）',
+    description: [
+      '按账号里的**出生日期 + 出生时间 + 出生城市**实时计算本命星盘：十大行星位置、上升点与天顶、',
+      '十二宫（整宫制）、行星相位、四元素与三分类分布、星群与命主星。',
+      '',
+      '**权限**：会员返回完整 `chart`；非会员返回 `preview`（太阳/月亮/上升的**星座名**，不含度数、',
+      '宫位与相位），且 `chart` 恒为 `null` —— 不是打码，而是根本不返回。',
+      '',
+      '**缺信息时的行为**（刻意"宁可少给，不给错"）：',
+      '  · 缺出生时间 → 没有上升点/天顶/十二宫（上升星座约 2 小时换一个，用"默认中午"推算对大多数人是错的）；',
+      '  · 缺出生城市 → 同样没有四轴（中国横跨 62 个经度，按固定城市猜会让新疆用户错一个星座）。',
+      '两种情况都会返回对应的提示文案，前端直接展示并引导补全。',
+      '',
+      '`access.lockedSections` 与 `access.membershipHint` 由服务端下发，前端**不得硬编码**。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  @ApiResponse({ status: 400, description: '尚未设置出生日期（`30019`）' })
+  async getChart(
+    @CurrentUser('userId') userId: string,
+    @Query() query: ZodiacChartQueryDto,
+  ): Promise<ZodiacChartResponse> {
+    // 目前没有可用的查询参数：出生信息一律从账号读（见 ZodiacChartQueryDto 的说明）。
+    // 这里显式引用一下，避免"留个没用的参数"变成 lint 噪音。
+    void query;
+
+    return this.zodiacService.getChart(userId);
+  }
+
+  @Get('cities')
+  /**
+   * 出生城市搜索：**公开**（同 `signs`，漏了 `@Public()` 会被全局守卫拦成 401）
+   *
+   * 内容只是一张静态城市表（名称/经纬度/时区），不含任何用户数据。
+   */
+  @Public()
+  @Throttle({ global: { limit: 120, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '出生城市搜索（给"出生地"选择器用）',
+    description: [
+      '按关键词搜索内置城市表，返回城市名、所属地区、纬度、经度与**时区偏移**。',
+      '',
+      '⚠ 为什么必须存时区偏移：中国 1986–1991 年实行过夏令时，海外出生还要按当地时区。',
+      '前端选完城市后，应把 `birthPlace` + `birthLatitude` + `birthLongitude` + `birthTimezoneOffset`',
+      '**一起**通过 `PATCH /users/me` 存进账号 —— 只存城市名会让后端少了经度，算不出上升点。',
+      '',
+      '关键词为空时返回热门城市。**不需要登录**。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  searchCities(@Query() query: ZodiacCityQueryDto): readonly BirthCity[] {
+    return this.zodiacService.searchBirthCities(query.keyword);
   }
 
   @Get('match')
