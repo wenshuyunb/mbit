@@ -89,6 +89,11 @@ describe('星盘页：缺信息时不猜', () => {
     expect(source).toContain('mode="time"');
     expect(source).not.toMatch(/placeholder="[^"]*(出生时间|时间)[^"]*"/);
   });
+
+  it('没设生日时本页直接给日期选择器（不要让用户跳回上一页再找回来）', () => {
+    expect(source).toContain('mode="date"');
+    expect(source).toContain('saveBirthday');
+  });
 });
 
 describe('星盘页：服务端文案与合规声明', () => {

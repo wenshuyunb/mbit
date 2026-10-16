@@ -73,6 +73,20 @@ const notices = computed<string[]>(() => {
 /** 出生时间选择器（`HH:mm`），默认 12:00 */
 const timeDraft = ref('12:00');
 
+/** 出生日期选择器（没设生日时在本页直接选，不必跳回上一页） */
+const birthdayDraft = ref('1996-01-01');
+
+/** 今天的 `YYYY-MM-DD`（本地时区口径：用户眼里的"今天"就是本地今天） */
+const localToday = (): string => {
+  const now = new Date();
+  const month = `${now.getMonth() + 1}`.padStart(2, '0');
+  const day = `${now.getDate()}`.padStart(2, '0');
+
+  return `${now.getFullYear()}-${month}-${day}`;
+};
+
+const today = localToday();
+
 /** 按 key 取行星位置（**不用数组下标**：顺序一变，太阳月亮就会互换，而且看不出错） */
 const bodyOf = (key: string) => chart.value?.positions.find((item) => item.key === key) ?? null;
 
@@ -118,6 +132,33 @@ const saveTime = async (): Promise<void> => {
   } finally {
     saving.value = false;
   }
+};
+
+/**
+ * 保存出生日期
+ *
+ * ⚠ 这一页**自己也放一个日期选择器**，而不是只让用户"回上一页去选"：
+ * 星盘是必须填生日才能看内容的地方，为填一个日期让用户跳一次页面、
+ * 还得自己找回来，是没必要的绕路。
+ */
+const saveBirthday = async (): Promise<void> => {
+  if (saving.value) return;
+
+  saving.value = true;
+  try {
+    await http.patch('/users/me', { birthday: birthdayDraft.value });
+    uni.showToast({ title: '已记住你的生日', icon: 'none' });
+    await bootstrap();
+  } catch (error) {
+    console.error('[zodiac] 保存出生日期失败：', error);
+    uni.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
+  } finally {
+    saving.value = false;
+  }
+};
+
+const onBirthdayChange = (event: { detail: { value: string } }): void => {
+  birthdayDraft.value = event.detail.value;
 };
 
 const onTimeChange = (event: { detail: { value: string } }): void => {
@@ -186,10 +227,6 @@ const aspectClass = (nature: string): string =>
       ? 'chart__aspect--tense'
       : 'chart__aspect--neutral';
 
-const goIndex = (): void => {
-  uni.navigateTo({ url: '/pkgZodiac/pages/index' });
-};
-
 /** 元素分布条的宽度（至少 6%，否则 0 个和 1 个看起来一样） */
 const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
 </script>
@@ -205,13 +242,19 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
       <button class="chart__state-action" @tap="bootstrap">重新加载</button>
     </view>
 
-    <!-- 没设出生日期：星盘的唯一硬前提，先去选 -->
+    <!-- 没设出生日期：星盘的唯一硬前提，本页直接选，不必跳回上一页 -->
     <view v-else-if="needsBirthday" class="card chart__setup">
       <text class="chart__setup-title">先选一次你的出生日期</text>
       <text class="chart__setup-desc">
-        星盘要按你出生那一刻的星空来算，所以出生日期是前提。回上一页选好日期，这里立刻就有内容。
+        星盘要按你出生那一刻的星空来算，所以出生日期是前提。只取月与日判定星座，年份用来算行星位置。
       </text>
-      <button class="chart__setup-button" @tap="goIndex">去选出生日期</button>
+      <picker mode="date" :value="birthdayDraft" start="1900-01-01" :end="today" @change="onBirthdayChange">
+        <view class="chart__setup-picker">
+          <text class="chart__setup-value">{{ birthdayDraft }}</text>
+          <text class="chart__setup-arrow">修改 ›</text>
+        </view>
+      </picker>
+      <button class="chart__setup-button" :disabled="saving" @tap="saveBirthday">开始</button>
     </view>
 
     <template v-else-if="data">
@@ -471,6 +514,24 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
     font-size: $font-size-sm;
     line-height: $line-height-loose;
     color: $color-text-secondary;
+  }
+
+  &__setup-picker {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: $space-sm 0;
+    margin-top: $space-sm;
+  }
+
+  &__setup-value {
+    font-size: $font-size-md;
+    color: $color-primary;
+  }
+
+  &__setup-arrow {
+    font-size: $font-size-xs;
+    color: $color-text-placeholder;
   }
 
   &__hero {
