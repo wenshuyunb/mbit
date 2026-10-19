@@ -30,7 +30,15 @@
 import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
-import { getNatalChart, searchBirthCities, type BirthCity, type ZodiacChart } from '@/api/zodiac';
+import {
+  getNatalChart,
+  getRegionTree,
+  resolveRegion,
+  searchBirthCities,
+  type BirthCity,
+  type RegionTree,
+  type ZodiacChart,
+} from '@/api/zodiac';
 import { http } from '@/api/request';
 import { ApiError, ERROR_CODES } from '@/api/types';
 
@@ -40,11 +48,29 @@ const loadError = ref('');
 const needsBirthday = ref(false);
 const data = ref<ZodiacChart | null>(null);
 
-/** 出生城市选择器 */
-const cityKeyword = ref('');
-const cityOptions = ref<BirthCity[]>([]);
+/** 出生地选择面板 */
 const cityPanelOpen = ref(false);
 const saving = ref(false);
+
+/**
+ * 面板的两种入口
+ *
+ * 「国内」用三列转盘（省 → 市 → 县），这是用户明确要求的交互方式：
+ * 像时间选择那样转轮盘，而不是打字搜索。
+ * 「港澳台·海外」没有省市县层级，只能搜索 —— 但那是极少数用户，
+ * 不值得为它把三列结构改造成变长。
+ */
+const regionMode = ref<'DOMESTIC' | 'OVERSEAS'>('DOMESTIC');
+
+/** 三级联动数据（拉一次缓存在内存里；约 30 KB） */
+const regionTree = ref<RegionTree | null>(null);
+const regionLoading = ref(false);
+/** 转盘当前三列的下标 */
+const regionIndex = ref<number[]>([0, 0, 0]);
+
+/** 港澳台与海外的搜索 */
+const cityKeyword = ref('');
+const cityOptions = ref<BirthCity[]>([]);
 
 const chart = computed(() => data.value?.chart ?? null);
 const preview = computed(() => data.value?.preview ?? null);
@@ -170,12 +196,91 @@ const onCitySearchConfirm = (event: { detail: { value: string } }): void => {
   void searchCity(event.detail.value);
 };
 
-/** 打开出生城市选择器并拉热门城市 */
+/** 打开出生城市面板：默认进三级轮盘，并确保省市区数据已就位 */
 const openCityPanel = async (): Promise<void> => {
   cityPanelOpen.value = true;
+  regionLoading.value = regionTree.value === null;
 
-  if (cityOptions.value.length === 0) {
-    await searchCity('');
+  if (regionTree.value !== null) return;
+
+  try {
+    regionTree.value = await getRegionTree();
+  } catch (error) {
+    console.error('[zodiac] 省市区数据加载失败：', error);
+    uni.showToast({ title: '省市区数据加载失败，请重试', icon: 'none' });
+  } finally {
+    regionLoading.value = false;
+  }
+};
+
+/**
+ * 三列转盘的可选项
+ *
+ * 结构固定三列：`[省份, 地级市, 县/区]`。
+ *   · 第一列变化 → 第二、三列重置到第 0 项
+ *   · 第二列变化 → 第三列重置到第 0 项
+ * 不重置的话，上一次停在第 5 项的下级列会指向一个不存在的下标（越界）。
+ */
+const regionRange = computed<string[][]>(() => {
+  const tree = regionTree.value;
+  if (tree === null) return [[], [], []];
+
+  const [provinceIndex, cityIndex] = regionIndex.value;
+  const province = tree.provinces[provinceIndex] ?? tree.provinces[0];
+  const cities = province?.cities ?? [];
+  const city = cities[cityIndex] ?? cities[0];
+
+  return [tree.provinces.map((item) => item.name), cities.map((item) => item.name), [...(city?.counties ?? [])]];
+});
+
+/** 当前三列选中的名称（面板上直接显示，确认前用户就知道自己选了什么） */
+const regionSelection = computed<{ province: string; city: string; county: string }>(() => {
+  const range = regionRange.value;
+  const [provinceIndex, cityIndex, countyIndex] = regionIndex.value;
+
+  return {
+    province: range[0][provinceIndex] ?? '',
+    city: range[1][cityIndex] ?? '',
+    county: range[2][countyIndex] ?? '',
+  };
+});
+
+/** 滚轮停止时同步下标（`@columnchange`） */
+const onRegionColumnChange = (event: { detail: { column: number; value: number } }): void => {
+  const next = [...regionIndex.value];
+
+  next[event.detail.column] = event.detail.value;
+
+  if (event.detail.column === 0) {
+    next[1] = 0;
+    next[2] = 0;
+  } else if (event.detail.column === 1) {
+    next[2] = 0;
+  }
+
+  regionIndex.value = next;
+};
+
+/** 点「确定」后：三级路径 → 带经纬度的城市 → 写入账号 */
+const onRegionConfirm = async (event: { detail: { value: number[] } }): Promise<void> => {
+  const [provinceIndex, cityIndex, countyIndex] = event.detail.value;
+
+  regionIndex.value = [provinceIndex, cityIndex, countyIndex];
+
+  const { province, city, county } = regionSelection.value;
+  if (province === '' || city === '' || county === '') return;
+
+  saving.value = true;
+  try {
+    // 三级路径换具体城市：经纬度由服务端给出，前端不自己拼
+    const resolved = await resolveRegion(province, city, county);
+
+    await saveCityResolved(resolved);
+  } catch (error) {
+    console.error('[zodiac] 出生地解析失败：', error);
+    uni.showToast({ title: '这个地点暂时取不到，请换一个', icon: 'none' });
+  } finally {
+    saving.value = false;
   }
 };
 
@@ -189,6 +294,11 @@ const openCityPanel = async (): Promise<void> => {
  */
 const closeCityPanel = (): void => {
   cityPanelOpen.value = false;
+};
+
+/** 切换「中国大陆 / 港澳台·海外」 */
+const switchRegionMode = (mode: 'DOMESTIC' | 'OVERSEAS'): void => {
+  regionMode.value = mode;
 };
 
 /** 面板自身吞掉点击（配合 `@tap.stop`，避免点面板也关掉它） */
@@ -208,7 +318,7 @@ const searchCity = async (keyword: string): Promise<void> => {
 };
 
 /**
- * 选中出生城市
+ * 选中出生城市（国内三级轮盘 / 港澳台与海外搜索 共用的收尾逻辑）
  *
  * ⚠ 四个字段**一起提交**：城市名只是给人看的，经纬度才是算上升星座的依据。
  * 只存城市名的话，后端少了经度就算不出恒星时 —— 那种"存了个看起来对的值、
@@ -218,22 +328,28 @@ const searchCity = async (keyword: string): Promise<void> => {
  * 而上升星座约 2 小时换一个 —— 默认按北京时间算会让那部分用户**整整错一个星座**，
  * 且他自己不会知道。这类"默认值对一部分人是错的"必须问，不能猜。
  */
+const saveCityResolved = async (city: BirthCity): Promise<void> => {
+  const timezoneOffset = await resolveTimezoneOffsetFor(city);
+
+  await http.patch('/users/me', {
+    birthPlace: city.name,
+    birthLatitude: city.latitude,
+    birthLongitude: city.longitude,
+    birthTimezoneOffset: timezoneOffset,
+  });
+
+  cityPanelOpen.value = false;
+  uni.showToast({ title: `出生地已设为${city.name}`, icon: 'none' });
+  await bootstrap();
+};
+
+/** 港澳台与海外：从搜索列表里选 */
 const pickCity = async (city: BirthCity): Promise<void> => {
   if (saving.value) return;
 
-  const timezoneOffset = await resolveTimezoneOffsetFor(city);
-
   saving.value = true;
   try {
-    await http.patch('/users/me', {
-      birthPlace: city.name,
-      birthLatitude: city.latitude,
-      birthLongitude: city.longitude,
-      birthTimezoneOffset: timezoneOffset,
-    });
-    cityPanelOpen.value = false;
-    uni.showToast({ title: `出生地已设为${city.name}`, icon: 'none' });
-    await bootstrap();
+    await saveCityResolved(city);
   } catch (error) {
     console.error('[zodiac] 保存出生城市失败：', error);
     uni.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
@@ -504,40 +620,88 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
       </view>
     </template>
 
-    <!-- 出生城市选择面板 -->
+    <!-- 出生地选择面板 -->
     <view v-if="cityPanelOpen" class="chart__mask" @tap="closeCityPanel">
       <view class="chart__panel" @tap.stop="stopPropagation">
         <view class="chart__panel-head">
-          <text class="chart__panel-title">选择出生城市</text>
+          <text class="chart__panel-title">选择出生地</text>
           <text class="chart__panel-close" @tap="closeCityPanel">关闭</text>
         </view>
-        <text class="chart__panel-hint">上升星座取决于当地的星空，所以要精确到城市</text>
-        <input
-          class="chart__panel-input"
-          type="text"
-          :value="cityKeyword"
-          placeholder="输入城市名 / 县名，如 武平县、龙岩、杭州"
-          @confirm="onCitySearchConfirm"
-        />
-        <scroll-view class="chart__panel-list" scroll-y>
-          <view
-            v-for="city in cityOptions"
-            :key="`${city.region}-${city.name}`"
-            class="chart__panel-item"
-            @tap="pickCity(city)"
+
+        <!-- 两个入口：国内用转盘，港澳台/海外只能搜索（没有省市县层级） -->
+        <view class="chart__mode">
+          <text
+            class="chart__mode-item"
+            :class="{ 'chart__mode-item--active': regionMode === 'DOMESTIC' }"
+            @tap="switchRegionMode('DOMESTIC')"
+            >中国大陆</text
           >
-            <view class="chart__panel-item-main">
-              <text class="chart__panel-city">{{ city.name }}</text>
-              <text v-if="city.level === 'COUNTY'" class="chart__panel-tag">县/区</text>
+          <text
+            class="chart__mode-item"
+            :class="{ 'chart__mode-item--active': regionMode === 'OVERSEAS' }"
+            @tap="switchRegionMode('OVERSEAS')"
+            >港澳台 · 海外</text
+          >
+        </view>
+
+        <template v-if="regionMode === 'DOMESTIC'">
+          <text class="chart__panel-hint">
+            {{
+              regionLoading
+                ? '正在加载全国省市区…'
+                : `已选：${regionSelection.province} ${regionSelection.city} ${regionSelection.county}`
+            }}
+          </text>
+
+          <!-- 三列转盘：省 → 市 → 县，和选时间的交互一致 -->
+          <picker
+            v-if="regionTree !== null"
+            class="chart__wheel"
+            mode="multiSelector"
+            :range="regionRange"
+            :value="regionIndex"
+            @columnchange="onRegionColumnChange"
+            @change="onRegionConfirm"
+          >
+            <view class="chart__wheel-trigger" :class="{ 'chart__wheel-trigger--busy': saving }">
+              <text class="chart__wheel-text">点击选择 省 / 市 / 县</text>
+              <text class="chart__wheel-arrow">{{ saving ? '处理中…' : '转动选择 ›' }}</text>
             </view>
-            <text class="chart__panel-region">{{ city.region }}</text>
-          </view>
-          <view v-if="cityOptions.length === 0" class="chart__panel-empty">
-            <text class="chart__panel-empty-line">没有匹配的城市</text>
-            <text class="chart__panel-empty-line">可以试试只输入前两个字，或换成所属的地级市（例如「龙岩」）</text>
-            <text class="chart__panel-empty-line">选到地级市就够了：县城与市区算出的上升星座通常只差不到 1°</text>
-          </view>
-        </scroll-view>
+          </picker>
+
+          <text class="chart__panel-note">
+            选到地级市就够了：县城与市区算出来的上升星座通常只差不到 1°（一个星座是 30°）。
+            没有区县的城市（如东莞、中山）第三列显示「全市」，选它即可。
+          </text>
+        </template>
+
+        <template v-else>
+          <text class="chart__panel-hint">港澳台与海外没有省市县三级，直接搜索</text>
+          <input
+            class="chart__panel-input"
+            type="text"
+            :value="cityKeyword"
+            placeholder="如 香港 / 台北 / 东京 / 纽约"
+            @confirm="onCitySearchConfirm"
+          />
+          <scroll-view class="chart__panel-list" scroll-y>
+            <view
+              v-for="city in cityOptions"
+              :key="`${city.region}-${city.name}`"
+              class="chart__panel-item"
+              @tap="pickCity(city)"
+            >
+              <view class="chart__panel-item-main">
+                <text class="chart__panel-city">{{ city.name }}</text>
+              </view>
+              <text class="chart__panel-region">{{ city.region }}</text>
+            </view>
+            <view v-if="cityOptions.length === 0" class="chart__panel-empty">
+              <text class="chart__panel-empty-line">还没有搜索结果</text>
+              <text class="chart__panel-empty-line">输入城市或国家名后按回车，如「香港」「东京」「纽约」</text>
+            </view>
+          </scroll-view>
+        </template>
       </view>
     </view>
   </view>
@@ -1017,9 +1181,64 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
 
   &__panel-hint {
     display: block;
-    margin-top: $space-xxs;
+    margin-top: $space-xs;
     font-size: $font-size-xs;
     color: $color-text-placeholder;
+  }
+
+  &__panel-note {
+    display: block;
+    margin-top: $space-sm;
+    font-size: $font-size-xs;
+    line-height: $line-height-loose;
+    color: $color-text-placeholder;
+  }
+
+  &__mode {
+    display: flex;
+    margin-top: $space-sm;
+  }
+
+  &__mode-item {
+    flex: 1;
+    padding: $space-xs 0;
+    font-size: $font-size-sm;
+    color: $color-text-secondary;
+    text-align: center;
+    background-color: $color-bg-hover;
+    border-radius: $radius-sm;
+  }
+
+  &__mode-item--active {
+    color: $color-text-inverse;
+    background-color: $color-primary;
+  }
+
+  &__wheel {
+    margin-top: $space-sm;
+  }
+
+  &__wheel-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: $space-md;
+    background-color: $color-bg-hover;
+    border-radius: $radius-sm;
+  }
+
+  &__wheel-trigger--busy {
+    opacity: 0.6;
+  }
+
+  &__wheel-text {
+    font-size: $font-size-sm;
+    color: $color-text-primary;
+  }
+
+  &__wheel-arrow {
+    font-size: $font-size-xs;
+    color: $color-primary;
   }
 
   &__panel-input {

@@ -587,3 +587,108 @@ export const findCityByName = (name: string): BirthCity | null => {
 
   return byPrefix ?? null;
 };
+
+// ============================================================================
+// 三级联动（省 / 市 / 县）—— 给小程序的多列转盘用
+// ============================================================================
+
+/**
+ * 第三列的"整市"哨兵
+ *
+ * 有 28 个地级市**本来就没有区县**（东莞、中山、嘉峪关、儋州、神农架林区这类
+ * "直筒子市"或省直辖县级市）。轮盘是三列固定的，第三列不能空着，
+ * 因此用这个哨兵值占位；用户选中它时直接用地级市自己的坐标。
+ */
+export const WHOLE_CITY_OPTION = '全市';
+
+/** 一个地级市节点：名称 + 可选的区县名 */
+export interface RegionCity {
+  name: string;
+  counties: readonly string[];
+}
+
+/** 一个省级节点：名称 + 下属地级市 */
+export interface RegionProvince {
+  name: string;
+  cities: readonly RegionCity[];
+}
+
+/** 三级联动数据（**只含名称**，坐标在选定后用 `resolveRegionPath` 取） */
+export interface RegionTree {
+  provinces: readonly RegionProvince[];
+}
+
+/** 中文排序（Node 的 zh 排序规则就是拼音序，比按数据文件顺序可预期得多） */
+const byChinese = (left: string, right: string): number => left.localeCompare(right, 'zh');
+
+/**
+ * 构建三级联动数据（模块加载时算一次）
+ *
+ * 层级来自 `region` 字段的两种形态：
+ *   · 地级市：`region` = 省份名                       → 挂到该省下
+ *   · 县/区：`region` = `省份名 + 地级市名`           → 挂到该市下
+ *
+ * ⚠ 直辖市的区县归属是 `北京市北京市`（省份全称 + 地级市名都叫"北京市"），
+ * 这不是脏数据，而是同一套规则的自然结果 —— 用字符串拼接匹配即可，不必特判。
+ *
+ * ⚠ 港澳台与海外**不在**这棵树里：它们是 `level: null`，没有省市县层级。
+ * 前端用"国内 / 港澳台·海外"两个入口分开处理，而不是硬塞进三列轮盘。
+ */
+const buildRegionTree = (): RegionTree => {
+  const prefectures = BIRTH_CITIES.filter((city) => city.level === 'PREFECTURE');
+  const counties = BIRTH_CITIES.filter((city) => city.level === 'COUNTY');
+
+  const provinceNames = [...new Set(prefectures.map((city) => city.region))].sort(byChinese);
+
+  const provinces = provinceNames.map((provinceName) => {
+    const cities = prefectures
+      .filter((city) => city.region === provinceName)
+      .sort((left, right) => byChinese(left.name, right.name))
+      .map((city) => {
+        const childNames = counties
+          .filter((county) => county.region === `${provinceName}${city.name}`)
+          .map((county) => county.name)
+          .sort(byChinese);
+
+        return {
+          name: city.name,
+          // 没有区县的地级市用哨兵占位，保证第三列永远有值可选
+          counties: childNames.length > 0 ? childNames : [WHOLE_CITY_OPTION],
+        };
+      });
+
+    return { name: provinceName, cities };
+  });
+
+  return { provinces };
+};
+
+/** 三级联动数据（模块级缓存：3100+ 条名称只构建一次） */
+export const REGION_TREE: RegionTree = buildRegionTree();
+
+/**
+ * 按「省 / 市 / 县」三级路径取具体城市（含经纬度与时区）
+ *
+ * 找不到返回 null —— 由调用方给出 400，而不是悄悄回退到某个默认城市：
+ * 回退会让用户选的地方与实际算盘的地方不一致，是最难排查的一类错误。
+ */
+export const resolveRegionPath = (province: string, city: string, county: string): BirthCity | null => {
+  const provinceName = province.trim();
+  const cityName = city.trim();
+  const countyName = county.trim();
+
+  // "全市" 或第三列就是市名本身 → 取地级市坐标
+  if (countyName === WHOLE_CITY_OPTION || countyName === cityName) {
+    return (
+      BIRTH_CITIES.find(
+        (item) => item.level === 'PREFECTURE' && item.region === provinceName && item.name === cityName,
+      ) ?? null
+    );
+  }
+
+  return (
+    BIRTH_CITIES.find(
+      (item) => item.level === 'COUNTY' && item.region === `${provinceName}${cityName}` && item.name === countyName,
+    ) ?? null
+  );
+};

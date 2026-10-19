@@ -13,7 +13,13 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { Throttle } from '@nestjs/throttler';
 
 import { CurrentUser, Public } from '../../common/decorators';
-import { ZodiacChartQueryDto, ZodiacCityQueryDto, ZodiacFortuneQueryDto, ZodiacMatchQueryDto } from './dto/zodiac.dto';
+import {
+  ZodiacChartQueryDto,
+  ZodiacCityQueryDto,
+  ZodiacFortuneQueryDto,
+  ZodiacMatchQueryDto,
+  ZodiacRegionResolveQueryDto,
+} from './dto/zodiac.dto';
 import {
   ZodiacService,
   type DailyFortuneResponse,
@@ -21,7 +27,7 @@ import {
   type ZodiacProfileView,
 } from './zodiac.service';
 import type { MonthlyFortuneView, WeeklyFortuneView, ZodiacMatchView } from './zodiac-fortune.util';
-import type { BirthCity } from './zodiac-city.data';
+import type { BirthCity, RegionTree } from './zodiac-city.data';
 import type { ZodiacSign } from './zodiac.types';
 
 @ApiTags('星座运势')
@@ -187,6 +193,55 @@ export class ZodiacController {
   @ApiResponse({ status: 200, description: '获取成功' })
   searchCities(@Query() query: ZodiacCityQueryDto): readonly BirthCity[] {
     return this.zodiacService.searchBirthCities(query.keyword);
+  }
+
+  @Get('regions')
+  /**
+   * 三级联动数据：**公开**（同 `signs` / `cities`，漏了 `@Public()` 会被全局守卫拦成 401）
+   */
+  @Public()
+  @Throttle({ global: { limit: 60, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '出生地的三级联动数据（省 / 市 / 县）',
+    description: [
+      '返回「省 → 地级市 → 县/区」的**名称树**（不含经纬度），给小程序的多列转盘用：',
+      '小程序的 `picker mode="multiSelector"` 需要三列同时就位，用关键词搜索拼不出层级。',
+      '',
+      '规模：31 个省级 + 360 个地级市 + 2812 个县级单位。',
+      '',
+      '⚠ 没有区县的地级市（东莞、中山、嘉峪关、儋州、神农架林区这类"直筒子市"）第三列只有 ',
+      '`全市` 一个选项，选中即用地级市坐标 —— 这类城市本来就没有区县一级。',
+      '',
+      '⚠ 港澳台与海外**不在**这棵树里（它们没有省市县层级），请用 `GET /zodiac/cities?keyword=`。',
+      '',
+      '选定后用 `GET /zodiac/regions/resolve` 换到带经纬度的城市记录。**不需要登录**。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  getRegions(): RegionTree {
+    return this.zodiacService.getRegionTree();
+  }
+
+  @Get('regions/resolve')
+  @Public()
+  @Throttle({ global: { limit: 120, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '按「省 / 市 / 县」取具体城市（含经纬度与时区）',
+    description: [
+      '把三级联动选中的路径换成算星盘要用的城市记录：名称、所属地区、纬度、经度、',
+      '**标准时区偏移**，以及（新疆等地区）可能存在的另一种惯用时间 `altTimezoneOffset`。',
+      '',
+      '⚠ 路径不合法返回 `400`，**不会回退到默认城市** —— 回退会让用户选的地方与',
+      '实际算盘的地方不一致，属于最难排查的一类错误。',
+      '',
+      '⚠ 拿到结果后请把 `birthPlace` + `birthLatitude` + `birthLongitude` + `birthTimezoneOffset`',
+      '**一起**通过 `PATCH /users/me` 存进账号。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  @ApiResponse({ status: 400, description: '省份/城市/区县路径不合法（`10001`）' })
+  resolveRegion(@Query() query: ZodiacRegionResolveQueryDto): BirthCity {
+    return this.zodiacService.resolveRegion(query.province, query.city, query.county);
   }
 
   @Get('match')

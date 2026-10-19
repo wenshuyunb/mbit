@@ -20,7 +20,15 @@
  *      用户搜省份会看到一串随机顺序的城市。
  */
 
-import { BIRTH_CITIES, findCityByName, POPULAR_CITY_NAMES, searchCities } from './zodiac-city.data';
+import {
+  BIRTH_CITIES,
+  findCityByName,
+  POPULAR_CITY_NAMES,
+  REGION_TREE,
+  resolveRegionPath,
+  searchCities,
+  WHOLE_CITY_OPTION,
+} from './zodiac-city.data';
 import { ZODIAC_SIGNS } from './zodiac.types';
 
 /** 用户场景里用到的坐标（用于断言数值没被写错） */
@@ -209,5 +217,118 @@ describe('城市数据：检索与兼容', () => {
     for (const city of BIRTH_CITIES.slice(0, 50)) {
       expect(ZODIAC_SIGNS.includes(city.name as (typeof ZODIAC_SIGNS)[number])).toBe(false);
     }
+  });
+});
+
+describe('三级联动（省 / 市 / 县）—— 给小程序多列转盘用', () => {
+  const provinceNames = REGION_TREE.provinces.map((province) => province.name);
+
+  it('省级节点数量正常（31 个省级行政区，含 4 直辖市）', () => {
+    expect(REGION_TREE.provinces.length).toBe(31);
+
+    for (const municipality of ['北京市', '上海市', '天津市', '重庆市']) {
+      expect(provinceNames).toContain(municipality);
+    }
+  });
+
+  it('每个省至少有一个地级市，且每个地级市的第三列都非空（转盘不能有空列）', () => {
+    for (const province of REGION_TREE.provinces) {
+      expect(`${province.name}:${province.cities.length > 0}`).toBe(`${province.name}:true`);
+
+      for (const city of province.cities) {
+        expect(`${province.name}/${city.name}:${city.counties.length > 0}`).toBe(`${province.name}/${city.name}:true`);
+      }
+    }
+  });
+
+  it('【关键】用户场景：福建省 → 龙岩市 → 武平县 三级都在', () => {
+    const fujian = REGION_TREE.provinces.find((province) => province.name === '福建省');
+
+    expect(fujian).toBeDefined();
+
+    const longyan = fujian?.cities.find((city) => city.name === '龙岩市');
+
+    expect(longyan).toBeDefined();
+    expect(longyan?.counties).toContain('武平县');
+  });
+
+  it('没有区县的地级市用「全市」占位（东莞/中山/嘉峪关这类直筒子市）', () => {
+    const guangdong = REGION_TREE.provinces.find((province) => province.name === '广东省');
+    const dongguan = guangdong?.cities.find((city) => city.name === '东莞市');
+
+    expect(dongguan?.counties).toEqual([WHOLE_CITY_OPTION]);
+    expect(guangdong?.cities.find((city) => city.name === '中山市')?.counties).toEqual([WHOLE_CITY_OPTION]);
+  });
+
+  it('直辖市的区县挂在"北京市"下面（归属串是 北京市北京市，不是脏数据）', () => {
+    const beijing = REGION_TREE.provinces.find((province) => province.name === '北京市');
+
+    expect(beijing?.cities.map((city) => city.name)).toContain('北京市');
+    expect(beijing?.cities.find((city) => city.name === '北京市')?.counties).toContain('东城区');
+  });
+
+  it('港澳台与海外不在这棵树里（它们没有省市县层级，走关键词搜索）', () => {
+    for (const overseas of ['香港', '澳门', '台湾省', '日本', '美国']) {
+      expect(provinceNames).not.toContain(overseas);
+    }
+  });
+
+  it('【关键】三级路径能换回带经纬度的城市记录', () => {
+    const wuping = resolveRegionPath('福建省', '龙岩市', '武平县');
+
+    expect(wuping).not.toBeNull();
+    expect(wuping?.name).toBe('武平县');
+    expect(Math.abs((wuping?.longitude ?? 0) - 116.14)).toBeLessThan(0.2);
+    expect(wuping?.timezoneOffset).toBe(8);
+  });
+
+  it('「全市」与"第三列传市名"都能换回地级市坐标', () => {
+    const bySentinel = resolveRegionPath('广东省', '东莞市', WHOLE_CITY_OPTION);
+    const byCityName = resolveRegionPath('广东省', '东莞市', '东莞市');
+
+    expect(bySentinel?.name).toBe('东莞市');
+    expect(byCityName?.name).toBe('东莞市');
+    expect(bySentinel?.latitude).toBe(byCityName?.latitude);
+  });
+
+  it('直辖市选到区县时用的是区的坐标（不是市中心的）', () => {
+    const dongcheng = resolveRegionPath('北京市', '北京市', '东城区');
+    const shanghai = resolveRegionPath('上海市', '上海市', '全市');
+
+    expect(dongcheng?.name).toBe('东城区');
+    expect(shanghai?.name).toBe('上海市');
+    // 区与市中心的坐标不应完全相同
+    expect(dongcheng?.latitude).not.toBe(shanghai?.latitude);
+  });
+
+  it('【关键】路径不合法时返回 null（绝不回退到某个默认城市）', () => {
+    expect(resolveRegionPath('福建省', '龙岩市', '不存在的县')).toBeNull();
+    expect(resolveRegionPath('不存在省', '龙岩市', '武平县')).toBeNull();
+    expect(resolveRegionPath('福建省', '杭州市', '武平县')).toBeNull();
+  });
+
+  it('树里的每个叶子都能换回记录（否则轮盘选完会 400）', () => {
+    let checked = 0;
+
+    for (const province of REGION_TREE.provinces) {
+      for (const city of province.cities) {
+        for (const county of city.counties) {
+          expect(
+            `${province.name}/${city.name}/${county}:${resolveRegionPath(province.name, city.name, county) !== null}`,
+          ).toBe(`${province.name}/${city.name}/${county}:true`);
+          checked += 1;
+        }
+      }
+    }
+
+    // 叶子数 = 2812 个县/区 + 28 个没有区县的地级市的「全市」占位 = 2840。
+    // 数量对不上说明树与数据脱节（例如某一级没读全）。
+    expect(checked).toBeGreaterThan(2800);
+  });
+
+  it('新疆的选择会带出 UTC+6 的备用时区（前端据此弹窗询问）', () => {
+    const urumqi = resolveRegionPath('新疆维吾尔自治区', '乌鲁木齐市', '全市');
+
+    expect(urumqi?.altTimezoneOffset).toBe(6);
   });
 });

@@ -7,7 +7,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
 
 import { ZODIAC_SIGNS, type ZodiacSign } from '../zodiac.types';
 
@@ -70,4 +70,31 @@ export class ZodiacCityQueryDto {
   @IsString({ message: 'keyword 必须是字符串' })
   @MaxLength(32, { message: 'keyword 最长 32 个字符' })
   keyword?: string;
+}
+
+/**
+ * 三级联动：按「省 / 市 / 县」取具体城市
+ *
+ * ⚠ 三个参数都必填且必须**成对匹配**：路径不合法时后端返回 400，
+ * 而不是悄悄回退到某个默认城市 —— 回退会让用户选的地方与实际算盘的地方不一致。
+ */
+export class ZodiacRegionResolveQueryDto {
+  @ApiProperty({ description: '省级名称（如 `福建省` / `北京市`）', example: '福建省', maxLength: 32 })
+  @IsString({ message: 'province 必须是字符串' })
+  @Length(1, 32, { message: 'province 长度需在 1–32 个字符之间' })
+  province!: string;
+
+  @ApiProperty({ description: '地级市名称（如 `龙岩市`）', example: '龙岩市', maxLength: 32 })
+  @IsString({ message: 'city 必须是字符串' })
+  @Length(1, 32, { message: 'city 长度需在 1–32 个字符之间' })
+  city!: string;
+
+  @ApiProperty({
+    description: '县/区名称（如 `武平县`）；没有区县的地级市传 `全市`',
+    example: '武平县',
+    maxLength: 32,
+  })
+  @IsString({ message: 'county 必须是字符串' })
+  @Length(1, 32, { message: 'county 长度需在 1–32 个字符之间' })
+  county!: string;
 }

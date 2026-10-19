@@ -302,6 +302,49 @@ export const searchBirthCities = (keyword?: string): Promise<BirthCity[]> =>
     showError: false,
   });
 
+// ----------------------------------------------------------------------------
+// 三级联动（省 / 市 / 县）—— 给多列转盘用
+// ----------------------------------------------------------------------------
+
+/** 一个地级市节点 */
+export interface RegionCity {
+  name: string;
+  /** 第三列的可选项；没有区县的地级市只有一个 `全市` */
+  counties: string[];
+}
+
+/** 一个省级节点 */
+export interface RegionProvince {
+  name: string;
+  cities: RegionCity[];
+}
+
+/** 「省 → 市 → 县」名称树（不含经纬度，选定后再换具体城市） */
+export interface RegionTree {
+  provinces: RegionProvince[];
+}
+
+/**
+ * 无区县的地级市在第三列的占位值
+ *
+ * 东莞、中山、嘉峪关这类"直筒子市"本来就没有区县一级；转盘三列固定，
+ * 第三列不能空 —— 用这个值占位，选中即用地级市坐标。
+ */
+export const WHOLE_CITY_OPTION = '全市';
+
+/** 三级联动数据（**公开接口**；体积约 30 KB，页面拉一次缓存在内存里即可） */
+export const getRegionTree = (): Promise<RegionTree> =>
+  http.get<RegionTree>('/zodiac/regions', undefined, { needAuth: false, showError: false });
+
+/**
+ * 按「省 / 市 / 县」取具体城市（含经纬度与时区）
+ *
+ * ⚠ 路径不合法时后端返回 400（`10001`）且**不会回退到默认城市** ——
+ * 前端据此提示"请重新选择"，绝不能拿一个别的地方去算盘。
+ */
+export const resolveRegion = (province: string, city: string, county: string): Promise<BirthCity> =>
+  http.get<BirthCity>('/zodiac/regions/resolve', { province, city, county }, { needAuth: false, showError: false });
+
 /**
  * 本命星盘
  *

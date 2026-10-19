@@ -23,7 +23,14 @@ import { ErrorCode } from '../../common/errors/error-code';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { EntitlementService } from '../membership/entitlement.service';
 import { SystemConfigService } from '../system/system-config.service';
-import { findCityByName, searchCities, type BirthCity } from './zodiac-city.data';
+import {
+  findCityByName,
+  REGION_TREE,
+  resolveRegionPath,
+  searchCities,
+  type BirthCity,
+  type RegionTree,
+} from './zodiac-city.data';
 import { buildNatalChart, CHART_LOCKED_SECTIONS, CHART_MEMBERSHIP_HINT, type NatalChart } from './zodiac-chart.util';
 import { ZODIAC_PROFILES } from './zodiac-content';
 import {
@@ -284,6 +291,28 @@ export class ZodiacService {
   /** 出生城市搜索（给"出生地"选择器用；数据是内置静态表，不查库） */
   searchBirthCities(keyword: string | undefined): readonly BirthCity[] {
     return searchCities(keyword ?? '');
+  }
+
+  /**
+   * 三级联动数据（省 / 市 / 县）
+   *
+   * 为什么另开一个接口而不是让前端用 `cities?keyword=` 自己拼：
+   * 小程序的多列转盘需要**三列同时就位**，靠关键词搜索拼不出层级；
+   * 而这份数据只含名称，体积远小于把经纬度一起下发。
+   */
+  getRegionTree(): RegionTree {
+    return REGION_TREE;
+  }
+
+  /** 按三级路径取具体城市（含经纬度与时区）；路径不合法时 400，**不回退到默认城市** */
+  resolveRegion(province: string, city: string, county: string): BirthCity {
+    const resolved = resolveRegionPath(province, city, county);
+
+    if (resolved === null) {
+      throw BusinessException.badRequest(ErrorCode.PARAM_INVALID, '出生地路径不合法，请重新选择省/市/县');
+    }
+
+    return resolved;
   }
 
   // ------------------------------------------------------------------ 内部

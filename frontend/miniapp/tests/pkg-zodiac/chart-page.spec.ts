@@ -176,9 +176,25 @@ describe('星盘页：缺信息时不猜', () => {
     expect(source).toContain('showModal');
   });
 
-  it('搜不到城市时给出可操作的建议（而不是只说"没有匹配"）', () => {
-    expect(source).toContain('龙岩');
-    expect(source).toContain('地级市');
+  it('国内出生地用**三列转盘**选择（省 / 市 / 县），不是打字搜索', () => {
+    expect(source).toContain('mode="multiSelector"');
+    expect(source).toContain('@columnchange="onRegionColumnChange"');
+    expect(source).toContain('@change="onRegionConfirm"');
+  });
+
+  it('上级列变化时重置下级列（否则下级会停在越界的旧下标上）', () => {
+    expect(source).toContain('next[1] = 0');
+    expect(source).toContain('next[2] = 0');
+  });
+
+  it('港澳台与海外走独立入口（它们没有省市县层级，硬塞进三列会选错）', () => {
+    expect(source).toContain('港澳台');
+    expect(source).toContain("'OVERSEAS'");
+  });
+
+  it('轮盘选完先向后端换坐标，再写入账号（经纬度不由前端拼）', () => {
+    expect(source).toContain('resolveRegion(');
+    expect(source).toContain('birthLatitude');
   });
 
   it('出生时间用系统时间选择器（不手输，手输一定会有人写成 3 点半）', () => {
