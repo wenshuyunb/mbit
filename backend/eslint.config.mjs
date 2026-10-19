@@ -127,5 +127,27 @@ export default tseslint.config(
     },
   },
 
+  /**
+   * 纯 Node 脚本（`.mjs`）：**不做类型感知检查**
+   *
+   * 这类文件（如 `scripts/build-china-cities.mjs`）是构建期工具，不进 `tsconfig.json`
+   * 的编译范围（`allowJs` 为 false），因此 `parserOptions.project` 解析不到它们 ——
+   * 不关掉类型感知就会直接报 "Parsing error"，让整个 lint 门禁失效。
+   */
+  {
+    files: ['scripts/**/*.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      'no-console': 'off',
+      /**
+       * 关掉"必须写返回类型"：该规则依赖类型信息才能识别回调
+       * （`allowExpressions` / `allowHigherOrderFunctions` 都要求类型感知），
+       * 而纯 JS 脚本没有类型 —— 开着它只会对每一个箭头函数都报错。
+       */
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+
   eslintConfigPrettier,
 );

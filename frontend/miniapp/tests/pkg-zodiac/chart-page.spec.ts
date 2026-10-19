@@ -169,6 +169,18 @@ describe('星盘页：缺信息时不猜', () => {
     }
   });
 
+  it('【关键】新疆的出生地会先问"用的是哪种时间"（差 2 小时会让上升星座整整错一个）', () => {
+    // 当地部分家庭习惯用新疆时间（UTC+6），默认按北京时间算会让那部分用户错一个星座
+    expect(source).toContain('altTimezoneOffset');
+    expect(source).toContain('新疆时间');
+    expect(source).toContain('showModal');
+  });
+
+  it('搜不到城市时给出可操作的建议（而不是只说"没有匹配"）', () => {
+    expect(source).toContain('龙岩');
+    expect(source).toContain('地级市');
+  });
+
   it('出生时间用系统时间选择器（不手输，手输一定会有人写成 3 点半）', () => {
     expect(source).toContain('mode="time"');
     expect(source).not.toMatch(/placeholder="[^"]*(出生时间|时间)[^"]*"/);

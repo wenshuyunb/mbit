@@ -1,221 +1,361 @@
 /**
- * 出生地经纬度表（**内置数据，不依赖外部地图服务**）
+ * 出生城市数据（港澳台与海外**手工维护**，中国大陆由生成文件提供）
  *
- * ## 为什么内置而不是接地图/地理编码 API
+ * ## 为什么这一版重写了
  *
- *   ① 项目约定不新增依赖，而接第三方地理编码要密钥、要配额、要备案；
- *   ② 星盘只用到**经纬度两位小数**（上升星座对经度的敏感度是"每 4 分钟 1°"，
- *      城市级精度完全够用），因此一份静态表就够；
- *   ③ 静态表可以**逐条评审**，不会因为上游数据变动让用户算出的上升星座悄悄变掉。
+ * 用户的反馈是「选择城市没有我出生的城市（福建龙岩武平县）」。
+ * 原来这份表是**手写**的，只有 106 条，福建只写了福州/厦门/泉州 ——
+ * 中国有 333 个地级市、约 2800 个县级单位，人工补永远补不全，而且手写经纬度必然出错。
  *
- * ## 覆盖范围与取值口径
+ * 现在：
+ *   · 中国大陆（地级市 + 县级，共 3100+ 条）来自 `zodiac-city-china.generated.ts`，
+ *     由 `node scripts/build-china-cities.mjs` 从 GeoNames 公共数据集生成；
+ *   · 港澳台与海外城市（GeoNames 里是独立国家/地区代码，不在 CN 数据集里）继续手工维护。
  *
- *   · 中国大陆：省会 + 主要地级市（按拼音/常用称谓均可搜索）；
- *   · 港澳台：香港、澳门、台北、高雄等；
- *   · 海外华人常居城市：常见十几个（纽约、洛杉矶、旧金山、伦敦、悉尼、东京、
- *     首尔、新加坡、多伦多、温哥华、巴黎、法兰克福、迪拜、奥克兰…）。
+ * ## 检索为什么要排序
  *
- * 经纬度取**市中心**坐标（小数两位，约 1 公里）；东经/北纬为正。
- * 时区偏移取该城市**当前**标准时（不处理历史夏令时 —— 那由
- * `resolveTimezoneOffset` 按出生年份处理中国的情形，海外出生请在表单里
- * 手动确认时区）。
+ * 有了 3100 条数据，单纯的 `includes` 过滤会出问题：搜「福建」会先返回一堆县级单位，
+ * 用户想找的"龙岩市"被淹在后面。因此按**匹配质量**排序：
+ * 完全相等 → 前缀 → 包含 → 命中省份，同级之内地级市优先。
  */
 
-/** 一个可选城市 */
+import { CHINA_CITY_ROWS, type CityLevel } from './zodiac-city-china.generated';
+
+/** 一个可选为出生地的城市 */
 export interface BirthCity {
-  /** 城市名（中文） */
-  readonly name: string;
-  /** 省份/国家（用于同名城市区分与搜索） */
-  readonly region: string;
-  /** 纬度（北正南负） */
-  readonly latitude: number;
-  /** 经度（东正西负） */
-  readonly longitude: number;
-  /** 时区偏移（小时） */
-  readonly timezoneOffset: number;
-  /** 检索别名（拼音首字母、旧称等） */
-  readonly aliases?: readonly string[];
+  name: string;
+  /** 所属地区：地级市给省份、县级给"省份 + 地级市"，海外给国家/地区 */
+  region: string;
+  latitude: number;
+  longitude: number;
+  /** 该地的**标准**时区偏移（小时）。中国夏令时由服务端按日期叠加，不要在这里算 */
+  timezoneOffset: number;
+  /** 行政区层级；港澳台与海外为 null（不做层级区分） */
+  level: CityLevel | null;
+  /**
+   * 该地可能存在的**另一种惯用时间**（小时）。目前只有新疆的 UTC+6：
+   * 新疆部分地区习惯用「新疆时间」，与北京时间差 2 小时 —— 差 2 小时会让上升星座
+   * 整整错一个（上升星座约 2 小时换一个），所以必须让用户有机会说清楚。
+   */
+  altTimezoneOffset: number | null;
+  /** 拼音/英文别名（便于英文输入） */
+  aliases?: readonly string[];
+  /**
+   * 人口（来自 GeoNames；0 或缺失表示该条没有数据）
+   *
+   * 只用于**同分排序**：搜省份名时，用户期望先看到省会与大城市，
+   * 而不是按数据文件顺序随机铺开。不参与任何业务判断。
+   */
+  population?: number;
 }
 
-export const BIRTH_CITIES: readonly BirthCity[] = [
-  // ---------------------------------------------------------------- 直辖市
-  { name: '北京', region: '北京市', latitude: 39.9, longitude: 116.41, timezoneOffset: 8, aliases: ['beijing', 'bj'] },
-  {
-    name: '上海',
-    region: '上海市',
-    latitude: 31.23,
-    longitude: 121.47,
-    timezoneOffset: 8,
-    aliases: ['shanghai', 'sh'],
-  },
-  { name: '天津', region: '天津市', latitude: 39.08, longitude: 117.2, timezoneOffset: 8, aliases: ['tianjin', 'tj'] },
-  {
-    name: '重庆',
-    region: '重庆市',
-    latitude: 29.56,
-    longitude: 106.55,
-    timezoneOffset: 8,
-    aliases: ['chongqing', 'cq'],
-  },
+/** 中国大陆行政区（生成数据 → 正式结构） */
+const CHINA_CITIES: readonly BirthCity[] = CHINA_CITY_ROWS.map((row) => {
+  const [name, region, latitude, longitude, level, pinyin, altTimezoneOffset, population] = row;
 
-  // ---------------------------------------------------------------- 华北 / 东北
-  {
-    name: '石家庄',
-    region: '河北省',
-    latitude: 38.04,
-    longitude: 114.51,
+  return {
+    name,
+    region,
+    latitude,
+    longitude,
     timezoneOffset: 8,
-    aliases: ['shijiazhuang'],
-  },
-  { name: '唐山', region: '河北省', latitude: 39.63, longitude: 118.18, timezoneOffset: 8 },
-  { name: '保定', region: '河北省', latitude: 38.87, longitude: 115.46, timezoneOffset: 8 },
-  { name: '太原', region: '山西省', latitude: 37.87, longitude: 112.55, timezoneOffset: 8, aliases: ['taiyuan'] },
-  { name: '大同', region: '山西省', latitude: 40.09, longitude: 113.3, timezoneOffset: 8 },
-  { name: '呼和浩特', region: '内蒙古', latitude: 40.84, longitude: 111.75, timezoneOffset: 8, aliases: ['hohhot'] },
-  { name: '包头', region: '内蒙古', latitude: 40.66, longitude: 109.84, timezoneOffset: 8 },
-  { name: '沈阳', region: '辽宁省', latitude: 41.81, longitude: 123.43, timezoneOffset: 8, aliases: ['shenyang'] },
-  { name: '大连', region: '辽宁省', latitude: 38.91, longitude: 121.61, timezoneOffset: 8, aliases: ['dalian'] },
-  { name: '长春', region: '吉林省', latitude: 43.82, longitude: 125.32, timezoneOffset: 8, aliases: ['changchun'] },
-  { name: '吉林', region: '吉林省', latitude: 43.84, longitude: 126.55, timezoneOffset: 8 },
-  { name: '哈尔滨', region: '黑龙江省', latitude: 45.8, longitude: 126.53, timezoneOffset: 8, aliases: ['harbin'] },
-  { name: '大庆', region: '黑龙江省', latitude: 46.59, longitude: 125.1, timezoneOffset: 8 },
+    level,
+    altTimezoneOffset,
+    aliases: pinyin.length > 0 ? [pinyin] : [],
+    population,
+  };
+});
 
-  // ---------------------------------------------------------------- 华东
-  { name: '南京', region: '江苏省', latitude: 32.06, longitude: 118.8, timezoneOffset: 8, aliases: ['nanjing'] },
-  { name: '苏州', region: '江苏省', latitude: 31.3, longitude: 120.58, timezoneOffset: 8, aliases: ['suzhou'] },
-  { name: '无锡', region: '江苏省', latitude: 31.49, longitude: 120.31, timezoneOffset: 8 },
-  { name: '常州', region: '江苏省', latitude: 31.81, longitude: 119.97, timezoneOffset: 8 },
-  { name: '南通', region: '江苏省', latitude: 31.98, longitude: 120.89, timezoneOffset: 8 },
-  { name: '徐州', region: '江苏省', latitude: 34.27, longitude: 117.19, timezoneOffset: 8 },
-  { name: '杭州', region: '浙江省', latitude: 30.27, longitude: 120.16, timezoneOffset: 8, aliases: ['hangzhou'] },
-  { name: '宁波', region: '浙江省', latitude: 29.87, longitude: 121.55, timezoneOffset: 8, aliases: ['ningbo'] },
-  { name: '温州', region: '浙江省', latitude: 28.0, longitude: 120.7, timezoneOffset: 8, aliases: ['wenzhou'] },
-  { name: '绍兴', region: '浙江省', latitude: 30.0, longitude: 120.58, timezoneOffset: 8 },
-  { name: '金华', region: '浙江省', latitude: 29.08, longitude: 119.65, timezoneOffset: 8 },
-  { name: '合肥', region: '安徽省', latitude: 31.82, longitude: 117.23, timezoneOffset: 8, aliases: ['hefei'] },
-  { name: '芜湖', region: '安徽省', latitude: 31.35, longitude: 118.43, timezoneOffset: 8 },
-  { name: '福州', region: '福建省', latitude: 26.07, longitude: 119.3, timezoneOffset: 8, aliases: ['fuzhou'] },
-  { name: '厦门', region: '福建省', latitude: 24.48, longitude: 118.09, timezoneOffset: 8, aliases: ['xiamen'] },
-  { name: '泉州', region: '福建省', latitude: 24.87, longitude: 118.68, timezoneOffset: 8 },
-  { name: '南昌', region: '江西省', latitude: 28.68, longitude: 115.86, timezoneOffset: 8, aliases: ['nanchang'] },
-  { name: '赣州', region: '江西省', latitude: 25.83, longitude: 114.93, timezoneOffset: 8 },
-  { name: '济南', region: '山东省', latitude: 36.65, longitude: 117.12, timezoneOffset: 8, aliases: ['jinan'] },
-  { name: '青岛', region: '山东省', latitude: 36.07, longitude: 120.38, timezoneOffset: 8, aliases: ['qingdao'] },
-  { name: '烟台', region: '山东省', latitude: 37.46, longitude: 121.45, timezoneOffset: 8 },
-  { name: '潍坊', region: '山东省', latitude: 36.71, longitude: 119.16, timezoneOffset: 8 },
-  { name: '临沂', region: '山东省', latitude: 35.1, longitude: 118.36, timezoneOffset: 8 },
-
-  // ---------------------------------------------------------------- 华中 / 华南
-  { name: '郑州', region: '河南省', latitude: 34.75, longitude: 113.63, timezoneOffset: 8, aliases: ['zhengzhou'] },
-  { name: '洛阳', region: '河南省', latitude: 34.62, longitude: 112.45, timezoneOffset: 8 },
-  { name: '武汉', region: '湖北省', latitude: 30.59, longitude: 114.31, timezoneOffset: 8, aliases: ['wuhan'] },
-  { name: '宜昌', region: '湖北省', latitude: 30.69, longitude: 111.29, timezoneOffset: 8 },
-  { name: '襄阳', region: '湖北省', latitude: 32.01, longitude: 112.12, timezoneOffset: 8 },
-  { name: '长沙', region: '湖南省', latitude: 28.23, longitude: 112.94, timezoneOffset: 8, aliases: ['changsha'] },
-  { name: '株洲', region: '湖南省', latitude: 27.83, longitude: 113.13, timezoneOffset: 8 },
-  {
-    name: '广州',
-    region: '广东省',
-    latitude: 23.13,
-    longitude: 113.26,
-    timezoneOffset: 8,
-    aliases: ['guangzhou', 'gz'],
-  },
-  {
-    name: '深圳',
-    region: '广东省',
-    latitude: 22.54,
-    longitude: 114.06,
-    timezoneOffset: 8,
-    aliases: ['shenzhen', 'sz'],
-  },
-  { name: '东莞', region: '广东省', latitude: 23.02, longitude: 113.75, timezoneOffset: 8 },
-  { name: '佛山', region: '广东省', latitude: 23.02, longitude: 113.12, timezoneOffset: 8 },
-  { name: '珠海', region: '广东省', latitude: 22.27, longitude: 113.58, timezoneOffset: 8 },
-  { name: '中山', region: '广东省', latitude: 22.52, longitude: 113.39, timezoneOffset: 8 },
-  { name: '汕头', region: '广东省', latitude: 23.35, longitude: 116.68, timezoneOffset: 8 },
-  { name: '南宁', region: '广西', latitude: 22.82, longitude: 108.32, timezoneOffset: 8, aliases: ['nanning'] },
-  { name: '桂林', region: '广西', latitude: 25.27, longitude: 110.29, timezoneOffset: 8 },
-  { name: '海口', region: '海南省', latitude: 20.04, longitude: 110.32, timezoneOffset: 8, aliases: ['haikou'] },
-  { name: '三亚', region: '海南省', latitude: 18.25, longitude: 109.51, timezoneOffset: 8, aliases: ['sanya'] },
-
-  // ---------------------------------------------------------------- 西南 / 西北
-  { name: '成都', region: '四川省', latitude: 30.57, longitude: 104.07, timezoneOffset: 8, aliases: ['chengdu'] },
-  { name: '绵阳', region: '四川省', latitude: 31.47, longitude: 104.68, timezoneOffset: 8 },
-  { name: '贵阳', region: '贵州省', latitude: 26.65, longitude: 106.63, timezoneOffset: 8, aliases: ['guiyang'] },
-  { name: '昆明', region: '云南省', latitude: 25.04, longitude: 102.71, timezoneOffset: 8, aliases: ['kunming'] },
-  { name: '大理', region: '云南省', latitude: 25.61, longitude: 100.27, timezoneOffset: 8 },
-  { name: '拉萨', region: '西藏', latitude: 29.65, longitude: 91.14, timezoneOffset: 8, aliases: ['lhasa'] },
-  { name: '西安', region: '陕西省', latitude: 34.34, longitude: 108.94, timezoneOffset: 8, aliases: ['xian'] },
-  { name: '宝鸡', region: '陕西省', latitude: 34.36, longitude: 107.24, timezoneOffset: 8 },
-  { name: '兰州', region: '甘肃省', latitude: 36.06, longitude: 103.83, timezoneOffset: 8, aliases: ['lanzhou'] },
-  { name: '西宁', region: '青海省', latitude: 36.62, longitude: 101.78, timezoneOffset: 8, aliases: ['xining'] },
-  { name: '银川', region: '宁夏', latitude: 38.49, longitude: 106.23, timezoneOffset: 8, aliases: ['yinchuan'] },
-  {
-    name: '乌鲁木齐',
-    region: '新疆',
-    latitude: 43.83,
-    longitude: 87.62,
-    timezoneOffset: 8,
-    aliases: ['urumqi', 'wulumuqi'],
-  },
-  { name: '喀什', region: '新疆', latitude: 39.47, longitude: 75.99, timezoneOffset: 8 },
+/**
+ * 港澳台与海外（**手工维护**）
+ *
+ * 这些地方不在 GeoNames 的 CN 数据集里。数值取自公开的城市中心坐标，
+ * 精度到 0.01°（约 1 km），对上升星座而言远超所需（1° 经度才对应约 1° 上升点）。
+ *
+ * ⚠ `timezoneOffset` 填**标准时区**，不要填夏令时后的值：例如伦敦填 0、纽约填 -5。
+ * 那些地方的夏令时规则与出生日期有关，属于另一个待办（目前只处理了中国 1986–1991）。
+ */
+const OVERSEAS_CITIES: readonly BirthCity[] = [
+  // ---------------------------------------------------------------- 港澳台
   {
     name: '香港',
     region: '香港特别行政区',
     latitude: 22.32,
     longitude: 114.17,
     timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
     aliases: ['hongkong', 'hk'],
   },
-  { name: '澳门', region: '澳门特别行政区', latitude: 22.2, longitude: 113.54, timezoneOffset: 8, aliases: ['macau'] },
-  { name: '台北', region: '台湾省', latitude: 25.03, longitude: 121.57, timezoneOffset: 8, aliases: ['taipei'] },
-  { name: '高雄', region: '台湾省', latitude: 22.63, longitude: 120.3, timezoneOffset: 8, aliases: ['kaohsiung'] },
-  { name: '台中', region: '台湾省', latitude: 24.15, longitude: 120.68, timezoneOffset: 8 },
+  {
+    name: '澳门',
+    region: '澳门特别行政区',
+    latitude: 22.2,
+    longitude: 113.54,
+    timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['macau'],
+  },
+  {
+    name: '台北',
+    region: '台湾省',
+    latitude: 25.03,
+    longitude: 121.57,
+    timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['taipei'],
+  },
+  {
+    name: '高雄',
+    region: '台湾省',
+    latitude: 22.63,
+    longitude: 120.3,
+    timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['kaohsiung'],
+  },
+  {
+    name: '台中',
+    region: '台湾省',
+    latitude: 24.15,
+    longitude: 120.68,
+    timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
+  },
 
   // ---------------------------------------------------------------- 海外常居
-  { name: '东京', region: '日本', latitude: 35.68, longitude: 139.69, timezoneOffset: 9, aliases: ['tokyo'] },
-  { name: '大阪', region: '日本', latitude: 34.69, longitude: 135.5, timezoneOffset: 9, aliases: ['osaka'] },
-  { name: '首尔', region: '韩国', latitude: 37.57, longitude: 126.98, timezoneOffset: 9, aliases: ['seoul'] },
-  { name: '新加坡', region: '新加坡', latitude: 1.35, longitude: 103.82, timezoneOffset: 8, aliases: ['singapore'] },
+  {
+    name: '东京',
+    region: '日本',
+    latitude: 35.68,
+    longitude: 139.69,
+    timezoneOffset: 9,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['tokyo'],
+  },
+  {
+    name: '大阪',
+    region: '日本',
+    latitude: 34.69,
+    longitude: 135.5,
+    timezoneOffset: 9,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['osaka'],
+  },
+  {
+    name: '首尔',
+    region: '韩国',
+    latitude: 37.57,
+    longitude: 126.98,
+    timezoneOffset: 9,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['seoul'],
+  },
+  {
+    name: '新加坡',
+    region: '新加坡',
+    latitude: 1.35,
+    longitude: 103.82,
+    timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['singapore'],
+  },
   {
     name: '吉隆坡',
     region: '马来西亚',
     latitude: 3.14,
     longitude: 101.69,
     timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
     aliases: ['kualalumpur'],
   },
-  { name: '曼谷', region: '泰国', latitude: 13.76, longitude: 100.5, timezoneOffset: 7, aliases: ['bangkok'] },
-  { name: '马尼拉', region: '菲律宾', latitude: 14.6, longitude: 120.98, timezoneOffset: 8, aliases: ['manila'] },
-  { name: '雅加达', region: '印度尼西亚', latitude: -6.21, longitude: 106.85, timezoneOffset: 7, aliases: ['jakarta'] },
-  { name: '迪拜', region: '阿联酋', latitude: 25.2, longitude: 55.27, timezoneOffset: 4, aliases: ['dubai'] },
-  { name: '悉尼', region: '澳大利亚', latitude: -33.87, longitude: 151.21, timezoneOffset: 10, aliases: ['sydney'] },
+  {
+    name: '曼谷',
+    region: '泰国',
+    latitude: 13.76,
+    longitude: 100.5,
+    timezoneOffset: 7,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['bangkok'],
+  },
+  {
+    name: '马尼拉',
+    region: '菲律宾',
+    latitude: 14.6,
+    longitude: 120.98,
+    timezoneOffset: 8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['manila'],
+  },
+  {
+    name: '雅加达',
+    region: '印度尼西亚',
+    latitude: -6.21,
+    longitude: 106.85,
+    timezoneOffset: 7,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['jakarta'],
+  },
+  {
+    name: '迪拜',
+    region: '阿联酋',
+    latitude: 25.2,
+    longitude: 55.27,
+    timezoneOffset: 4,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['dubai'],
+  },
+  {
+    name: '悉尼',
+    region: '澳大利亚',
+    latitude: -33.87,
+    longitude: 151.21,
+    timezoneOffset: 10,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['sydney'],
+  },
   {
     name: '墨尔本',
     region: '澳大利亚',
     latitude: -37.81,
     longitude: 144.96,
     timezoneOffset: 10,
+    level: null,
+    altTimezoneOffset: null,
     aliases: ['melbourne'],
   },
-  { name: '奥克兰', region: '新西兰', latitude: -36.85, longitude: 174.76, timezoneOffset: 12, aliases: ['auckland'] },
-  { name: '伦敦', region: '英国', latitude: 51.51, longitude: -0.13, timezoneOffset: 0, aliases: ['london'] },
-  { name: '巴黎', region: '法国', latitude: 48.86, longitude: 2.35, timezoneOffset: 1, aliases: ['paris'] },
-  { name: '柏林', region: '德国', latitude: 52.52, longitude: 13.4, timezoneOffset: 1, aliases: ['berlin'] },
-  { name: '法兰克福', region: '德国', latitude: 50.11, longitude: 8.68, timezoneOffset: 1, aliases: ['frankfurt'] },
-  { name: '阿姆斯特丹', region: '荷兰', latitude: 52.37, longitude: 4.9, timezoneOffset: 1, aliases: ['amsterdam'] },
-  { name: '苏黎世', region: '瑞士', latitude: 47.37, longitude: 8.54, timezoneOffset: 1, aliases: ['zurich'] },
-  { name: '米兰', region: '意大利', latitude: 45.46, longitude: 9.19, timezoneOffset: 1, aliases: ['milan'] },
-  { name: '马德里', region: '西班牙', latitude: 40.42, longitude: -3.7, timezoneOffset: 1, aliases: ['madrid'] },
-  { name: '莫斯科', region: '俄罗斯', latitude: 55.76, longitude: 37.62, timezoneOffset: 3, aliases: ['moscow'] },
-  { name: '纽约', region: '美国', latitude: 40.71, longitude: -74.01, timezoneOffset: -5, aliases: ['newyork', 'nyc'] },
+  {
+    name: '奥克兰',
+    region: '新西兰',
+    latitude: -36.85,
+    longitude: 174.76,
+    timezoneOffset: 12,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['auckland'],
+  },
+  {
+    name: '伦敦',
+    region: '英国',
+    latitude: 51.51,
+    longitude: -0.13,
+    timezoneOffset: 0,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['london'],
+  },
+  {
+    name: '巴黎',
+    region: '法国',
+    latitude: 48.86,
+    longitude: 2.35,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['paris'],
+  },
+  {
+    name: '柏林',
+    region: '德国',
+    latitude: 52.52,
+    longitude: 13.4,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['berlin'],
+  },
+  {
+    name: '法兰克福',
+    region: '德国',
+    latitude: 50.11,
+    longitude: 8.68,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['frankfurt'],
+  },
+  {
+    name: '阿姆斯特丹',
+    region: '荷兰',
+    latitude: 52.37,
+    longitude: 4.9,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['amsterdam'],
+  },
+  {
+    name: '苏黎世',
+    region: '瑞士',
+    latitude: 47.37,
+    longitude: 8.54,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['zurich'],
+  },
+  {
+    name: '米兰',
+    region: '意大利',
+    latitude: 45.46,
+    longitude: 9.19,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['milan'],
+  },
+  {
+    name: '马德里',
+    region: '西班牙',
+    latitude: 40.42,
+    longitude: -3.7,
+    timezoneOffset: 1,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['madrid'],
+  },
+  {
+    name: '莫斯科',
+    region: '俄罗斯',
+    latitude: 55.76,
+    longitude: 37.62,
+    timezoneOffset: 3,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['moscow'],
+  },
+  {
+    name: '纽约',
+    region: '美国',
+    latitude: 40.71,
+    longitude: -74.01,
+    timezoneOffset: -5,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['newyork', 'nyc'],
+  },
   {
     name: '洛杉矶',
     region: '美国',
     latitude: 34.05,
     longitude: -118.24,
     timezoneOffset: -8,
+    level: null,
+    altTimezoneOffset: null,
     aliases: ['losangeles', 'la'],
   },
   {
@@ -224,31 +364,226 @@ export const BIRTH_CITIES: readonly BirthCity[] = [
     latitude: 37.77,
     longitude: -122.42,
     timezoneOffset: -8,
+    level: null,
+    altTimezoneOffset: null,
     aliases: ['sanfrancisco', 'sf'],
   },
-  { name: '西雅图', region: '美国', latitude: 47.61, longitude: -122.33, timezoneOffset: -8, aliases: ['seattle'] },
-  { name: '芝加哥', region: '美国', latitude: 41.88, longitude: -87.63, timezoneOffset: -6, aliases: ['chicago'] },
-  { name: '波士顿', region: '美国', latitude: 42.36, longitude: -71.06, timezoneOffset: -5, aliases: ['boston'] },
-  { name: '休斯敦', region: '美国', latitude: 29.76, longitude: -95.37, timezoneOffset: -6, aliases: ['houston'] },
-  { name: '多伦多', region: '加拿大', latitude: 43.65, longitude: -79.38, timezoneOffset: -5, aliases: ['toronto'] },
-  { name: '温哥华', region: '加拿大', latitude: 49.28, longitude: -123.12, timezoneOffset: -8, aliases: ['vancouver'] },
+  {
+    name: '西雅图',
+    region: '美国',
+    latitude: 47.61,
+    longitude: -122.33,
+    timezoneOffset: -8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['seattle'],
+  },
+  {
+    name: '芝加哥',
+    region: '美国',
+    latitude: 41.88,
+    longitude: -87.63,
+    timezoneOffset: -6,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['chicago'],
+  },
+  {
+    name: '波士顿',
+    region: '美国',
+    latitude: 42.36,
+    longitude: -71.06,
+    timezoneOffset: -5,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['boston'],
+  },
+  {
+    name: '休斯敦',
+    region: '美国',
+    latitude: 29.76,
+    longitude: -95.37,
+    timezoneOffset: -6,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['houston'],
+  },
+  {
+    name: '多伦多',
+    region: '加拿大',
+    latitude: 43.65,
+    longitude: -79.38,
+    timezoneOffset: -5,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['toronto'],
+  },
+  {
+    name: '温哥华',
+    region: '加拿大',
+    latitude: 49.28,
+    longitude: -123.12,
+    timezoneOffset: -8,
+    level: null,
+    altTimezoneOffset: null,
+    aliases: ['vancouver'],
+  },
 ];
 
-/** 常用城市（表单默认给这几个，减少翻找） */
-export const POPULAR_CITY_NAMES: readonly string[] = ['北京', '上海', '广州', '深圳', '杭州', '成都', '武汉', '西安'];
+/** 全部可选城市（中国大陆行政区 + 港澳台 + 海外） */
+export const BIRTH_CITIES: readonly BirthCity[] = [...CHINA_CITIES, ...OVERSEAS_CITIES];
 
-/** 按名称/别名检索城市（大小写不敏感，去空格） */
-export const searchCities = (keyword: string, limit = 20): BirthCity[] => {
-  const needle = keyword.trim().toLowerCase();
-  if (needle.length === 0) return BIRTH_CITIES.slice(0, limit);
+/** 常用城市（选择器空关键词时先给这几个，减少翻找） */
+export const POPULAR_CITY_NAMES: readonly string[] = [
+  '北京市',
+  '上海市',
+  '广州市',
+  '深圳市',
+  '杭州市',
+  '成都市',
+  '武汉市',
+  '西安市',
+];
 
-  return BIRTH_CITIES.filter((city) => {
-    const haystack = [city.name, city.region, ...(city.aliases ?? [])].join(' ').toLowerCase();
+/**
+ * 去掉行政区通名，便于"北京"与"北京市"互相匹配
+ *
+ * ⚠ 只在**匹配**时用，返回给前端的始终是完整名称 —— 用户填过的历史数据
+ * （旧版前端存的是"北京"）也要能查到。
+ */
+const normalizeName = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/(特别行政区|自治州|自治县|地区|林区|省|市|县|区|盟)$/u, '');
 
-    return haystack.includes(needle);
-  }).slice(0, limit);
+/** 命中质量：越小越优先（-1 表示不命中） */
+const scoreOf = (city: BirthCity, needle: string): number => {
+  const name = city.name.toLowerCase();
+
+  if (name === needle || normalizeName(city.name) === needle) return 0;
+  if (name.startsWith(needle) || normalizeName(city.name).startsWith(needle)) return 1;
+  if (name.includes(needle)) return 2;
+  if ((city.aliases ?? []).some((alias) => alias.includes(needle))) return 2;
+  if (city.region.toLowerCase().includes(needle)) return 3;
+
+  return -1;
 };
 
-/** 按名称精确取城市（找不到返回 null） */
-export const findCityByName = (name: string): BirthCity | null =>
-  BIRTH_CITIES.find((city) => city.name === name.trim()) ?? null;
+/** 同分时的排序：地级市优先（用户报城市名时通常指地级市），再按人口降序 */
+const rankOf = (city: BirthCity): number => (city.level === 'PREFECTURE' ? 0 : city.level === 'COUNTY' ? 1 : 2);
+
+/**
+ * 省会/首府/直辖市
+ *
+ * 用户搜一个省的名字时，最可能想看的是省会。而 GeoNames 的 ADM2 人口**有缺失**
+ * （实测：贵阳市的 ADM2 没有人口、毕节地区有），只按人口排序会让「贵州」
+ * 的第一条变成毕节地区 —— 看起来像是排错了。因此这里额外把省会提到最前。
+ */
+const PROVINCIAL_CAPITALS = new Set([
+  '北京',
+  '上海',
+  '天津',
+  '重庆',
+  '石家庄',
+  '太原',
+  '呼和浩特',
+  '沈阳',
+  '长春',
+  '哈尔滨',
+  '南京',
+  '杭州',
+  '合肥',
+  '福州',
+  '南昌',
+  '济南',
+  '郑州',
+  '武汉',
+  '长沙',
+  '广州',
+  '南宁',
+  '海口',
+  '成都',
+  '贵阳',
+  '昆明',
+  '拉萨',
+  '西安',
+  '兰州',
+  '西宁',
+  '银川',
+  '乌鲁木齐',
+  '台北',
+]);
+
+const capitalRankOf = (city: BirthCity): number => (PROVINCIAL_CAPITALS.has(normalizeName(city.name)) ? 0 : 1);
+
+/** 常用城市（按名字取，取不到就退化为列表前几项） */
+const popularCities = (limit: number): BirthCity[] => {
+  const picked = POPULAR_CITY_NAMES.map((name) => findCityByName(name)).filter(
+    (city): city is BirthCity => city !== null,
+  );
+
+  return picked.length > 0 ? picked.slice(0, limit) : BIRTH_CITIES.slice(0, limit);
+};
+
+/**
+ * 按名称 / 所属地区 / 拼音检索城市
+ *
+ * 排序规则（3100+ 条数据必须排序，否则搜省份会被县级结果淹没）：
+ *   完全相等 → 前缀命中 → 名称包含 → 命中省份；同级之内**地级市优先**。
+ *
+ * @param limit 最多返回多少条（默认 30：小程序面板一屏能滚动的量级）
+ */
+export const searchCities = (keyword: string, limit = 30): BirthCity[] => {
+  const needle = keyword.trim().toLowerCase();
+  if (needle.length === 0) return popularCities(limit);
+
+  const hits: { city: BirthCity; score: number }[] = [];
+
+  for (const city of BIRTH_CITIES) {
+    const score = scoreOf(city, needle);
+    if (score >= 0) hits.push({ city, score });
+  }
+
+  return hits
+    .sort((left, right) => {
+      if (left.score !== right.score) return left.score - right.score;
+
+      const rankDelta = rankOf(left.city) - rankOf(right.city);
+      if (rankDelta !== 0) return rankDelta;
+
+      const capitalDelta = capitalRankOf(left.city) - capitalRankOf(right.city);
+      if (capitalDelta !== 0) return capitalDelta;
+
+      // 同级别内按人口降序：搜省份名时先给省会与大城市，而不是按数据文件顺序铺开
+      const populationDelta = (right.city.population ?? 0) - (left.city.population ?? 0);
+      if (populationDelta !== 0) return populationDelta;
+
+      return left.city.name.length - right.city.name.length;
+    })
+    .slice(0, limit)
+    .map((hit) => hit.city);
+};
+
+/**
+ * 按名称取城市（精确 → 去通名相等 → 前缀），找不到返回 null
+ *
+ * 容忍"北京"与"北京市"这类差异：旧版前端存过没有通名的名字，
+ * 只按字符串全等匹配会让那批数据在补齐坐标时静默失效。
+ */
+export const findCityByName = (name: string): BirthCity | null => {
+  const raw = name.trim();
+  if (raw.length === 0) return null;
+
+  const exact = BIRTH_CITIES.find((city) => city.name === raw);
+  if (exact !== undefined) return exact;
+
+  const normalized = normalizeName(raw);
+  const byNormalized = BIRTH_CITIES.find((city) => normalizeName(city.name) === normalized);
+  if (byNormalized !== undefined) return byNormalized;
+
+  const byPrefix = BIRTH_CITIES.find((city) => city.name.startsWith(raw));
+
+  return byPrefix ?? null;
+};

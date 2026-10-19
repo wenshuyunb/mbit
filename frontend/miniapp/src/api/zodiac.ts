@@ -148,11 +148,24 @@ export interface ZodiacMatch {
 /** 出生城市（`GET /zodiac/cities`） */
 export interface BirthCity {
   name: string;
+  /** 所属地区：地级市给省份、县级给"省份 + 地级市"、海外给国家/地区 */
   region: string;
   latitude: number;
   longitude: number;
-  /** 时区偏移（小时）；中国 1986–1991 年夏令时由后端按日期判定，这里给该城市的基础时区 */
+  /** 该地的**标准**时区偏移（小时）。中国夏令时由服务端按出生日期叠加，前端不要自己算 */
   timezoneOffset: number;
+  /** 行政区层级；港澳台与海外为 null */
+  level: 'PREFECTURE' | 'COUNTY' | null;
+  /**
+   * 该地可能存在的**另一种惯用时间**（小时）
+   *
+   * 目前只有新疆的 UTC+6：新疆部分地区习惯用「新疆时间」，比北京时间晚 2 小时 ——
+   * 而上升星座约 2 小时换一个，差 2 小时会让它**整整错一个星座**。
+   * 因此选到这类城市时必须问清楚，不能默认。
+   */
+  altTimezoneOffset: number | null;
+  /** 拼音/英文别名 */
+  aliases?: string[];
 }
 
 /** 星盘上一个天体（完整盘才有） */

@@ -213,9 +213,15 @@ const searchCity = async (keyword: string): Promise<void> => {
  * ⚠ 四个字段**一起提交**：城市名只是给人看的，经纬度才是算上升星座的依据。
  * 只存城市名的话，后端少了经度就算不出恒星时 —— 那种"存了个看起来对的值、
  * 结果算不出来"的数据最难排查。
+ *
+ * ⚠ 新疆要先问"用的是哪种时间"：当地部分家庭习惯用「新疆时间」（比北京时间晚 2 小时），
+ * 而上升星座约 2 小时换一个 —— 默认按北京时间算会让那部分用户**整整错一个星座**，
+ * 且他自己不会知道。这类"默认值对一部分人是错的"必须问，不能猜。
  */
 const pickCity = async (city: BirthCity): Promise<void> => {
   if (saving.value) return;
+
+  const timezoneOffset = await resolveTimezoneOffsetFor(city);
 
   saving.value = true;
   try {
@@ -223,7 +229,7 @@ const pickCity = async (city: BirthCity): Promise<void> => {
       birthPlace: city.name,
       birthLatitude: city.latitude,
       birthLongitude: city.longitude,
-      birthTimezoneOffset: city.timezoneOffset,
+      birthTimezoneOffset: timezoneOffset,
     });
     cityPanelOpen.value = false;
     uni.showToast({ title: `出生地已设为${city.name}`, icon: 'none' });
@@ -234,6 +240,31 @@ const pickCity = async (city: BirthCity): Promise<void> => {
   } finally {
     saving.value = false;
   }
+};
+
+/**
+ * 该地是否存在"另一种惯用时间"；有则问用户用的是哪一种
+ *
+ * 返回要写入账号的**标准时区偏移**。用户点"取消"或弹窗失败时按北京时间处理 ——
+ * 中国绝大多数地区与绝大多数场景用的都是北京时间，这是合理的默认。
+ */
+const resolveTimezoneOffsetFor = async (city: BirthCity): Promise<number> => {
+  if (city.altTimezoneOffset === null || city.altTimezoneOffset === undefined) {
+    return city.timezoneOffset;
+  }
+
+  return new Promise<number>((resolve) => {
+    uni.showModal({
+      title: '出生时间用的是哪种？',
+      content:
+        `${city.name}所在的地区，有些家庭习惯用「新疆时间」（比北京时间晚 2 小时）。` +
+        '出生时间差 2 小时，上升星座会整整差一个 —— 所以这里必须问清楚：你家人记录的是哪种时间？',
+      confirmText: '新疆时间',
+      cancelText: '北京时间',
+      success: (result) => resolve(result.confirm ? (city.altTimezoneOffset as number) : city.timezoneOffset),
+      fail: () => resolve(city.timezoneOffset),
+    });
+  });
 };
 
 /** 相位的配色：和谐=绿、紧张=橙、中性=灰（只影响观感，不表达吉凶判断） */
@@ -485,7 +516,7 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
           class="chart__panel-input"
           type="text"
           :value="cityKeyword"
-          placeholder="输入城市名，如 杭州 / 乌鲁木齐"
+          placeholder="输入城市名 / 县名，如 武平县、龙岩、杭州"
           @confirm="onCitySearchConfirm"
         />
         <scroll-view class="chart__panel-list" scroll-y>
@@ -495,11 +526,16 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
             class="chart__panel-item"
             @tap="pickCity(city)"
           >
-            <text class="chart__panel-city">{{ city.name }}</text>
+            <view class="chart__panel-item-main">
+              <text class="chart__panel-city">{{ city.name }}</text>
+              <text v-if="city.level === 'COUNTY'" class="chart__panel-tag">县/区</text>
+            </view>
             <text class="chart__panel-region">{{ city.region }}</text>
           </view>
           <view v-if="cityOptions.length === 0" class="chart__panel-empty">
-            <text>没有匹配的城市，换个说法试试（也可以输入省份名）</text>
+            <text class="chart__panel-empty-line">没有匹配的城市</text>
+            <text class="chart__panel-empty-line">可以试试只输入前两个字，或换成所属的地级市（例如「龙岩」）</text>
+            <text class="chart__panel-empty-line">选到地级市就够了：县城与市区算出的上升星座通常只差不到 1°</text>
           </view>
         </scroll-view>
       </view>
@@ -1010,8 +1046,22 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
     border-bottom: 1rpx solid $color-divider;
   }
 
+  &__panel-item-main {
+    display: flex;
+    align-items: baseline;
+  }
+
   &__panel-city {
     font-size: $font-size-sm;
+  }
+
+  &__panel-tag {
+    padding: 0 $space-xs;
+    margin-left: $space-xs;
+    font-size: $font-size-xs;
+    color: $color-text-secondary;
+    background-color: $color-bg-hover;
+    border-radius: $radius-xs;
   }
 
   &__panel-region {
@@ -1021,9 +1071,14 @@ const barWidth = (percent: number): string => `${Math.max(6, percent)}%`;
 
   &__panel-empty {
     padding: $space-lg 0;
-    font-size: $font-size-sm;
-    color: $color-text-placeholder;
     text-align: center;
+  }
+
+  &__panel-empty-line {
+    display: block;
+    font-size: $font-size-xs;
+    line-height: $line-height-loose;
+    color: $color-text-placeholder;
   }
 }
 </style>
