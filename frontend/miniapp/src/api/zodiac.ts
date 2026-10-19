@@ -67,8 +67,10 @@ export interface ZodiacMe {
 
 /** 五维之一 */
 export interface FortuneDimension {
-  key: 'OVERALL' | 'LOVE' | 'CAREER' | 'WEALTH' | 'HEALTH';
+  key: 'OVERALL' | 'LOVE' | 'WEALTH' | 'CAREER' | 'STUDY' | 'SOCIAL' | 'HEALTH';
   label: string;
+  /** 0–100 分数（与星级同源，详情页直接展示） */
+  score: number;
   /** 1–5 星 */
   stars: number;
   line: string;
@@ -126,6 +128,19 @@ export interface MonthlyFortune {
   theme: string;
   stars: number;
   sections: FortuneSection[];
+}
+
+/** 年运（分段是四个季度） */
+export interface YearlyFortune {
+  sign: ZodiacSign;
+  signName: string;
+  /** `YYYY` */
+  year: string;
+  theme: string;
+  stars: number;
+  score: number;
+  sections: FortuneSection[];
+  tip: string;
 }
 
 /** 星座配对 */
@@ -436,6 +451,10 @@ export const getWeeklyFortune = (date: string): Promise<WeeklyFortune> =>
 /** 本月运势 */
 export const getMonthlyFortune = (date: string): Promise<MonthlyFortune> =>
   http.get<MonthlyFortune>('/zodiac/monthly', { date }, { showError: false });
+
+/** 今年运势（分段是四个季度） */
+export const getYearlyFortune = (date: string): Promise<YearlyFortune> =>
+  http.get<YearlyFortune>('/zodiac/yearly', { date }, { showError: false });
 
 /** 星座配对（**公开接口**，顺序无关） */
 export const getZodiacMatch = (a: ZodiacSign, b: ZodiacSign): Promise<ZodiacMatch> =>

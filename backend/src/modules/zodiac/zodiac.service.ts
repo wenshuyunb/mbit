@@ -37,10 +37,12 @@ import {
   buildDailyFortune,
   buildMonthlyFortune,
   buildWeeklyFortune,
+  buildYearlyFortune,
   buildZodiacMatch,
   type DailyFortuneView,
   type MonthlyFortuneView,
   type WeeklyFortuneView,
+  type YearlyFortuneView,
   type ZodiacMatchView,
 } from './zodiac-fortune.util';
 import { resolveZodiacSignFromDate } from './zodiac-sign.util';
@@ -186,6 +188,18 @@ export class ZodiacService {
     const resolved = await this.resolveSign(userId, birthday);
 
     return buildMonthlyFortune(resolved.sign, date);
+  }
+
+  /**
+   * 年运
+   *
+   * 与日 / 周 / 月运同一条路径：种子由 `(year + sign)` 决定，同一年永远是同一份。
+   * 分段是四个季度而不是十二个月 —— 一年的颗粒度写十二段必然注水。
+   */
+  async getYearly(userId: string, date: string, birthday?: string): Promise<YearlyFortuneView> {
+    const resolved = await this.resolveSign(userId, birthday);
+
+    return buildYearlyFortune(resolved.sign, date);
   }
 
   /** 两个星座的配对解读（顺序无关：同一对被调换顺序得到同一份结果） */

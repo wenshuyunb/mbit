@@ -37,6 +37,9 @@ import {
   QUOTES,
   WEEKLY_LINES,
   WEEKLY_TIPS,
+  YEARLY_SEASONS,
+  YEARLY_THEMES,
+  YEARLY_TIPS,
   ZODIAC_PROFILES,
 } from './zodiac-content';
 import {
@@ -144,6 +147,30 @@ const drawStars = (random: () => number): number => {
 /** 星级 → 文案档位（1–2 低 / 3 中 / 4–5 高） */
 const bandOf = (stars: number): 'LOW' | 'MID' | 'HIGH' => (stars <= 2 ? 'LOW' : stars === 3 ? 'MID' : 'HIGH');
 
+/**
+ * 星级 → 0–100 分（带确定性抖动）
+ *
+ * 详情页要直接摆出"爱情 86 / 财富 72"这类数字，星级只有五档看不出来差别；
+ * 但如果分数和星级各算各的，就会出现"5 星却只给 60 分"这种自相矛盾。
+ * 因此分数**由星级换算**，只在同一档内抖动：
+ *
+ * | 星级 | 分值区间 |
+ * | ---- | -------- |
+ * | 1    | 30–38    |
+ * | 2    | 46–54    |
+ * | 3    | 62–70    |
+ * | 4    | 78–86    |
+ * | 5    | 92–99    |
+ *
+ * 抖动幅度 8 分，保证"5 星一定高于 4 星"，同时同档内不完全相同。
+ */
+const scoreOf = (stars: number, random: () => number): number => {
+  const base = stars === 5 ? 92 : 30 + (stars - 1) * 16;
+  const span = stars === 5 ? 8 : 9;
+
+  return Math.min(99, base + Math.floor(random() * span));
+};
+
 /** 0–100 → 三档（配对用） */
 const levelOf = (score: number): 'LOW' | 'MID' | 'HIGH' => (score < 50 ? 'LOW' : score < 75 ? 'MID' : 'HIGH');
 
@@ -155,7 +182,9 @@ const levelOf = (score: number): 'LOW' | 'MID' | 'HIGH' => (score < 50 ? 'LOW' :
 export interface FortuneDimensionResult {
   readonly key: FortuneDimension;
   readonly label: string;
-  /** 1–5 星 */
+  /** 分数（30–99）：详情页直接展示的数字 */
+  readonly score: number;
+  /** 1–5 星（与 `score` 同源，不会出现"5 星但 60 分"） */
   readonly stars: number;
   /** 一句话解读 */
   readonly line: string;
@@ -218,6 +247,30 @@ export interface MonthlyFortuneView {
   readonly sections: readonly FortunePeriodSection[];
 }
 
+/**
+ * 年运
+ *
+ * 与月运同构（主题 + 总星级 + 分段），分段换成四个季度。
+ * 年运不编具体事件：只给"这一年的主线"与"每季度更该关注什么"，
+ * 因为越长的周期越不可能被"说准"，写得越具体反而越像骗人。
+ */
+export interface YearlyFortuneView {
+  readonly sign: ZodiacSign;
+  readonly signName: string;
+  /** `YYYY` */
+  readonly year: string;
+  /** 年度主题词 */
+  readonly theme: string;
+  /** 年度总星级（1–5） */
+  readonly stars: number;
+  /** 年度分数（0–100，与星级同源） */
+  readonly score: number;
+  /** 四个季度 */
+  readonly sections: readonly FortunePeriodSection[];
+  /** 一句年度提醒 */
+  readonly tip: string;
+}
+
 /** 配对（两个星座的相处解读） */
 export interface ZodiacMatchView {
   readonly a: { readonly sign: ZodiacSign; readonly name: string; readonly element: string };
@@ -275,9 +328,10 @@ export const buildDailyFortune = (sign: ZodiacSign, date: string): DailyFortuneV
 
   const dimensions: FortuneDimensionResult[] = FORTUNE_DIMENSIONS.map((dimension) => {
     const stars = drawStars(random);
+    const score = scoreOf(stars, random);
     const line = pick(DIMENSION_LINES[dimension][bandOf(stars)], random);
 
-    return { key: dimension, label: FORTUNE_DIMENSION_LABELS[dimension], stars, line };
+    return { key: dimension, label: FORTUNE_DIMENSION_LABELS[dimension], score, stars, line };
   });
 
   // 速配 / 留意：从**除自己以外**的十一个星座里取两个，且两者不重复
@@ -357,6 +411,44 @@ export const buildMonthlyFortune = (sign: ZodiacSign, date: string): MonthlyFort
     theme: pick(MONTHLY_THEMES, random),
     stars: drawStars(random),
     sections,
+  };
+};
+
+/**
+ * 年运（按 `YYYY` 做种子）
+ *
+ * 与日/周/月运一致的确定性：同一年同一星座永远是同一份，跨年才换。
+ * 分段用四个季度而不是十二个月 —— 一年的颗粒度写十二段必然注水，
+ * 每段都会退化成"这个月还行"。
+ */
+export const buildYearlyFortune = (sign: ZodiacSign, date: string): YearlyFortuneView => {
+  const year = date.slice(0, 4);
+  const random = createRandom(`yearly:${sign}:${year}`);
+
+  const sections: FortunePeriodSection[] = (
+    [
+      { key: 'Q1', label: '第一季度' },
+      { key: 'Q2', label: '第二季度' },
+      { key: 'Q3', label: '第三季度' },
+      { key: 'Q4', label: '第四季度' },
+    ] as const
+  ).map((item) => {
+    const stars = drawStars(random);
+
+    return { key: item.key, label: item.label, stars, line: pick(YEARLY_SEASONS[bandOf(stars)], random) };
+  });
+
+  const stars = drawStars(random);
+
+  return {
+    sign,
+    signName: ZODIAC_PROFILES[sign].name,
+    year,
+    theme: pick(YEARLY_THEMES, random),
+    stars,
+    score: scoreOf(stars, random),
+    sections,
+    tip: pick(YEARLY_TIPS, random),
   };
 };
 

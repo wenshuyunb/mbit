@@ -149,6 +149,20 @@
             "navigationBarTitleText": "星盘解读",
             "enablePullDownRefresh": true
           }
+        },
+        {
+          "path": "pages/score",
+          "style": {
+            "navigationBarTitleText": "今日分数",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
+          "path": "pages/fortune",
+          "style": {
+            "navigationBarTitleText": "今日运势",
+            "enablePullDownRefresh": true
+          }
         }
       ]
     },

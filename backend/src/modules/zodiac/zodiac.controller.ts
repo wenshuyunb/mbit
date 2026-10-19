@@ -27,7 +27,7 @@ import {
   type ZodiacProfileView,
 } from './zodiac.service';
 import { ZodiacReadingService } from './zodiac-reading.service';
-import type { MonthlyFortuneView, WeeklyFortuneView, ZodiacMatchView } from './zodiac-fortune.util';
+import type { MonthlyFortuneView, WeeklyFortuneView, YearlyFortuneView, ZodiacMatchView } from './zodiac-fortune.util';
 import type { BirthCity, RegionTree } from './zodiac-city.data';
 import type { ZodiacReadingResponse } from './zodiac-reading.service';
 import type { ZodiacSign } from './zodiac.types';
@@ -140,6 +140,27 @@ export class ZodiacController {
     @Query() query: ZodiacFortuneQueryDto,
   ): Promise<MonthlyFortuneView> {
     return this.zodiacService.getMonthly(userId, query.date, query.birthday);
+  }
+
+  @Get('yearly')
+  @ApiBearerAuth('user-token')
+  @Throttle({ global: { limit: 120, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '今年运势',
+    description: [
+      '按 `YYYY` 为种子生成：年度主题词、整体星级与分数、四个季度、以及一句年度提醒。',
+      '',
+      '分段用**四个季度**而不是十二个月 —— 一年的颗粒度写十二段必然注水，每段都会退化成"这个月还行"。',
+      '',
+      '⚠ 越长的周期越不可能被"说准"，因此年运**不写具体事件**，只给这一年的主线与节奏。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  async getYearly(
+    @CurrentUser('userId') userId: string,
+    @Query() query: ZodiacFortuneQueryDto,
+  ): Promise<YearlyFortuneView> {
+    return this.zodiacService.getYearly(userId, query.date, query.birthday);
   }
 
   @Get('chart')

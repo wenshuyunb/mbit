@@ -42,22 +42,30 @@ export type ZodiacSign = (typeof ZODIAC_SIGNS)[number];
 /** 四大元素（星座的经典分类，纯文化知识，不含预测） */
 export type ZodiacElement = 'FIRE' | 'EARTH' | 'AIR' | 'WATER';
 
-/** 今日运势的五个维度 */
-export const FORTUNE_DIMENSIONS = ['OVERALL', 'LOVE', 'CAREER', 'WEALTH', 'HEALTH'] as const;
+/**
+ * 今日运势的维度
+ *
+ * 顺序即详情页的展示顺序：综合在最上，其后是用户明确要求的五项
+ * （爱情 / 财富 / 事业 / 学习 / 人际）。「状态」放在最后，
+ * 它是本模块既有的第五维（只谈作息、运动、饮水、用眼，不做任何医疗暗示）。
+ */
+export const FORTUNE_DIMENSIONS = ['OVERALL', 'LOVE', 'WEALTH', 'CAREER', 'STUDY', 'SOCIAL', 'HEALTH'] as const;
 
 export type FortuneDimension = (typeof FORTUNE_DIMENSIONS)[number];
 
 /** 维度中文名 */
 export const FORTUNE_DIMENSION_LABELS: Readonly<Record<FortuneDimension, string>> = {
   OVERALL: '综合',
-  LOVE: '感情',
+  LOVE: '爱情',
+  WEALTH: '财富',
   CAREER: '事业',
-  WEALTH: '财运',
+  STUDY: '学习',
+  SOCIAL: '人际',
   HEALTH: '状态',
 };
 
-/** 星座周期（周运 / 月运） */
-export const FORTUNE_PERIODS = ['DAILY', 'WEEKLY', 'MONTHLY'] as const;
+/** 星座周期（日运 / 周运 / 月运 / 年运） */
+export const FORTUNE_PERIODS = ['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'] as const;
 
 export type FortunePeriod = (typeof FORTUNE_PERIODS)[number];
 

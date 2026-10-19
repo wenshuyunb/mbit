@@ -15,15 +15,26 @@
  * 分支依据，误判会让用户点进错误的流程。
  */
 
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { onPullDownRefresh, onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app';
 
 import SafetyDisclaimer from '@/components/SafetyDisclaimer.vue';
 import GenderOnboarding from '@/components/GenderOnboarding.vue';
 import { useHome } from '@/composables/use-home';
 import { modulePresentation, type ModulePresentation } from '@/config/modules';
+import { getDailyFortune, type DailyFortune } from '@/api/zodiac';
+import { ApiError, ERROR_CODES } from '@/api/types';
 import { useAppStore } from '@/store/app';
 import { useAuthStore } from '@/store/auth';
+
+/** 今天的 `YYYY-MM-DD`（本地时区：用户眼里的"今天"就是本地今天） */
+const localToday = (): string => {
+  const now = new Date();
+  const month = `${now.getMonth() + 1}`.padStart(2, '0');
+  const day = `${now.getDate()}`.padStart(2, '0');
+
+  return `${now.getFullYear()}-${month}-${day}`;
+};
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -42,6 +53,48 @@ const introUrlOf = (entry: ModulePresentation): string =>
   entry.testCode.length > 0 ? `/pages/test/intro?code=${entry.testCode}` : '/pages/test/intro';
 
 const { hasProfile, profileError, profileBadge, primaryTitle, primaryDesc, reportDesc, loadHomeData } = useHome();
+
+// ---------------------------------------------------------------------------
+// 今日分数（横批）
+//
+// 数据来自星座模块的今日运势（只用到综合分与今日基调），签名由星座决定，
+// 而星座由账号里的出生日期决定 —— 因此**没设生日时它是空状态而不是错误**。
+//
+// ⚠ 这里的失败绝不能影响首页其它区块：首页的主行动是"开始测试"，
+// 运势只是锦上添花，挂掉时安静地不显示即可（除了"没设生日"要引导一次）。
+// ---------------------------------------------------------------------------
+const dailyFortune = ref<DailyFortune | null>(null);
+/** 没有出生日期：展示"设置后看今日分数"的引导 */
+const needsBirthdayForFortune = ref(false);
+
+const loadFortune = async (): Promise<void> => {
+  try {
+    dailyFortune.value = await getDailyFortune(localToday());
+    needsBirthdayForFortune.value = false;
+  } catch (error) {
+    dailyFortune.value = null;
+
+    if (error instanceof ApiError && error.code === ERROR_CODES.ZODIAC_BIRTHDAY_REQUIRED) {
+      needsBirthdayForFortune.value = true;
+    }
+  }
+};
+
+/** 今日综合分（详情页与横批共用同一个口径：取 OVERALL 那一维） */
+const overallScore = computed<number | null>(
+  () => dailyFortune.value?.dimensions.find((item) => item.key === 'OVERALL')?.score ?? null,
+);
+
+/** 综合星级 → ★串（横批用） */
+const overallStars = computed<string>(() => {
+  const stars = dailyFortune.value?.dimensions.find((item) => item.key === 'OVERALL')?.stars ?? 0;
+
+  return '★'.repeat(stars) + '☆'.repeat(Math.max(0, 5 - stars));
+});
+
+const goScore = (): void => {
+  uni.navigateTo({ url: '/pkgZodiac/pages/score' });
+};
 
 /**
  * 下拉刷新：同时刷新首页数据、系统配置与用户快照
@@ -186,6 +239,9 @@ onShow(() => {
    */
   appStore.initSystemMetrics();
 
+  // 今日分数：与画像/报告互不影响，单独拉（失败就安静地不显示）
+  void loadFortune();
+
   // 回前台超过 5 分钟则刷新，保证画像与报告状态不过期
   if (appStore.shouldRefresh()) {
     void refresh();
@@ -193,7 +249,7 @@ onShow(() => {
 });
 
 onPullDownRefresh(async () => {
-  await refresh();
+  await Promise.allSettled([refresh(), loadFortune()]);
   uni.stopPullDownRefresh();
 });
 
@@ -212,6 +268,32 @@ void refresh();
       <text v-else class="home__slogan">
         {{ profileBadge ? '你的画像：' + profileBadge : '认识自己，是理解关系的第一步' }}
       </text>
+    </view>
+
+    <!-- 今日分数横批：醒目、一行看完、点一下进详情 -->
+    <view v-if="dailyFortune && overallScore !== null" class="home__score card" @tap="goScore">
+      <view class="home__score-left">
+        <text class="home__score-label">今日分数</text>
+        <view class="home__score-value-row">
+          <text class="home__score-value">{{ overallScore }}</text>
+          <text class="home__score-unit">分</text>
+          <text class="home__score-stars">{{ overallStars }}</text>
+        </view>
+        <text class="home__score-tone">{{ dailyFortune.tone }}</text>
+      </view>
+      <view class="home__score-right">
+        <text class="home__score-sign">{{ dailyFortune.signName }}</text>
+        <text class="home__score-arrow">看详情 →</text>
+      </view>
+    </view>
+
+    <!-- 没设生日：给一次引导，而不是留一个空位 -->
+    <view v-else-if="needsBirthdayForFortune" class="home__score home__score--empty card" @tap="goScore">
+      <view class="home__score-left">
+        <text class="home__score-label">今日分数</text>
+        <text class="home__score-empty-text">设置出生日期，就能看到今天的综合分数与各分项</text>
+      </view>
+      <text class="home__score-arrow">去设置 →</text>
     </view>
 
     <!-- 主行动卡片 -->
@@ -272,6 +354,98 @@ void refresh();
     &--error {
       color: $color-danger;
     }
+  }
+
+  &__score {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: $space-md;
+    background: linear-gradient(135deg, #2b2f4a 0%, #4a3f6b 100%);
+    box-shadow: $shadow-md;
+  }
+
+  &__score-left {
+    flex: 1;
+  }
+
+  &__score-label {
+    display: block;
+    font-size: $font-size-xs;
+    color: $color-text-inverse;
+    opacity: 0.75;
+  }
+
+  &__score-value-row {
+    display: flex;
+    align-items: baseline;
+    margin-top: $space-xxs;
+  }
+
+  &__score-value {
+    font-size: 64rpx;
+    font-weight: $font-weight-bold;
+    line-height: 1.1;
+    color: $color-text-inverse;
+  }
+
+  &__score-unit {
+    margin-left: 4rpx;
+    font-size: $font-size-sm;
+    color: $color-text-inverse;
+    opacity: 0.8;
+  }
+
+  &__score-stars {
+    margin-left: $space-sm;
+    font-size: $font-size-sm;
+    color: $color-secondary;
+  }
+
+  &__score-tone {
+    display: block;
+    margin-top: $space-xs;
+    font-size: $font-size-sm;
+    line-height: $line-height-base;
+    color: $color-text-inverse;
+    opacity: 0.9;
+  }
+
+  &__score-right {
+    flex-shrink: 0;
+    margin-left: $space-md;
+    text-align: right;
+  }
+
+  &__score-sign {
+    display: block;
+    font-size: $font-size-sm;
+    color: $color-text-inverse;
+    opacity: 0.85;
+  }
+
+  &__score-arrow {
+    display: block;
+    margin-top: $space-xs;
+    font-size: $font-size-xs;
+    color: $color-secondary;
+  }
+
+  &__score--empty {
+    background: linear-gradient(135deg, $color-primary-fade 0%, $color-bg-card 100%);
+  }
+
+  &__score--empty &__score-label {
+    color: $color-text-primary;
+    opacity: 1;
+  }
+
+  &__score-empty-text {
+    display: block;
+    margin-top: $space-xxs;
+    font-size: $font-size-sm;
+    line-height: $line-height-base;
+    color: $color-text-secondary;
   }
 
   &__primary {

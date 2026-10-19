@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 运势生成的**确定性**与结构测试
  *
  * ## 这一层最核心的主张只有一条：**同一天同星座，永远是同一份内容**
@@ -15,7 +15,13 @@
  *     会得到两个分数，这是必错的。
  */
 
-import { buildDailyFortune, buildMonthlyFortune, buildWeeklyFortune, buildZodiacMatch } from './zodiac-fortune.util';
+import {
+  buildDailyFortune,
+  buildMonthlyFortune,
+  buildWeeklyFortune,
+  buildYearlyFortune,
+  buildZodiacMatch,
+} from './zodiac-fortune.util';
 import { ZODIAC_SIGNS } from './zodiac.types';
 
 describe('buildDailyFortune（今日运势）', () => {
@@ -40,7 +46,9 @@ describe('buildDailyFortune（今日运势）', () => {
     expect(seen.size).toBe(ZODIAC_SIGNS.length);
   });
 
-  it('结构齐备：五维 + 幸运元素 + 速配 + 宜忌 + 箴言', () => {
+  it('结构齐备：七维 + 幸运元素 + 速配 + 宜忌 + 箴言', () => {
+    // 2026-10 起维度从 5 扩到 7：新增「学习」「人际」（用户详情页要求的分项）
+    // 顺序即详情页展示顺序，因此这里同时断言顺序
     const fortune = buildDailyFortune('ARIES', '2026-10-16');
 
     expect(fortune.sign).toBe('ARIES');
@@ -48,7 +56,7 @@ describe('buildDailyFortune（今日运势）', () => {
     expect(fortune.date).toBe('2026-10-16');
     expect(fortune.tone.length).toBeGreaterThan(10);
 
-    expect(fortune.dimensions).toHaveLength(5);
+    expect(fortune.dimensions).toHaveLength(7);
     for (const dimension of fortune.dimensions) {
       expect(dimension.stars).toBeGreaterThanOrEqual(1);
       expect(dimension.stars).toBeLessThanOrEqual(5);
@@ -247,5 +255,85 @@ describe('buildZodiacMatch（星座配对）', () => {
 
     expect(same.score).toBeGreaterThanOrEqual(30);
     expect(same.dimensions).toHaveLength(3);
+  });
+});
+
+describe('分数与星级的一致性（详情页要直接展示分数）', () => {
+  it('每一维都有 0–100 的分数，且 30 ≤ score ≤ 99', () => {
+    const fortune = buildDailyFortune('ARIES', '2026-10-16');
+
+    for (const dimension of fortune.dimensions) {
+      expect(dimension.score).toBeGreaterThanOrEqual(30);
+      expect(dimension.score).toBeLessThanOrEqual(99);
+    }
+  });
+
+  it('【关键】分数与星级同源：5 星一定比 4 星高（不能出现"5 星但 60 分"）', () => {
+    // 扫一整年，把每个星级出现过的分数区间收出来
+    const byStars = new Map<number, number[]>();
+
+    for (let day = 0; day < 365; day += 1) {
+      const date = new Date(Date.UTC(2026, 0, 1 + day)).toISOString().slice(0, 10);
+      const fortune = buildDailyFortune('PISCES', date);
+
+      for (const dimension of fortune.dimensions) {
+        byStars.set(dimension.stars, [...(byStars.get(dimension.stars) ?? []), dimension.score]);
+      }
+    }
+
+    const stars = [...byStars.keys()].sort((left, right) => left - right);
+
+    for (let index = 1; index < stars.length; index += 1) {
+      const lower = Math.max(...(byStars.get(stars[index - 1]) ?? [0]));
+      const higher = Math.min(...(byStars.get(stars[index]) ?? [100]));
+
+      expect(higher).toBeGreaterThan(lower);
+    }
+  });
+
+  it('维度名与详情页的分项一致（综合 + 爱情/财富/事业/学习/人际 + 状态）', () => {
+    const fortune = buildDailyFortune('ARIES', '2026-10-16');
+
+    expect(fortune.dimensions.map((item) => item.label)).toEqual([
+      '综合',
+      '爱情',
+      '财富',
+      '事业',
+      '学习',
+      '人际',
+      '状态',
+    ]);
+  });
+});
+
+describe('buildYearlyFortune（年运）', () => {
+  it('同一星座同一年，连算 20 次完全一致', () => {
+    const first = JSON.stringify(buildYearlyFortune('PISCES', '2026-06-15'));
+
+    for (let index = 0; index < 20; index += 1) {
+      expect(JSON.stringify(buildYearlyFortune('PISCES', '2026-06-15'))).toBe(first);
+    }
+  });
+
+  it('同一年内换日期结果不变（按年份做种子），跨年才换', () => {
+    expect(JSON.stringify(buildYearlyFortune('PISCES', '2026-01-01'))).toBe(
+      JSON.stringify(buildYearlyFortune('PISCES', '2026-12-31')),
+    );
+    expect(JSON.stringify(buildYearlyFortune('PISCES', '2026-06-15'))).not.toBe(
+      JSON.stringify(buildYearlyFortune('PISCES', '2027-06-15')),
+    );
+  });
+
+  it('结构齐备：年度主题 + 星级 + 分数 + 四个季度 + 提醒', () => {
+    const yearly = buildYearlyFortune('ARIES', '2026-06-15');
+
+    expect(yearly.year).toBe('2026');
+    expect(yearly.theme.length).toBeGreaterThan(1);
+    expect(yearly.stars).toBeGreaterThanOrEqual(1);
+    expect(yearly.stars).toBeLessThanOrEqual(5);
+    expect(yearly.score).toBeGreaterThanOrEqual(30);
+    expect(yearly.sections).toHaveLength(4);
+    expect(yearly.sections.map((item) => item.label)).toEqual(['第一季度', '第二季度', '第三季度', '第四季度']);
+    expect(yearly.tip.length).toBeGreaterThan(5);
   });
 });
