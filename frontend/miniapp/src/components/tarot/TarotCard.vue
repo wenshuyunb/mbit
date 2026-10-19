@@ -23,6 +23,7 @@ import { computed, ref, watch } from 'vue';
 
 import { artOf, type EmblemShape } from './card-art.util';
 import { artUrlOf, backUrlOf } from './art-manifest';
+import { ART_ABSENT, ART_PRESENT } from './visual-tune';
 
 const props = withDefaults(
   defineProps<{
@@ -72,6 +73,19 @@ const backImageUrl = computed<string | null>(() => {
 
   return backUrlOf(props.sizeRpx >= 260 ? 720 : 360);
 });
+
+/** 当前这张牌是否有真图（决定装饰退让程度） */
+const hasArt = computed<boolean>(() => imageUrl.value !== null);
+const tune = computed(() => (hasArt.value ? ART_PRESENT : ART_ABSENT));
+
+/** 外框透明度与牌名衬底，随有无真图切换 */
+const faceStyle = computed<Record<string, string>>(() => ({
+  borderColor: `rgba(201, 171, 115, ${tune.value.frameAlpha})`,
+}));
+
+const scrimStyle = computed<Record<string, string>>(() => ({
+  background: `linear-gradient(180deg, rgba(9, 12, 20, 0) 0%, rgba(9, 12, 20, ${tune.value.nameScrimAlpha}) 100%)`,
+}));
 
 const onArtLoad = (): void => {
   artLoaded.value = true;
@@ -346,7 +360,14 @@ const crescentMaskStyle = computed(() => {
           @error="onArtError"
         />
 
-        <view class="tcard__face-frame">
+        <!-- 暗角：把插画四边压进夜色，减少"贴图感"（图元占位时很淡） -->
+        <view class="tcard__vignette" :style="{ opacity: String(tune.vignetteAlpha) }" />
+
+        <view
+          class="tcard__face-frame"
+          :class="tune.showInnerFrame ? '' : 'tcard__face-frame--flush'"
+          :style="faceStyle"
+        >
           <text class="tcard__numeral">{{ card.numeral ?? '·' }}</text>
 
           <!-- 图元占位：仅在无真图时渲染（有真图时它是多余的图层，白耗性能） -->
@@ -361,7 +382,7 @@ const crescentMaskStyle = computed(() => {
           </view>
           <view v-else class="tcard__emblem-placeholder" />
 
-          <view class="tcard__foot">
+          <view class="tcard__foot" :style="hasArt ? scrimStyle : {}">
             <view class="tcard__rule" />
             <text v-if="showName" class="tcard__name">{{ card.name }}</text>
           </view>
@@ -498,6 +519,23 @@ const crescentMaskStyle = computed(() => {
     font-size: 20rpx;
     letter-spacing: 3rpx;
     color: rgba(201, 171, 115, 0.85);
+  }
+
+  // 暗角：四次径向叠加成本很低，只画一次；不影响文字层（z-index 低于 frame 内容）
+  &__vignette {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: radial-gradient(ellipse at 50% 42%, rgba(9, 12, 20, 0) 42%, rgba(9, 12, 20, 0.85) 100%);
+    border-radius: 12rpx;
+  }
+
+  // 有真图时内框改为"不占位"：只保留一层极淡的描边，不切画面
+  &__face-frame--flush {
+    padding: 3% 1.5%;
+    border-color: rgba(201, 171, 115, 0.14);
   }
 
   &__emblem {
