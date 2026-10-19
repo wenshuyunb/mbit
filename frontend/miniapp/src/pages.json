@@ -5,7 +5,6 @@
       "^van-(.*)": "@/wxcomponents/vant/$1/index"
     }
   },
-
   "pages": [
     {
       "path": "pages/index/index",
@@ -36,7 +35,6 @@
       }
     }
   ],
-
   "subPackages": [
     {
       "root": "pkgTest",
@@ -167,8 +165,9 @@
         {
           "path": "pages/tarot-spreads",
           "style": {
-            "navigationStyle": "custom",
             "navigationBarTitleText": "塔罗牌",
+            "navigationBarBackgroundColor": "#101422",
+            "navigationBarTextStyle": "white",
             "enablePullDownRefresh": true,
             "backgroundColor": "#101422",
             "backgroundTextStyle": "light"
@@ -177,17 +176,11 @@
         {
           "path": "pages/tarot-draw",
           "style": {
-            "navigationStyle": "custom",
             "navigationBarTitleText": "抽卡解读",
+            "navigationBarBackgroundColor": "#0b0e18",
+            "navigationBarTextStyle": "white",
             "backgroundColor": "#0b0e18",
             "backgroundTextStyle": "light"
-          }
-        },
-        {
-          "path": "pages/tarot-daily",
-          "style": {
-            "navigationBarTitleText": "今日单张",
-            "enablePullDownRefresh": true
           }
         }
       ]
@@ -211,7 +204,6 @@
       ]
     }
   ],
-
   "preloadRule": {
     "pages/report/list": {
       "network": "all",
@@ -222,7 +214,6 @@
       "packages": ["pkgTest"]
     }
   },
-
   "tabBar": {
     "color": "#8A8A9E",
     "selectedColor": "#5B4BE0",
@@ -243,7 +234,6 @@
       }
     ]
   },
-
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "SoulMap AI",

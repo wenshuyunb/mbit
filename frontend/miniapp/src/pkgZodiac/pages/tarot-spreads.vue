@@ -21,10 +21,7 @@ import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 import MysticBackdrop from '@/components/tarot/MysticBackdrop.vue';
 import SpreadGlyph from '@/components/tarot/SpreadGlyph.vue';
 import { getTarotSpreads, type TarotSpread } from '@/api/tarot';
-import { safeNavigate, safeNavigateBack } from '@/utils/safe-navigate';
-import { useAppStore } from '@/store/app';
-
-const appStore = useAppStore();
+import { safeNavigate } from '@/utils/safe-navigate';
 
 const loading = ref(true);
 const loadError = ref('');
@@ -33,10 +30,6 @@ const spreads = ref<TarotSpread[]>([]);
 const expanded = ref<string | null>(null);
 /** 按下的牌阵（做按压反馈） */
 const pressed = ref<string | null>(null);
-
-/** 导航栏高度：状态栏 + 与胶囊对齐的 44px 区，避开系统按钮 */
-const navHeight = computed<number>(() => appStore.statusBarHeight + 44);
-const navPaddingTop = computed<number>(() => appStore.statusBarHeight + 8);
 
 /** 主推牌阵（今日指引）与其余牌阵分开渲染 */
 const featured = computed<TarotSpread | null>(() => spreads.value.find((item) => item.id === 'DAILY') ?? null);
@@ -82,14 +75,6 @@ const start = (spread: TarotSpread): void => {
   safeNavigate(`/pkgZodiac/pages/tarot-draw?id=${spread.id}`);
 };
 
-const goDaily = (): void => {
-  safeNavigate('/pkgZodiac/pages/tarot-daily');
-};
-
-const goBack = (): void => {
-  safeNavigateBack();
-};
-
 /** 英文副标题（设计语言里的 eyebrow 层） */
 const EYEBROW: Readonly<Record<string, string>> = {
   DAILY: 'ONE CARD · DAILY GUIDANCE',
@@ -104,23 +89,7 @@ const EYEBROW: Readonly<Record<string, string>> = {
   <view class="arcana">
     <MysticBackdrop :moonlight-top="-160" />
 
-    <!-- 沉浸式导航：避开状态栏与胶囊 -->
-    <view class="arcana__nav" :style="{ height: `${navHeight}px`, paddingTop: `${navPaddingTop}px` }">
-      <view class="arcana__nav-back" @tap="goBack">
-        <text class="arcana__nav-arrow">‹</text>
-      </view>
-      <view class="arcana__nav-title-box">
-        <text class="arcana__nav-title">塔罗牌</text>
-      </view>
-      <!-- 月相图腾：三个不同盈亏的月亮，作为品牌记号（不抢标题） -->
-      <view class="arcana__nav-moon">
-        <view class="arcana__moon-dot arcana__moon-dot--new" />
-        <view class="arcana__moon-dot arcana__moon-dot--half" />
-        <view class="arcana__moon-dot arcana__moon-dot--full" />
-      </view>
-    </view>
-
-    <view class="arcana__body" :style="{ paddingTop: `${navHeight + 8}px` }">
+    <view class="arcana__body">
       <!-- 主题区 -->
       <view class="arcana__hero">
         <view class="arcana__hero-moon">
@@ -183,11 +152,13 @@ const EYEBROW: Readonly<Record<string, string>> = {
           </view>
         </view>
 
-        <!-- 今日单张入口（轻量玩法）：做成一行细金线分隔的次要入口 -->
-        <view class="arcana__minor" @tap="goDaily">
-          <text class="arcana__minor-text">只想抽一张？今日单张指引</text>
-          <text class="arcana__minor-arrow">›</text>
-        </view>
+        <!--
+          这里曾经还有一个「只想抽一张？」的次要入口，指向另一张独立的今日单张页。
+          但那两点重复：上面的主推卡就是今日单张（同一个 DAILY 牌阵），
+          而且那张旧页是浅色底、老牌面，从这里点进去会换一套视觉语言 ——
+          两套风格拼在同一流程里，用户会觉得"格局不对"。
+          所以旧入口与旧页一并去掉，只留主推卡这一条路。
+        -->
 
         <!-- 其余牌阵：各自专属排列图 -->
         <view class="arcana__section">
@@ -252,76 +223,11 @@ const EYEBROW: Readonly<Record<string, string>> = {
 <style lang="scss" scoped>
 .arcana {
   position: relative;
+  box-sizing: border-box;
   min-height: 100vh;
+  overflow-x: hidden;
   padding-bottom: $arcana-space-xxl;
   background-color: $arcana-ink;
-
-  // ---------------------------------------------------------------- 导航
-  &__nav {
-    position: fixed;
-    top: 0;
-    right: 0;
-    left: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    box-sizing: border-box;
-    padding-right: $arcana-space-md;
-    padding-left: $arcana-space-md;
-    background: linear-gradient(180deg, rgba(16, 20, 34, 0.96) 0%, rgba(16, 20, 34, 0.7) 70%, rgba(16, 20, 34, 0) 100%);
-  }
-
-  &__nav-back {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 56rpx;
-    height: 56rpx;
-  }
-
-  &__nav-arrow {
-    font-size: 40rpx;
-    line-height: 1;
-    color: $arcana-gold;
-  }
-
-  &__nav-title-box {
-    flex: 1;
-    margin-left: $arcana-space-xs;
-  }
-
-  &__nav-title {
-    font-family: $arcana-font-serif;
-    font-size: 32rpx;
-    letter-spacing: 6rpx;
-    color: $arcana-moon;
-  }
-
-  &__nav-moon {
-    display: flex;
-    align-items: center;
-  }
-
-  &__moon-dot {
-    width: 10rpx;
-    height: 10rpx;
-    margin-left: 8rpx;
-    border-radius: 50%;
-  }
-
-  &__moon-dot--new {
-    background-color: transparent;
-    border: 1rpx solid rgba(201, 171, 115, 0.6);
-  }
-
-  &__moon-dot--half {
-    background: linear-gradient(90deg, $arcana-gold 50%, transparent 50%);
-    border: 1rpx solid rgba(201, 171, 115, 0.6);
-  }
-
-  &__moon-dot--full {
-    background-color: $arcana-gold;
-  }
 
   &__body {
     position: relative;
@@ -530,26 +436,6 @@ const EYEBROW: Readonly<Record<string, string>> = {
   &__featured-arrow-glyph {
     font-size: 28rpx;
     color: $arcana-gold;
-  }
-
-  // ---------------------------------------------------------------- 次要入口
-  &__minor {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: $arcana-space-md 0;
-    margin-top: $arcana-space-md;
-  }
-
-  &__minor-text {
-    font-family: $arcana-font-sans;
-    font-size: $arcana-fs-meta;
-    color: $arcana-silver;
-  }
-
-  &__minor-arrow {
-    font-size: 30rpx;
-    color: rgba(201, 171, 115, 0.6);
   }
 
   // ---------------------------------------------------------------- 区块标题

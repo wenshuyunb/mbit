@@ -1,15 +1,14 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 塔罗牌 · 抽卡与解读（分包 pkgZodiac）
  *
- * ## 页面节奏（三段式）
+ * ## 页面节奏（四层）
  *
- *   ① **洗牌**：按牌阵张数与**布局**摆出牌背，逐张翻开（220ms 间隔）——
+ *   ① **牌桌**：按牌阵布局真实摆位，逐张翻开（首张 360ms，其余 220ms）——
  *      抽卡要有过程感，一次"啪"地全出来就成了静态图；
- *   ② **逐位置解读**：每张牌一个区块，写明"这个位置在问什么"，
- *      让用户知道这张牌在回答哪一句，而不是只看到牌名；
- *   ③ **整体解读**：先给一句话结论 + 两个数字（大牌占比 / 逆位占比），
- *      再给三条从牌面实际算出的结构分析，最后给可执行的收尾建议。
+ *   ② **一句话启示**：先给结论，再给细节。用户最先要的是"这跟我有什么关系"；
+ *   ③ **逐张象征 + 串起来看**：这个位置在问什么、这张牌说了什么、几张合起来是什么走向；
+ *   ④ **可以怎么用**：落到可执行的收尾建议。
  *
  * ## 为什么按 `layout` 真实摆位
  *
@@ -73,6 +72,29 @@ const layoutRows = computed<number[][]>(() => {
 /** 单张牌阵用大牌，多张用小牌 */
 const isSingle = computed<boolean>(() => (spread.value?.layout ?? 'ROW') === 'SINGLE');
 
+/** 同一牌阵里最挤的一行有几张 */
+const widestRow = computed<number>(() => layoutRows.value.reduce((max, row) => Math.max(max, row.length), 1));
+
+/**
+ * 多张牌阵的牌面宽度（rpx）
+ *
+ * ⚠ 这里必须反算，不能一律写死 148rpx：
+ *   750rpx 设计宽度 − 页面左右内边距 = 约 670rpx 可用，
+ *   每张牌左右各留 5rpx → 单张实际占 `宽 + 10`rpx。
+ *   5 张 × 148rpx = 800rpx，已超过可用宽度，`flex` 会自己折成 4+1 ——
+ *   "七日指引"的五加二就成了四加三，牌阵位置的意义当场丢掉。
+ * 所以按最挤的那一行反算，且同一牌阵内所有牌等大（大小混排同样破坏格局）。
+ */
+const cardSizeRpx = computed<number>(() => {
+  if (isSingle.value) return 300;
+
+  const available = 670;
+  const slotGap = 10;
+  const fitted = Math.floor((available - slotGap * widestRow.value) / widestRow.value);
+
+  return Math.min(148, fitted);
+});
+
 onLoad((options) => {
   void bootstrap(options?.id);
 });
@@ -130,29 +152,31 @@ const goBack = (): void => {
 </script>
 
 <template>
-  <view class="draw page-container">
-    <view v-if="loading" class="card draw__state">
+  <view class="draw">
+    <view v-if="loading" class="draw__state">
       <text class="draw__state-text">正在洗牌…</text>
     </view>
 
-    <view v-else-if="loadError" class="card draw__state">
+    <view v-else-if="loadError" class="draw__state">
       <text class="draw__state-title">{{ loadError }}</text>
-      <button class="draw__state-action" @tap="goBack">回去换一个牌阵</button>
+      <view class="draw__state-action" @tap="goBack">回去换一个牌阵</view>
     </view>
 
     <template v-else-if="reading && spread">
-      <!-- 标题区 -->
+      <!-- ① 标题区 -->
       <view class="draw__head">
         <text class="draw__ornament">✦ ─────── ✦</text>
         <text class="draw__title">{{ reading.spreadName }}</text>
         <text class="draw__date">{{ reading.date }} · 共 {{ reading.draws.length }} 张</text>
       </view>
 
-      <!-- ① 牌桌：按布局分行，逐张翻开 -->
+      <!-- ② 牌桌：按布局分行，逐张翻开 -->
       <view class="draw__table">
         <view v-for="(row, rowIndex) in layoutRows" :key="rowIndex" class="draw__row">
           <view v-for="index in row" :key="index" class="draw__slot" :class="{ 'draw__slot--single': isSingle }">
-            <text class="draw__slot-label">{{ reading.draws[index]?.position.label }}</text>
+            <text class="draw__slot-label" :style="{ maxWidth: `${cardSizeRpx}rpx` }">{{
+              reading.draws[index]?.position.label
+            }}</text>
 
             <!--
               牌面统一用 TarotCard 组件：
@@ -166,7 +190,7 @@ const goBack = (): void => {
                 v-if="reading.draws[index]"
                 :card="reading.draws[index]!.card"
                 :orientation="reading.draws[index]!.orientation"
-                :size-rpx="isSingle ? 300 : 148"
+                :size-rpx="cardSizeRpx"
                 :flipped="isRevealed(index)"
               />
             </view>
@@ -181,32 +205,32 @@ const goBack = (): void => {
         </view>
       </view>
 
-      <!-- ② 整体解读 -->
       <template v-if="fullyRevealed">
+        <!-- ③ 一句话启示：先给结论 -->
         <view class="draw__summary">
-          <text class="draw__summary-label">一句话结论</text>
+          <text class="draw__summary-label">这一抽在说什么</text>
           <text class="draw__summary-headline">{{ reading.summary.headline }}</text>
 
           <view class="draw__stats">
             <view class="draw__stat">
               <text class="draw__stat-value">{{ reading.summary.stats.majorCount }}</text>
-              <text class="draw__stat-label">大阿卡纳 / 共 {{ reading.summary.stats.total }}</text>
+              <text class="draw__stat-label">大阿卡纳 · 共 {{ reading.summary.stats.total }} 张</text>
             </view>
             <view class="draw__stat-divider" />
             <view class="draw__stat">
               <text class="draw__stat-value">{{ reading.summary.stats.reversedCount }}</text>
-              <text class="draw__stat-label">逆位 / 共 {{ reading.summary.stats.total }}</text>
+              <text class="draw__stat-label">逆位 · 共 {{ reading.summary.stats.total }} 张</text>
             </view>
           </view>
         </view>
 
-        <view class="card draw__block">
-          <text class="draw__block-title">牌阵结构</text>
-          <text class="draw__block-body">{{ reading.summary.structure }}</text>
-        </view>
+        <!-- ④ 逐张象征 -->
+        <view class="draw__block">
+          <view class="draw__block-head">
+            <text class="draw__block-eyebrow">CARD BY CARD</text>
+            <text class="draw__block-title">逐张看</text>
+          </view>
 
-        <view class="card draw__block">
-          <text class="draw__block-title">逐张解读</text>
           <view v-for="item in reading.draws" :key="item.position.key" class="draw__reading">
             <view class="draw__reading-head">
               <text class="draw__reading-position">{{ item.position.label }}</text>
@@ -219,19 +243,36 @@ const goBack = (): void => {
           </view>
         </view>
 
-        <view class="card draw__block">
-          <text class="draw__block-title">把牌串起来看</text>
+        <!-- ⑤ 牌阵结构 -->
+        <view class="draw__block">
+          <view class="draw__block-head">
+            <text class="draw__block-eyebrow">THE PATTERN</text>
+            <text class="draw__block-title">牌与牌之间</text>
+          </view>
+          <text class="draw__block-body">{{ reading.summary.structure }}</text>
+        </view>
+
+        <!-- ⑥ 串起来看 -->
+        <view class="draw__block">
+          <view class="draw__block-head">
+            <text class="draw__block-eyebrow">IN ONE READING</text>
+            <text class="draw__block-title">把牌串起来看</text>
+          </view>
           <text class="draw__block-body">{{ reading.summary.narrative }}</text>
         </view>
 
-        <view class="card draw__block draw__block--advice">
-          <text class="draw__block-title">可以怎么用</text>
+        <!-- ⑦ 建议 -->
+        <view class="draw__block draw__block--advice">
+          <view class="draw__block-head">
+            <text class="draw__block-eyebrow">TO TAKE AWAY</text>
+            <text class="draw__block-title">可以怎么用</text>
+          </view>
           <text class="draw__block-body">{{ reading.summary.advice }}</text>
         </view>
 
         <text class="draw__note">同一天同一个牌阵的结果是固定的（刷新不会变）。明天再来会是一组新的牌。</text>
 
-        <view class="card draw__disclaimer">
+        <view class="draw__disclaimer">
           <text class="draw__disclaimer-text">{{ reading.disclaimer }}</text>
         </view>
       </template>
@@ -240,62 +281,94 @@ const goBack = (): void => {
 </template>
 
 <style lang="scss" scoped>
+/**
+ * 本页是深色场景（$arcana-night），三条纪律：
+ *
+ *   ① **不借用全局 `.card`**：那是白底深字的浅色卡片，压在夜空上像贴了一叠纸，
+ *      深色文字也几乎看不见。容器全部在这里用 `$arcana-*` 自己写；
+ *   ② **底板与辉光分开写**：辉光用 `background-image`，不用 `background` 简写 ——
+ *      简写会把 `background-color` 重置成透明，深色卡片就"漏底"了；
+ *   ③ **根节点锁横向溢出**：牌宽已从可用宽度反算（见 `cardSizeRpx`），
+ *      但 rpx 取整、小屏缩放仍可能有 1~2rpx 余量，`overflow-x: hidden` 兜住，
+ *      否则整页能被左右拖动，用户第一眼就会觉得"歪了"。
+ */
 .draw {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: $arcana-space-lg $arcana-space-md 120rpx;
+  overflow-x: hidden;
+  background-color: $arcana-night;
+
   // ---------------------------------------------------------------- 状态
   &__state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: $arcana-space-xxl $arcana-space-lg;
     text-align: center;
   }
 
   &__state-text {
-    font-size: $font-size-sm;
-    color: $color-text-secondary;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-body;
+    color: $arcana-silver;
   }
 
   &__state-title {
-    display: block;
-    margin-bottom: $space-md;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-card;
+    line-height: 1.6;
+    color: $arcana-moon;
   }
 
   &__state-action {
-    color: $color-text-inverse;
-    background-color: $color-primary;
-    border-radius: $radius-round;
+    padding: $arcana-space-sm $arcana-space-xl;
+    margin-top: $arcana-space-lg;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    color: $arcana-gold;
+    border: 1rpx solid $arcana-gold-soft;
+    border-radius: $arcana-radius-round;
   }
 
   // ---------------------------------------------------------------- 标题
   &__head {
-    padding: $space-md 0 $space-lg;
+    padding: $arcana-space-md 0 $arcana-space-lg;
     text-align: center;
   }
 
   &__ornament {
     display: block;
-    font-size: $font-size-xs;
-    letter-spacing: 4rpx;
-    color: #c8a96a;
-    opacity: 0.8;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 6rpx;
+    color: $arcana-gold-soft;
   }
 
   &__title {
     display: block;
-    margin-top: $space-xs;
-    font-size: $font-size-xl;
-    font-weight: $font-weight-bold;
-    letter-spacing: 2rpx;
+    margin-top: $arcana-space-sm;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-title;
+    letter-spacing: 3rpx;
+    color: $arcana-moon;
   }
 
   &__date {
     display: block;
-    margin-top: $space-xxs;
-    font-size: $font-size-xs;
-    color: $color-text-placeholder;
+    margin-top: $arcana-space-xs;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 1rpx;
+    color: rgba(168, 166, 184, 0.72);
   }
 
   // ---------------------------------------------------------------- 牌桌
   &__table {
-    padding: $space-md $space-xs;
-    background: radial-gradient(circle at 50% 0%, rgba(59, 45, 92, 0.16) 0%, rgba(36, 28, 59, 0) 70%);
-    border-radius: $radius-lg;
+    padding: $arcana-space-md $arcana-space-xs;
+    background-color: $arcana-navy-deep;
+    background-image: radial-gradient(circle at 50% 0%, rgba(242, 235, 221, 0.07) 0%, rgba(242, 235, 221, 0) 68%);
+    border: 1rpx solid $arcana-gold-faint;
+    border-radius: $arcana-radius-lg;
   }
 
   &__row {
@@ -303,239 +376,102 @@ const goBack = (): void => {
     flex-wrap: wrap;
     align-items: flex-start;
     justify-content: center;
+
+    // 行与行之间留白，靠兄弟选择器而不是给每行都加 margin-bottom
+    & + & {
+      margin-top: $arcana-space-md;
+    }
   }
 
   &__slot {
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin: 0 6rpx $space-lg;
+    margin: 0 5rpx;
   }
 
   &__slot--single {
-    margin-bottom: $space-md;
+    width: 100%;
+    margin: 0;
   }
 
   &__slot-label {
-    margin-bottom: $space-xs;
-    font-size: $font-size-xs;
-    color: $color-text-secondary;
+    margin-bottom: $arcana-space-xs;
+    overflow: hidden;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 1rpx;
+    color: rgba(242, 235, 221, 0.66);
+    text-align: center;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
-  // ---------------------------------------------------------------- 牌
-  &__card {
-    position: relative;
-    border-radius: 14rpx;
-    transition:
-      opacity 0.34s cubic-bezier(0.22, 0.9, 0.3, 1),
-      transform 0.34s cubic-bezier(0.22, 0.9, 0.3, 1);
-  }
-
-  &__card--small {
-    width: 148rpx;
-    height: 242rpx;
-  }
-
-  &__card--single {
-    width: 300rpx;
-    height: 492rpx;
-  }
-
-  // 未翻开：略微后仰 + 下沉 + 半透明
+  // ---------------------------------------------------------------- 牌出场
   &__card {
     opacity: 0.35;
-    transform: translateY(18rpx) rotateY(-28deg) scale(0.92);
+    transform: translateY(18rpx) scale(0.94);
+    transition:
+      opacity 0.34s $arcana-ease-out,
+      transform 0.34s $arcana-ease-out;
   }
 
   &__card--in {
     opacity: 1;
-    transform: translateY(0) rotateY(0deg) scale(1);
-    box-shadow: 0 10rpx 30rpx rgba(200, 169, 106, 0.28);
-  }
-
-  // ---------------------------------------------------------------- 牌背
-  &__back {
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: 6rpx;
-    background:
-      repeating-linear-gradient(45deg, rgba(200, 169, 106, 0.16) 0 2rpx, transparent 2rpx 12rpx),
-      repeating-linear-gradient(-45deg, rgba(200, 169, 106, 0.16) 0 2rpx, transparent 2rpx 12rpx),
-      linear-gradient(160deg, #241c3b 0%, #3b2d5c 55%, #241c3b 100%);
-    border: 2rpx solid #c8a96a;
-    border-radius: 14rpx;
-  }
-
-  &__back-frame {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    border: 2rpx solid rgba(200, 169, 106, 0.5);
-    border-radius: 10rpx;
-  }
-
-  &__back-mark {
-    font-size: 44rpx;
-    color: #c8a96a;
-    opacity: 0.9;
-  }
-
-  // ---------------------------------------------------------------- 牌面
-  &__face {
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: 6rpx;
-    border-radius: 14rpx;
-    box-shadow: inset 0 0 24rpx rgba(0, 0, 0, 0.35);
-  }
-
-  &__face--major {
-    background: linear-gradient(168deg, #1b2440 0%, #3b2d5c 48%, #1b2440 100%);
-    border: 2rpx solid #c8a96a;
-  }
-
-  &__face--minor {
-    background: linear-gradient(168deg, #1e2836 0%, #35505c 50%, #1e2836 100%);
-    border: 2rpx solid #9fb4bd;
-  }
-
-  &__face-inner {
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: 4rpx;
-    border: 2rpx solid rgba(255, 255, 255, 0.16);
-    border-radius: 10rpx;
-  }
-
-  &__face-content {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: $space-sm 4rpx;
-  }
-
-  // 逆位：牌面内容整体倒转（不换图、不用警示色）
-  &__face-content--reversed {
-    transform: rotate(180deg);
-  }
-
-  &__face-corners {
-    display: flex;
-    justify-content: space-between;
-    width: 100%;
-    padding: 0 2rpx;
-  }
-
-  &__face-corner {
-    font-size: 14rpx;
-    color: rgba(200, 169, 106, 0.7);
-  }
-
-  &__face-top {
-    font-size: $font-size-xs;
-    font-weight: $font-weight-bold;
-    letter-spacing: 2rpx;
-    color: #e8d3a0;
-  }
-
-  // 中央光晕：让符号像是"浮"在牌面上
-  &__face-aura {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 108rpx;
-    height: 108rpx;
-    background: radial-gradient(circle, rgba(232, 211, 160, 0.22) 0%, rgba(232, 211, 160, 0) 72%);
-    border-radius: $radius-round;
-  }
-
-  &__card--single &__face-aura {
-    width: 200rpx;
-    height: 200rpx;
-  }
-
-  &__face-symbol {
-    font-size: 56rpx;
-    line-height: 1;
-    color: #f5ebd6;
-    text-shadow: 0 0 12rpx rgba(232, 211, 160, 0.5);
-  }
-
-  &__card--single &__face-symbol {
-    font-size: 104rpx;
-  }
-
-  &__face-name {
-    font-size: $font-size-xs;
-    font-weight: $font-weight-semibold;
-    letter-spacing: 1rpx;
-    color: #f5ebd6;
-  }
-
-  &__card--single &__face-name {
-    font-size: $font-size-md;
-    letter-spacing: 4rpx;
-  }
-
-  &__face-rule {
-    width: 40%;
-    height: 1rpx;
-    background: linear-gradient(90deg, transparent, rgba(200, 169, 106, 0.85), transparent);
+    transform: translateY(0) scale(1);
   }
 
   &__orientation {
-    padding: 2rpx $space-sm;
-    margin-top: $space-xs;
-    font-size: 18rpx;
-    color: #c8a96a;
-    background-color: rgba(200, 169, 106, 0.14);
-    border-radius: $radius-round;
+    padding: 2rpx $arcana-space-sm;
+    margin-top: $arcana-space-xs;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 1rpx;
+    color: $arcana-gold;
+    background-color: rgba(201, 171, 115, 0.14);
+    border-radius: $arcana-radius-round;
   }
 
+  // 逆位是中性的"受阻 / 内化 / 过量"，不换警示色
   &__orientation--reversed {
-    color: $color-text-secondary;
-    background-color: $color-bg-hover;
+    color: $arcana-lilac;
+    background-color: rgba(175, 163, 200, 0.16);
   }
 
-  // ---------------------------------------------------------------- 结论
+  // ---------------------------------------------------------------- 一句话启示
   &__summary {
-    padding: $space-lg $space-md;
-    margin-top: $space-md;
-    background: linear-gradient(150deg, #1b2440 0%, #3b2d5c 100%);
-    border: 2rpx solid rgba(200, 169, 106, 0.5);
-    border-radius: $radius-lg;
+    padding: $arcana-space-lg $arcana-space-md;
+    margin-top: $arcana-space-lg;
+    background-color: $arcana-navy;
+    background-image: radial-gradient(circle at 50% 0%, rgba(242, 235, 221, 0.09) 0%, rgba(242, 235, 221, 0) 72%);
+    border: 1rpx solid $arcana-gold-soft;
+    border-radius: $arcana-radius-card;
   }
 
   &__summary-label {
     display: block;
-    font-size: $font-size-xs;
-    letter-spacing: 2rpx;
-    color: #c8a96a;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 3rpx;
+    color: rgba(201, 171, 115, 0.75);
   }
 
   &__summary-headline {
     display: block;
-    margin-top: $space-sm;
-    font-size: $font-size-sm;
-    line-height: $line-height-loose;
-    color: #f5ebd6;
+    margin-top: $arcana-space-sm;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-card;
+    line-height: 1.75;
+    color: $arcana-moon;
   }
 
+  // 统计只当"可信度注脚"：字号压到最小、不加色块，别跟结论抢
   &__stats {
     display: flex;
     align-items: center;
-    margin-top: $space-md;
+    padding-top: $arcana-space-md;
+    margin-top: $arcana-space-md;
+    border-top: 1rpx solid $arcana-gold-faint;
   }
 
   &__stat {
@@ -545,54 +481,86 @@ const goBack = (): void => {
 
   &__stat-divider {
     width: 1rpx;
-    height: 56rpx;
-    background: linear-gradient(180deg, transparent, rgba(200, 169, 106, 0.5), transparent);
+    height: 48rpx;
+    background-image: linear-gradient(
+      180deg,
+      rgba(201, 171, 115, 0) 0%,
+      $arcana-gold-soft 50%,
+      rgba(201, 171, 115, 0) 100%
+    );
   }
 
   &__stat-value {
     display: block;
-    font-size: 44rpx;
-    font-weight: $font-weight-bold;
+    font-family: $arcana-font-serif;
+    font-size: 40rpx;
+    font-weight: 600;
     line-height: 1.1;
-    color: #e8d3a0;
+    color: $arcana-gold;
   }
 
   &__stat-label {
     display: block;
-    margin-top: 2rpx;
-    font-size: $font-size-xs;
-    color: rgba(245, 235, 214, 0.7);
+    margin-top: 4rpx;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    color: rgba(168, 166, 184, 0.78);
   }
 
-  // ---------------------------------------------------------------- 正文
+  // ---------------------------------------------------------------- 正文区块
   &__block {
-    margin-top: $space-md;
+    padding: $arcana-space-lg $arcana-space-md;
+    margin-top: $arcana-space-md;
+    background-color: $arcana-navy;
+    border: 1rpx solid $arcana-gold-faint;
+    border-radius: $arcana-radius-card;
   }
 
   &__block--advice {
-    border-left: 6rpx solid #c8a96a;
+    border-left: 4rpx solid $arcana-gold-soft;
+  }
+
+  &__block-head {
+    margin-bottom: $arcana-space-md;
+  }
+
+  &__block-eyebrow {
+    display: block;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 3rpx;
+    color: rgba(201, 171, 115, 0.62);
   }
 
   &__block-title {
     display: block;
-    font-size: $font-size-md;
-    font-weight: $font-weight-semibold;
+    margin-top: 4rpx;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-card;
+    letter-spacing: 2rpx;
+    color: $arcana-moon;
   }
 
   &__block-body {
     display: block;
-    margin-top: $space-sm;
-    font-size: $font-size-sm;
-    line-height: $line-height-loose;
-    color: $color-text-regular;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-body;
+    line-height: $arcana-lh-body;
+    color: $arcana-silver;
   }
 
+  // ---------------------------------------------------------------- 逐张
   &__reading {
-    padding-top: $space-md;
-    margin-top: $space-md;
-    border-top: 1rpx solid $color-divider;
+    // 只在"两张之间"画分隔线：用兄弟选择器，
+    // 而不是给每张加 border-top 后再想办法去掉第一条（在 view 上 :first-of-type 并不可靠）
+    & + & {
+      padding-top: $arcana-space-md;
+      margin-top: $arcana-space-md;
+      border-top: 1rpx solid $arcana-gold-faint;
+    }
   }
 
+  // 位置名与牌名左右分列：左边是"问什么"，右边是"抽到什么"
   &__reading-head {
     display: flex;
     align-items: baseline;
@@ -600,47 +568,68 @@ const goBack = (): void => {
   }
 
   &__reading-position {
-    font-size: $font-size-sm;
-    font-weight: $font-weight-semibold;
+    flex: 0 0 auto;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    font-weight: 600;
+    letter-spacing: 1rpx;
+    color: $arcana-moon;
   }
 
   &__reading-card {
-    font-size: $font-size-xs;
-    color: $color-primary;
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: $arcana-space-sm;
+    overflow: hidden;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-meta;
+    color: $arcana-gold;
+    text-align: right;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   &__reading-question {
     display: block;
-    margin-top: $space-xxs;
-    font-size: $font-size-xs;
-    color: $color-text-placeholder;
+    margin-top: 4rpx;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    line-height: 1.5;
+    color: rgba(175, 163, 200, 0.82);
   }
 
   &__reading-body {
     display: block;
-    margin-top: $space-xs;
-    font-size: $font-size-sm;
-    line-height: $line-height-loose;
-    color: $color-text-regular;
+    margin-top: $arcana-space-xs;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-body;
+    line-height: $arcana-lh-body;
+    color: $arcana-silver;
   }
 
+  // ---------------------------------------------------------------- 脚注
   &__note {
     display: block;
-    margin-top: $space-md;
-    font-size: $font-size-xs;
-    line-height: $line-height-base;
-    color: $color-text-placeholder;
+    margin-top: $arcana-space-lg;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    line-height: 1.7;
+    color: rgba(168, 166, 184, 0.6);
     text-align: center;
   }
 
   &__disclaimer {
-    margin-top: $space-md;
+    padding: $arcana-space-md;
+    margin-top: $arcana-space-md;
+    border: 1rpx solid $arcana-gold-faint;
+    border-radius: $arcana-radius-card;
   }
 
   &__disclaimer-text {
-    font-size: $font-size-xs;
-    line-height: $line-height-loose;
-    color: $color-text-placeholder;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    line-height: 1.8;
+    color: rgba(168, 166, 184, 0.6);
   }
 }
 </style>
