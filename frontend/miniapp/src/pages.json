@@ -142,6 +142,13 @@
           "style": {
             "navigationBarTitleText": "我的本命星盘"
           }
+        },
+        {
+          "path": "pages/reading",
+          "style": {
+            "navigationBarTitleText": "星盘解读",
+            "enablePullDownRefresh": true
+          }
         }
       ]
     },

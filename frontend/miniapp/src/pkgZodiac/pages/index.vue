@@ -148,6 +148,10 @@ const goChart = (): void => {
   uni.navigateTo({ url: '/pkgZodiac/pages/chart' });
 };
 
+const goReading = (): void => {
+  uni.navigateTo({ url: '/pkgZodiac/pages/reading' });
+};
+
 const goMatch = (): void => {
   uni.navigateTo({ url: '/pkgZodiac/pages/match' });
 };
@@ -302,6 +306,13 @@ const goMatch = (): void => {
             <view class="zodiac__entry-body">
               <text class="zodiac__entry-title">我的本命星盘</text>
               <text class="zodiac__entry-desc">十大行星、上升星座与十二宫 —— 同一个星座的人，星盘也各不相同</text>
+            </view>
+          </view>
+          <view class="card zodiac__entry" @tap="goReading">
+            <text class="zodiac__entry-icon">📖</text>
+            <view class="zodiac__entry-body">
+              <text class="zodiac__entry-title">星盘解读</text>
+              <text class="zodiac__entry-desc">看不懂星盘也没关系 —— 把盘翻成人话，先看一段免费</text>
             </view>
           </view>
           <view class="card zodiac__entry" @tap="goSigns">

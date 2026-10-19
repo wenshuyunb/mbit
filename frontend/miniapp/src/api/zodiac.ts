@@ -354,6 +354,64 @@ export const resolveRegion = (province: string, city: string, county: string): P
 export const getNatalChart = (): Promise<ZodiacChart> =>
   http.get<ZodiacChart>('/zodiac/chart', undefined, { showError: false });
 
+// ----------------------------------------------------------------------------
+// 星盘解读（首段免费，完整章节需解锁）
+// ----------------------------------------------------------------------------
+
+/** 解读的一个章节 */
+export interface ReadingSection {
+  key: string;
+  title: string;
+  body: string;
+}
+
+/** 解锁来源 */
+export type ReadingUnlockSource = 'MEMBERSHIP' | 'PURCHASE' | 'INVITE' | null;
+
+/** 解锁信息（文案由服务端下发） */
+export interface ReadingAccess {
+  unlocked: boolean;
+  source: ReadingUnlockSource;
+  /** 邀请解锁的当天有效期（到当日 24:00）；永久或会员为 null */
+  expireAt: string | null;
+  /** 单次购买是否已接通（微信支付商户号未配置时为 false） */
+  purchaseAvailable: boolean;
+  hint: string;
+}
+
+/** 星盘解读响应 */
+export interface ZodiacReading {
+  status: 'READY' | 'PENDING' | 'FAILED';
+  /** `TEMPLATE` = 确定性模板；`AI` = 模型生成 */
+  source: 'TEMPLATE' | 'AI';
+  /** 免费首段 */
+  preview: string;
+  /** 完整章节：**未解锁时为 null**（后端根本不返回） */
+  sections: ReadingSection[] | null;
+  access: ReadingAccess;
+  totalSections: number;
+  totalChars: number;
+  generatedAt: string | null;
+  disclaimer: string;
+}
+
+/**
+ * 读我的星盘解读
+ *
+ * ⚠ `showError: false`：未设生日时是 `400 / 30019`（正常流程，页面自己引导）。
+ */
+export const getZodiacReading = (): Promise<ZodiacReading> =>
+  http.get<ZodiacReading>('/zodiac/reading', undefined, { showError: false });
+
+/**
+ * 用 AI 重写解读（同步接口，通常 10–30 秒）
+ *
+ * 后端在 AI 不可用 / 超时 / 返回格式不合格时**回退为已有内容**并返回 200，
+ * 因此这里不需要处理"生成失败"这一分支 —— 只需看响应里的 `source`。
+ */
+export const generateZodiacReading = (): Promise<ZodiacReading> =>
+  http.post<ZodiacReading>('/zodiac/reading/generate', undefined, { showError: false });
+
 /** 十二星座档案（**公开接口**：后端已标 `@Public()`，前端也不需要带令牌） */
 export const listZodiacProfiles = (): Promise<ZodiacProfile[]> =>
   http.get<ZodiacProfile[]>('/zodiac/signs', undefined, { needAuth: false, showError: false });
