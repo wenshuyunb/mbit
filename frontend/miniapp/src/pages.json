@@ -163,6 +163,13 @@
             "navigationBarTitleText": "今日运势",
             "enablePullDownRefresh": true
           }
+        },
+        {
+          "path": "pages/tarot",
+          "style": {
+            "navigationBarTitleText": "塔罗牌",
+            "enablePullDownRefresh": true
+          }
         }
       ]
     },

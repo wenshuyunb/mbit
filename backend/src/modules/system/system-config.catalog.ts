@@ -131,6 +131,16 @@ const DISCLAIMER_CRISIS_NOTICE =
  */
 const DISCLAIMER_ZODIAC =
   '星座内容属于娱乐性质的传统文化解读，仅供消遣参考，不构成任何预测、建议或决策依据，也与你的个人处境无关。请勿据此安排工作、财务、健康或人际关系上的重要决定。';
+
+/**
+ * 塔罗牌内容声明（合规文案，ADR-042）
+ *
+ * 与星座声明分开：塔罗的措辞要额外强调"牌面代表的是象征而非事实" ——
+ * 这是塔罗与星座在合规上最大的差别（星座谈"倾向"，塔罗容易被读成"预言"）。
+ */
+const DISCLAIMER_TAROT =
+  '塔罗牌是流行于西方的文化象征体系，本模块的牌义解读仅作娱乐与自我觉察之用，牌面代表的是象征意义而非事实，不构成任何预测、建议或决策依据。请勿据此安排工作、财务、健康或人际关系上的重要决定。';
+
 /**
  * AI 助手会话首屏提示（合规文案，契约 §3.7.1 响应字段 `systemNotice`）
  *
@@ -602,6 +612,23 @@ export const CONFIG_DEFINITIONS: readonly ConfigDefinition[] = [
     valueType: ConfigValueType.STRING,
     defaultValue: DISCLAIMER_ZODIAC,
     description: '星座运势模块必须展示的娱乐性质声明（不构成预测、建议或决策依据）',
+    requiresConfirmPassword: true,
+    impactScope: 'GLOBAL',
+    isPublic: true,
+  },
+  {
+    /**
+     * 塔罗牌声明（ADR-042）
+     *
+     * 与星座声明**分开一个配置项**：两者的措辞不同（塔罗要额外说清"不构成预测"），
+     * 合并成一条会让运营改一处影响两个模块。同样是合规文案，因此也要二次确认密码。
+     */
+    key: 'disclaimer.tarot',
+    group: 'DISCLAIMER',
+    label: '塔罗内容声明',
+    valueType: ConfigValueType.STRING,
+    defaultValue: DISCLAIMER_TAROT,
+    description: '塔罗牌模块必须展示的娱乐性质声明（不构成预测、建议或决策依据）',
     requiresConfirmPassword: true,
     impactScope: 'GLOBAL',
     isPublic: true,

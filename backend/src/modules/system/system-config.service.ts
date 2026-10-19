@@ -459,6 +459,13 @@ export class SystemConfigService {
        * 必须能独立迭代（口径收紧时改配置即可，不必发版），也与其它免责声明同一处下发。
        */
       zodiac: this.readString(map, 'disclaimer.zodiac', ''),
+      /**
+       * 塔罗牌的娱乐性质声明（2026-10-19 新增，ADR-042）
+       *
+       * 与星座声明分开配置：塔罗的措辞要额外强调"牌面代表的是象征而非事实" ——
+       * 星座谈的是"倾向"，塔罗更容易被用户读成"预言"，两者的合规口径不完全一样。
+       */
+      tarot: this.readString(map, 'disclaimer.tarot', ''),
       // 小程序 store 的直接消费字段（别名）：报告页脚声明
       reportFooter: this.readString(map, 'disclaimer.personality', ''),
     };

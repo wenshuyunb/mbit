@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 应用根模块
  *
  * 装配顺序即启动依赖顺序：
@@ -68,6 +68,7 @@ import { StorageModule } from './modules/storage/storage.module';
 // 用户端系统配置（`GET /system/config`、`/system/disclaimers`）：小程序所有页面都依赖它
 import { SystemModule } from './modules/system/system.module';
 import { TestModule } from './modules/test/test.module';
+import { TarotModule } from './modules/tarot/tarot.module';
 import { ZodiacModule } from './modules/zodiac/zodiac.module';
 import { UserModule } from './modules/user/user.module';
 
@@ -191,6 +192,7 @@ import { UserModule } from './modules/user/user.module';
      *（读娱乐性质声明），因此放在业务模块末尾，不与测评链发生任何关系。
      */
     ZodiacModule,
+    TarotModule,
     // 用户端系统配置（公开接口；小程序每个页面都依赖功能开关与合规免责声明）
     SystemModule,
     // 后台管理基础层（独立 realm：AdminJwtStrategy + AdminAuthGuard + RolesGuard + 审计）

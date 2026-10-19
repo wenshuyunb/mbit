@@ -152,6 +152,10 @@ const goReading = (): void => {
   uni.navigateTo({ url: '/pkgZodiac/pages/reading' });
 };
 
+const goTarot = (): void => {
+  uni.navigateTo({ url: '/pkgZodiac/pages/tarot' });
+};
+
 const goMatch = (): void => {
   uni.navigateTo({ url: '/pkgZodiac/pages/match' });
 };
@@ -313,6 +317,13 @@ const goMatch = (): void => {
             <view class="zodiac__entry-body">
               <text class="zodiac__entry-title">星盘解读</text>
               <text class="zodiac__entry-desc">看不懂星盘也没关系 —— 把盘翻成人话，先看一段免费</text>
+            </view>
+          </view>
+          <view class="card zodiac__entry" @tap="goTarot">
+            <text class="zodiac__entry-icon">🃏</text>
+            <view class="zodiac__entry-body">
+              <text class="zodiac__entry-title">今日塔罗</text>
+              <text class="zodiac__entry-desc">抽一张牌，看看今天适合把注意力放在哪里</text>
             </view>
           </view>
           <view class="card zodiac__entry" @tap="goSigns">

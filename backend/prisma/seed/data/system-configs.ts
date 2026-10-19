@@ -1,4 +1,4 @@
-import { ConfigValueType } from '@prisma/client';
+﻿import { ConfigValueType } from '@prisma/client';
 
 /**
  * `system_configs` 种子数据（AI 情感助手链路依赖的运行时配置）
@@ -92,6 +92,14 @@ const DISCLAIMER_AI_GENERATED_NOTICE = '本内容由人工智能生成。';
  */
 const DISCLAIMER_ZODIAC =
   '星座内容属于娱乐性质的传统文化解读，仅供消遣参考，不构成任何预测、建议或决策依据，也与你的个人处境无关。请勿据此安排工作、财务、健康或人际关系上的重要决定。';
+
+/**
+ * 塔罗牌的娱乐性质声明（与目录 `DISCLAIMER_TAROT` 逐字一致）
+ *
+ * ⚠ 与星座声明一样，两处必须同值（`system-configs.spec.ts` 会逐字比对）。
+ */
+const DISCLAIMER_TAROT =
+  '塔罗牌是流行于西方的文化象征体系，本模块的牌义解读仅作娱乐与自我觉察之用，牌面代表的是象征意义而非事实，不构成任何预测、建议或决策依据。请勿据此安排工作、财务、健康或人际关系上的重要决定。';
 
 /** 危机提示（危险内容拦截后必须与转介资源一同展示，与目录一致） */
 const DISCLAIMER_CRISIS_NOTICE =
@@ -230,6 +238,15 @@ export const SYSTEM_CONFIGS: SeedSystemConfig[] = [
     valueType: ConfigValueType.STRING,
     group: 'DISCLAIMER',
     description: 'AI 内容的显式标识（生成式 AI 内容监管要求）',
+    isPublic: true,
+    isEditable: true,
+  },
+  {
+    key: 'disclaimer.tarot',
+    value: DISCLAIMER_TAROT,
+    valueType: ConfigValueType.STRING,
+    group: 'DISCLAIMER',
+    description: '塔罗牌模块的娱乐性质声明（不构成预测、建议或决策依据）',
     isPublic: true,
     isEditable: true,
   },
