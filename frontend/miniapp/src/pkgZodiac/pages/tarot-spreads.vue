@@ -200,6 +200,7 @@ const goDaily = (): void => {
     display: block;
     font-size: $font-size-xl;
     font-weight: $font-weight-bold;
+    letter-spacing: 2rpx;
   }
 
   &__intro-desc {
@@ -249,18 +250,24 @@ const goDaily = (): void => {
   &__thumb {
     position: relative;
     flex-shrink: 0;
-    width: 120rpx;
-    height: 120rpx;
-    background: linear-gradient(160deg, #241c3b 0%, #3b2d5c 100%);
+    width: 124rpx;
+    height: 124rpx;
+    background:
+      repeating-linear-gradient(45deg, rgba(200, 169, 106, 0.12) 0 2rpx, transparent 2rpx 14rpx),
+      repeating-linear-gradient(-45deg, rgba(200, 169, 106, 0.12) 0 2rpx, transparent 2rpx 14rpx),
+      linear-gradient(160deg, #241c3b 0%, #3b2d5c 100%);
+    border: 2rpx solid rgba(200, 169, 106, 0.55);
     border-radius: $radius-sm;
   }
 
   &__thumb-card {
     position: absolute;
-    width: 18rpx;
-    height: 30rpx;
-    background-color: rgba(200, 169, 106, 0.85);
+    width: 20rpx;
+    height: 34rpx;
+    background: linear-gradient(160deg, #f0e5cf 0%, #c8a96a 100%);
+    border: 1rpx solid rgba(36, 28, 59, 0.35);
     border-radius: 3rpx;
+    box-shadow: 0 2rpx 6rpx rgba(0, 0, 0, 0.35);
     transform: translate(-50%, -50%);
   }
 

@@ -4,17 +4,22 @@
  *
  * ## 页面节奏（三段式）
  *
- *   ① **洗牌**：按牌阵张数摆出牌背，逐个翻开（间隔 220ms）—— 抽卡要有过程感，
- *      一次"啪"地全出来就成了静态图；
- *   ② **逐位置解读**：每张牌一个卡片，卡片上写明"这个位置在问什么"，
+ *   ① **洗牌**：按牌阵张数与**布局**摆出牌背，逐张翻开（220ms 间隔）——
+ *      抽卡要有过程感，一次"啪"地全出来就成了静态图；
+ *   ② **逐位置解读**：每张牌一个区块，写明"这个位置在问什么"，
  *      让用户知道这张牌在回答哪一句，而不是只看到牌名；
- *   ③ **整体解读**：先给一句话结论，再给三条从牌面实际算出来的结构分析
- *      （大阿卡纳占比 / 花色重心 / 逆位比重），最后给可执行的收尾建议。
+ *   ③ **整体解读**：先给一句话结论 + 两个数字（大牌占比 / 逆位占比），
+ *      再给三条从牌面实际算出的结构分析，最后给可执行的收尾建议。
+ *
+ * ## 为什么按 `layout` 真实摆位
+ *
+ * 之前所有牌阵都用 `flex-wrap` 平铺，"七日指引"七张会自己折行、看起来像随机排列 ——
+ * 而牌阵的**位置本身是有意义的**（周一在最左、周日收尾）。现在按布局分组：
+ * 单张居中、时间之流一行、关系之镜上二下一、七日指引五加二。
  *
  * ## 两条纪律
  *
- *   ① **不做本地随机**：牌与解读全部来自服务端（种子 = 用户 + 日期 + 牌阵），
- *      前端一旦自己随机，就会出现"刷新一次换一组牌"；
+ *   ① **不做本地随机**：牌与解读全部来自服务端（种子 = 用户 + 日期 + 牌阵）；
  *   ② **逆位不用警示色**：逆位是受阻 / 内化 / 过量，不是坏牌。
  */
 
@@ -41,17 +46,37 @@ const reading = ref<TarotSpreadReading | null>(null);
 
 /** 已翻开的张数（驱动逐张翻牌动画） */
 const revealedCount = ref(0);
-/** 是否全部翻完（翻完后才展示解读，避免解读先于牌出现） */
 const fullyRevealed = computed<boolean>(
-  () => reading.value !== null && revealedCount.value >= (reading.value.draws.length ?? 0),
+  () => reading.value !== null && revealedCount.value >= reading.value.draws.length,
 );
+
+/**
+ * 按牌阵布局把牌分组（每组一行）
+ *
+ * 位置顺序不能乱：七日指引里"周一"必须排第一，因此这里只做**分行**，不排序。
+ */
+const layoutRows = computed<number[][]>(() => {
+  const layout = spread.value?.layout ?? 'ROW';
+  const total = reading.value?.draws.length ?? 0;
+  const indices = Array.from({ length: total }, (_, index) => index);
+
+  if (layout === 'SINGLE') return [indices];
+  if (layout === 'COLUMN') return indices.map((index) => [index]);
+  if (layout === 'WEEK' && total >= 7) return [indices.slice(0, 5), indices.slice(5)];
+  if (layout === 'CROSS' && total >= 4) return [[0, 1], [2], [3]];
+
+  return [indices];
+});
+
+/** 单张牌阵用大牌，多张用小牌 */
+const isSingle = computed<boolean>(() => (spread.value?.layout ?? 'ROW') === 'SINGLE');
 
 onLoad((options) => {
   void bootstrap(options?.id);
 });
 
 onPullDownRefresh(async () => {
-  // 下拉刷新不会换牌（种子含日期），只是重新拉一次
+  // 下拉刷新不会换牌（种子含日期），只是保持已翻开状态
   revealedCount.value = reading.value?.draws.length ?? 0;
   uni.stopPullDownRefresh();
 });
@@ -73,10 +98,10 @@ const bootstrap = async (spreadId?: string): Promise<void> => {
     spread.value = matched;
     reading.value = await getTarotSpreadDraw(matched.id, today);
 
-    // 逐张翻开：间隔 220ms，让"抽卡"有过程感
+    // 逐张翻开：首张稍慢（像先抽出来），其余 220ms
     revealedCount.value = 0;
     for (let index = 0; index < reading.value.draws.length; index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, index === 0 ? 320 : 220));
+      await new Promise((resolve) => setTimeout(resolve, index === 0 ? 360 : 220));
       revealedCount.value = index + 1;
     }
   } catch (error) {
@@ -87,12 +112,15 @@ const bootstrap = async (spreadId?: string): Promise<void> => {
   }
 };
 
-/** 卡片是否已翻开 */
 const isRevealed = (index: number): boolean => index < revealedCount.value;
 
 /** 牌面顶部标记：大阿卡纳显示罗马数字，小阿卡纳显示花色符号 */
-const topMarkOf = (draw: TarotSpreadReading['draws'][number]): string =>
-  draw.card.arcana === 'MAJOR' ? (draw.card.numeral ?? '') : draw.card.symbol;
+const topMarkOf = (index: number): string => {
+  const draw = reading.value?.draws[index];
+  if (draw === undefined) return '';
+
+  return draw.card.arcana === 'MAJOR' ? (draw.card.numeral ?? '') : draw.card.symbol;
+};
 
 const goBack = (): void => {
   uni.navigateBack({ delta: 1 });
@@ -102,7 +130,7 @@ const goBack = (): void => {
 <template>
   <view class="draw page-container">
     <view v-if="loading" class="card draw__state">
-      <text>正在洗牌…</text>
+      <text class="draw__state-text">正在洗牌…</text>
     </view>
 
     <view v-else-if="loadError" class="card draw__state">
@@ -111,64 +139,84 @@ const goBack = (): void => {
     </view>
 
     <template v-else-if="reading && spread">
+      <!-- 标题区 -->
       <view class="draw__head">
+        <text class="draw__ornament">✦ ─────── ✦</text>
         <text class="draw__title">{{ reading.spreadName }}</text>
         <text class="draw__date">{{ reading.date }} · 共 {{ reading.draws.length }} 张</text>
       </view>
 
-      <!-- ① 牌面：逐张翻开 -->
-      <view class="draw__cards">
-        <view v-for="(item, index) in reading.draws" :key="item.position.key" class="draw__slot">
-          <text class="draw__position-label">{{ item.position.label }}</text>
+      <!-- ① 牌桌：按布局分行，逐张翻开 -->
+      <view class="draw__table">
+        <view v-for="(row, rowIndex) in layoutRows" :key="rowIndex" class="draw__row">
+          <view v-for="index in row" :key="index" class="draw__slot" :class="{ 'draw__slot--single': isSingle }">
+            <text class="draw__slot-label">{{ reading.draws[index]?.position.label }}</text>
 
-          <view class="draw__card-wrap" :class="{ 'draw__card-wrap--in': isRevealed(index) }">
-            <!-- 未翻开：牌背 -->
-            <view v-if="!isRevealed(index)" class="draw__back">
-              <text class="draw__back-mark">✦</text>
-            </view>
-
-            <!-- 已翻开：牌面 -->
             <view
-              v-else
-              class="draw__face"
-              :class="item.card.arcana === 'MAJOR' ? 'draw__face--major' : 'draw__face--minor'"
+              class="draw__card"
+              :class="[
+                isSingle ? 'draw__card--single' : 'draw__card--small',
+                isRevealed(index) ? 'draw__card--in' : '',
+              ]"
             >
-              <view class="draw__face-frame" :class="{ 'draw__face-frame--reversed': item.orientation === 'REVERSED' }">
-                <text class="draw__face-top">{{ topMarkOf(item) }}</text>
-                <text class="draw__face-symbol">{{ item.card.symbol }}</text>
-                <text class="draw__face-name">{{ item.card.name }}</text>
+              <!-- 未翻开：牌背 -->
+              <view v-if="!isRevealed(index)" class="draw__back">
+                <view class="draw__back-frame">
+                  <text class="draw__back-mark">✦</text>
+                </view>
+              </view>
+
+              <!-- 已翻开：牌面 -->
+              <view
+                v-else
+                class="draw__face"
+                :class="reading.draws[index]?.card.arcana === 'MAJOR' ? 'draw__face--major' : 'draw__face--minor'"
+              >
+                <view class="draw__face-inner">
+                  <view
+                    class="draw__face-content"
+                    :class="reading.draws[index]?.orientation === 'REVERSED' ? 'draw__face-content--reversed' : ''"
+                  >
+                    <view class="draw__face-corners">
+                      <text class="draw__face-corner">✦</text>
+                      <text class="draw__face-corner">✦</text>
+                    </view>
+                    <text class="draw__face-top">{{ topMarkOf(index) }}</text>
+                    <view class="draw__face-aura">
+                      <text class="draw__face-symbol">{{ reading.draws[index]?.card.symbol }}</text>
+                    </view>
+                    <text class="draw__face-name">{{ reading.draws[index]?.card.name }}</text>
+                    <view class="draw__face-rule" />
+                  </view>
+                </view>
               </view>
             </view>
-          </view>
 
-          <text
-            v-if="isRevealed(index)"
-            class="draw__orientation"
-            :class="{ 'draw__orientation--reversed': item.orientation === 'REVERSED' }"
-          >
-            {{ item.orientationLabel }}
-          </text>
+            <text
+              v-if="isRevealed(index)"
+              class="draw__orientation"
+              :class="reading.draws[index]?.orientation === 'REVERSED' ? 'draw__orientation--reversed' : ''"
+              >{{ reading.draws[index]?.orientationLabel }}</text
+            >
+          </view>
         </view>
       </view>
 
-      <!-- ② 逐位置解读 -->
+      <!-- ② 整体解读 -->
       <template v-if="fullyRevealed">
-        <view class="card draw__summary">
+        <view class="draw__summary">
           <text class="draw__summary-label">一句话结论</text>
           <text class="draw__summary-headline">{{ reading.summary.headline }}</text>
 
           <view class="draw__stats">
             <view class="draw__stat">
-              <text class="draw__stat-value"
-                >{{ reading.summary.stats.majorCount }}/{{ reading.summary.stats.total }}</text
-              >
-              <text class="draw__stat-label">大阿卡纳</text>
+              <text class="draw__stat-value">{{ reading.summary.stats.majorCount }}</text>
+              <text class="draw__stat-label">大阿卡纳 / 共 {{ reading.summary.stats.total }}</text>
             </view>
+            <view class="draw__stat-divider" />
             <view class="draw__stat">
-              <text class="draw__stat-value"
-                >{{ reading.summary.stats.reversedCount }}/{{ reading.summary.stats.total }}</text
-              >
-              <text class="draw__stat-label">逆位</text>
+              <text class="draw__stat-value">{{ reading.summary.stats.reversedCount }}</text>
+              <text class="draw__stat-label">逆位 / 共 {{ reading.summary.stats.total }}</text>
             </view>
           </view>
         </view>
@@ -202,7 +250,7 @@ const goBack = (): void => {
           <text class="draw__block-body">{{ reading.summary.advice }}</text>
         </view>
 
-        <text class="draw__note"> 同一天同一个牌阵的结果是固定的（刷新不会变）。明天再来会是一组新的牌。 </text>
+        <text class="draw__note">同一天同一个牌阵的结果是固定的（刷新不会变）。明天再来会是一组新的牌。</text>
 
         <view class="card draw__disclaimer">
           <text class="draw__disclaimer-text">{{ reading.disclaimer }}</text>
@@ -214,8 +262,14 @@ const goBack = (): void => {
 
 <style lang="scss" scoped>
 .draw {
+  // ---------------------------------------------------------------- 状态
   &__state {
     text-align: center;
+  }
+
+  &__state-text {
+    font-size: $font-size-sm;
+    color: $color-text-secondary;
   }
 
   &__state-title {
@@ -229,15 +283,26 @@ const goBack = (): void => {
     border-radius: $radius-round;
   }
 
+  // ---------------------------------------------------------------- 标题
   &__head {
     padding: $space-md 0 $space-lg;
     text-align: center;
   }
 
+  &__ornament {
+    display: block;
+    font-size: $font-size-xs;
+    letter-spacing: 4rpx;
+    color: #c8a96a;
+    opacity: 0.8;
+  }
+
   &__title {
     display: block;
+    margin-top: $space-xs;
     font-size: $font-size-xl;
     font-weight: $font-weight-bold;
+    letter-spacing: 2rpx;
   }
 
   &__date {
@@ -247,10 +312,17 @@ const goBack = (): void => {
     color: $color-text-placeholder;
   }
 
-  // ---------------------------------------------------------------- 牌面
-  &__cards {
+  // ---------------------------------------------------------------- 牌桌
+  &__table {
+    padding: $space-md $space-xs;
+    background: radial-gradient(circle at 50% 0%, rgba(59, 45, 92, 0.16) 0%, rgba(36, 28, 59, 0) 70%);
+    border-radius: $radius-lg;
+  }
+
+  &__row {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     justify-content: center;
   }
 
@@ -258,66 +330,112 @@ const goBack = (): void => {
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin: 0 $space-xs $space-md;
+    margin: 0 6rpx $space-lg;
   }
 
-  &__position-label {
+  &__slot--single {
+    margin-bottom: $space-md;
+  }
+
+  &__slot-label {
     margin-bottom: $space-xs;
     font-size: $font-size-xs;
     color: $color-text-secondary;
   }
 
-  &__card-wrap {
-    // 翻牌动画：从下方轻微上浮 + 淡入 + 微旋转，像真的翻开一张牌
-    width: 132rpx;
-    height: 216rpx;
-    opacity: 0.25;
-    transform: translateY(16rpx) rotateY(-24deg) scale(0.94);
+  // ---------------------------------------------------------------- 牌
+  &__card {
+    position: relative;
+    border-radius: 14rpx;
     transition:
-      opacity 0.32s ease,
-      transform 0.32s ease;
+      opacity 0.34s cubic-bezier(0.22, 0.9, 0.3, 1),
+      transform 0.34s cubic-bezier(0.22, 0.9, 0.3, 1);
   }
 
-  &__card-wrap--in {
+  &__card--small {
+    width: 148rpx;
+    height: 242rpx;
+  }
+
+  &__card--single {
+    width: 300rpx;
+    height: 492rpx;
+  }
+
+  // 未翻开：略微后仰 + 下沉 + 半透明
+  &__card {
+    opacity: 0.35;
+    transform: translateY(18rpx) rotateY(-28deg) scale(0.92);
+  }
+
+  &__card--in {
     opacity: 1;
     transform: translateY(0) rotateY(0deg) scale(1);
+    box-shadow: 0 10rpx 30rpx rgba(200, 169, 106, 0.28);
   }
 
+  // ---------------------------------------------------------------- 牌背
   &__back {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    padding: 6rpx;
+    background:
+      repeating-linear-gradient(45deg, rgba(200, 169, 106, 0.16) 0 2rpx, transparent 2rpx 12rpx),
+      repeating-linear-gradient(-45deg, rgba(200, 169, 106, 0.16) 0 2rpx, transparent 2rpx 12rpx),
+      linear-gradient(160deg, #241c3b 0%, #3b2d5c 55%, #241c3b 100%);
+    border: 2rpx solid #c8a96a;
+    border-radius: 14rpx;
+  }
+
+  &__back-frame {
     display: flex;
     align-items: center;
     justify-content: center;
+    box-sizing: border-box;
     width: 100%;
     height: 100%;
-    background: linear-gradient(160deg, #241c3b 0%, #3b2d5c 55%, #241c3b 100%);
-    border: 2rpx solid #c8a96a;
+    border: 2rpx solid rgba(200, 169, 106, 0.5);
     border-radius: 10rpx;
   }
 
   &__back-mark {
-    font-size: 32rpx;
+    font-size: 44rpx;
     color: #c8a96a;
-    opacity: 0.85;
+    opacity: 0.9;
   }
 
+  // ---------------------------------------------------------------- 牌面
   &__face {
     box-sizing: border-box;
     width: 100%;
     height: 100%;
     padding: 6rpx;
-    border-radius: 10rpx;
-    box-shadow: 0 8rpx 20rpx rgba(36, 28, 59, 0.32);
+    border-radius: 14rpx;
+    box-shadow: inset 0 0 24rpx rgba(0, 0, 0, 0.35);
   }
 
   &__face--major {
-    background: linear-gradient(165deg, #1f2a4a 0%, #3b2d5c 50%, #1f2a4a 100%);
+    background: linear-gradient(168deg, #1b2440 0%, #3b2d5c 48%, #1b2440 100%);
+    border: 2rpx solid #c8a96a;
   }
 
   &__face--minor {
-    background: linear-gradient(165deg, #23303f 0%, #35505c 50%, #23303f 100%);
+    background: linear-gradient(168deg, #1e2836 0%, #35505c 50%, #1e2836 100%);
+    border: 2rpx solid #9fb4bd;
   }
 
-  &__face-frame {
+  &__face-inner {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    padding: 4rpx;
+    border: 2rpx solid rgba(255, 255, 255, 0.16);
+    border-radius: 10rpx;
+  }
+
+  &__face-content {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -325,67 +443,119 @@ const goBack = (): void => {
     box-sizing: border-box;
     width: 100%;
     height: 100%;
-    padding: $space-sm 2rpx;
-    border: 2rpx solid rgba(200, 169, 106, 0.65);
-    border-radius: 6rpx;
+    padding: $space-sm 4rpx;
   }
 
-  // 逆位：牌面内容整体倒过来（不换图，也不用警示色）
-  &__face-frame--reversed {
+  // 逆位：牌面内容整体倒转（不换图、不用警示色）
+  &__face-content--reversed {
     transform: rotate(180deg);
+  }
+
+  &__face-corners {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0 2rpx;
+  }
+
+  &__face-corner {
+    font-size: 14rpx;
+    color: rgba(200, 169, 106, 0.7);
   }
 
   &__face-top {
     font-size: $font-size-xs;
     font-weight: $font-weight-bold;
-    color: #d9bf85;
+    letter-spacing: 2rpx;
+    color: #e8d3a0;
+  }
+
+  // 中央光晕：让符号像是"浮"在牌面上
+  &__face-aura {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 108rpx;
+    height: 108rpx;
+    background: radial-gradient(circle, rgba(232, 211, 160, 0.22) 0%, rgba(232, 211, 160, 0) 72%);
+    border-radius: $radius-round;
+  }
+
+  &__card--single &__face-aura {
+    width: 200rpx;
+    height: 200rpx;
   }
 
   &__face-symbol {
-    font-size: 48rpx;
+    font-size: 56rpx;
     line-height: 1;
-    color: #f0e5cf;
+    color: #f5ebd6;
+    text-shadow: 0 0 12rpx rgba(232, 211, 160, 0.5);
+  }
+
+  &__card--single &__face-symbol {
+    font-size: 104rpx;
   }
 
   &__face-name {
     font-size: $font-size-xs;
     font-weight: $font-weight-semibold;
-    color: #f0e5cf;
+    letter-spacing: 1rpx;
+    color: #f5ebd6;
+  }
+
+  &__card--single &__face-name {
+    font-size: $font-size-md;
+    letter-spacing: 4rpx;
+  }
+
+  &__face-rule {
+    width: 40%;
+    height: 1rpx;
+    background: linear-gradient(90deg, transparent, rgba(200, 169, 106, 0.85), transparent);
   }
 
   &__orientation {
+    padding: 2rpx $space-sm;
     margin-top: $space-xs;
-    font-size: $font-size-xs;
-    color: $color-primary;
+    font-size: 18rpx;
+    color: #c8a96a;
+    background-color: rgba(200, 169, 106, 0.14);
+    border-radius: $radius-round;
   }
 
   &__orientation--reversed {
     color: $color-text-secondary;
+    background-color: $color-bg-hover;
   }
 
-  // ---------------------------------------------------------------- 解读
+  // ---------------------------------------------------------------- 结论
   &__summary {
+    padding: $space-lg $space-md;
     margin-top: $space-md;
-    background: linear-gradient(135deg, #2b2f4a 0%, #4a3f6b 100%);
+    background: linear-gradient(150deg, #1b2440 0%, #3b2d5c 100%);
+    border: 2rpx solid rgba(200, 169, 106, 0.5);
+    border-radius: $radius-lg;
   }
 
   &__summary-label {
     display: block;
     font-size: $font-size-xs;
-    color: $color-text-inverse;
-    opacity: 0.75;
+    letter-spacing: 2rpx;
+    color: #c8a96a;
   }
 
   &__summary-headline {
     display: block;
-    margin-top: $space-xs;
+    margin-top: $space-sm;
     font-size: $font-size-sm;
     line-height: $line-height-loose;
-    color: $color-text-inverse;
+    color: #f5ebd6;
   }
 
   &__stats {
     display: flex;
+    align-items: center;
     margin-top: $space-md;
   }
 
@@ -394,27 +564,34 @@ const goBack = (): void => {
     text-align: center;
   }
 
+  &__stat-divider {
+    width: 1rpx;
+    height: 56rpx;
+    background: linear-gradient(180deg, transparent, rgba(200, 169, 106, 0.5), transparent);
+  }
+
   &__stat-value {
     display: block;
-    font-size: $font-size-lg;
+    font-size: 44rpx;
     font-weight: $font-weight-bold;
-    color: $color-secondary;
+    line-height: 1.1;
+    color: #e8d3a0;
   }
 
   &__stat-label {
     display: block;
     margin-top: 2rpx;
     font-size: $font-size-xs;
-    color: $color-text-inverse;
-    opacity: 0.75;
+    color: rgba(245, 235, 214, 0.7);
   }
 
+  // ---------------------------------------------------------------- 正文
   &__block {
     margin-top: $space-md;
   }
 
   &__block--advice {
-    border-left: 6rpx solid $color-primary;
+    border-left: 6rpx solid #c8a96a;
   }
 
   &__block-title {
