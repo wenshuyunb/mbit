@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 塔罗牌 · 抽卡与解读（分包 pkgZodiac）
  *
@@ -26,6 +26,7 @@
 import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 
+import TarotCard from '@/components/tarot/TarotCard.vue';
 import { getTarotSpreadDraw, getTarotSpreads, type TarotSpread, type TarotSpreadReading } from '@/api/tarot';
 
 /** 今天的 `YYYY-MM-DD`（本地时区口径） */
@@ -114,14 +115,6 @@ const bootstrap = async (spreadId?: string): Promise<void> => {
 
 const isRevealed = (index: number): boolean => index < revealedCount.value;
 
-/** 牌面顶部标记：大阿卡纳显示罗马数字，小阿卡纳显示花色符号 */
-const topMarkOf = (index: number): string => {
-  const draw = reading.value?.draws[index];
-  if (draw === undefined) return '';
-
-  return draw.card.arcana === 'MAJOR' ? (draw.card.numeral ?? '') : draw.card.symbol;
-};
-
 const goBack = (): void => {
   uni.navigateBack({ delta: 1 });
 };
@@ -152,44 +145,21 @@ const goBack = (): void => {
           <view v-for="index in row" :key="index" class="draw__slot" :class="{ 'draw__slot--single': isSingle }">
             <text class="draw__slot-label">{{ reading.draws[index]?.position.label }}</text>
 
-            <view
-              class="draw__card"
-              :class="[
-                isSingle ? 'draw__card--single' : 'draw__card--small',
-                isRevealed(index) ? 'draw__card--in' : '',
-              ]"
-            >
-              <!-- 未翻开：牌背 -->
-              <view v-if="!isRevealed(index)" class="draw__back">
-                <view class="draw__back-frame">
-                  <text class="draw__back-mark">✦</text>
-                </view>
-              </view>
-
-              <!-- 已翻开：牌面 -->
-              <view
-                v-else
-                class="draw__face"
-                :class="reading.draws[index]?.card.arcana === 'MAJOR' ? 'draw__face--major' : 'draw__face--minor'"
-              >
-                <view class="draw__face-inner">
-                  <view
-                    class="draw__face-content"
-                    :class="reading.draws[index]?.orientation === 'REVERSED' ? 'draw__face-content--reversed' : ''"
-                  >
-                    <view class="draw__face-corners">
-                      <text class="draw__face-corner">✦</text>
-                      <text class="draw__face-corner">✦</text>
-                    </view>
-                    <text class="draw__face-top">{{ topMarkOf(index) }}</text>
-                    <view class="draw__face-aura">
-                      <text class="draw__face-symbol">{{ reading.draws[index]?.card.symbol }}</text>
-                    </view>
-                    <text class="draw__face-name">{{ reading.draws[index]?.card.name }}</text>
-                    <view class="draw__face-rule" />
-                  </view>
-                </view>
-              </view>
+            <!--
+              牌面统一用 TarotCard 组件：
+                · 牌背纹样、真·插画层（填了美术资源才出现）、图元占位三者由组件内部决定；
+                · 两段式翻牌（0°→90° 换面→180°）也由组件负责，翻到侧缘时是"纸立起来"的瞬间；
+                · 逆位是整张牌真实旋转 180°，不是只改文字标签。
+              外层只负责"逐张出场"的淡入与上浮，两者职责分开。
+            -->
+            <view class="draw__card" :class="isRevealed(index) ? 'draw__card--in' : ''">
+              <TarotCard
+                v-if="reading.draws[index]"
+                :card="reading.draws[index]!.card"
+                :orientation="reading.draws[index]!.orientation"
+                :size-rpx="isSingle ? 300 : 148"
+                :flipped="isRevealed(index)"
+              />
             </view>
 
             <text

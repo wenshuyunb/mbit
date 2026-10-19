@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 塔罗牌（正反面 + 翻牌动效 + 图元艺术）
  *
@@ -22,6 +22,7 @@
 import { computed, ref, watch } from 'vue';
 
 import { artOf, type EmblemShape } from './card-art.util';
+import { artUrlOf, backUrlOf } from './art-manifest';
 
 const props = withDefaults(
   defineProps<{
@@ -48,6 +49,38 @@ const props = withDefaults(
 
 /** 牌面比例：塔罗牌约 1 : 1.64 */
 const CARD_RATIO = 1.64;
+
+/**
+ * 真实插画的两级状态
+ *
+ * `artFailed` 一旦置位就**本会话内不再重试**：弱网下反复请求只会让牌面一直空白，
+ * 不如稳定地退回图元占位（尺寸完全一致，不会有布局跳动）。
+ */
+const artLoaded = ref(false);
+const artFailed = ref(false);
+
+/** 插画地址：未接入美术资源时为 null（组件走图元占位） */
+const imageUrl = computed<string | null>(() => {
+  if (artFailed.value) return null;
+
+  // 缩略图请求小尺寸，大牌请求大尺寸（78 张全尺寸图在弱网下是灾难）
+  return artUrlOf(props.card.id, props.sizeRpx >= 260 ? 720 : 360);
+});
+
+const backImageUrl = computed<string | null>(() => {
+  if (artFailed.value) return null;
+
+  return backUrlOf(props.sizeRpx >= 260 ? 720 : 360);
+});
+
+const onArtLoad = (): void => {
+  artLoaded.value = true;
+};
+
+const onArtError = (): void => {
+  artFailed.value = true;
+  artLoaded.value = false;
+};
 
 const width = computed(() => props.sizeRpx);
 const height = computed(() => Math.round(props.sizeRpx * CARD_RATIO));
@@ -282,6 +315,16 @@ const crescentMaskStyle = computed(() => {
     <view class="tcard__flipper" :style="{ transform: `rotateY(${flipDeg}deg)` }">
       <!-- 牌背 -->
       <view v-if="phase !== 'front'" class="tcard__back">
+        <!-- 真·牌背插画（未接入时走下面的对称纹样） -->
+        <image
+          v-if="backImageUrl"
+          class="tcard__art tcard__art--back"
+          :src="backImageUrl"
+          mode="aspectFill"
+          :style="{ opacity: artLoaded ? 1 : 0 }"
+          @load="onArtLoad"
+          @error="onArtError"
+        />
         <view class="tcard__back-frame">
           <view class="tcard__back-orb">
             <text class="tcard__back-glyph">✦</text>
@@ -292,14 +335,31 @@ const crescentMaskStyle = computed(() => {
 
       <!-- 牌面 -->
       <view v-else class="tcard__face">
+        <!-- 真·塔罗插画：填了美术资源就用它，未填/加载失败回退到图元占位 -->
+        <image
+          v-if="imageUrl"
+          class="tcard__art"
+          :src="imageUrl"
+          mode="aspectFill"
+          :style="{ opacity: artLoaded ? 1 : 0 }"
+          @load="onArtLoad"
+          @error="onArtError"
+        />
+
         <view class="tcard__face-frame">
           <text class="tcard__numeral">{{ card.numeral ?? '·' }}</text>
 
-          <view class="tcard__emblem" :style="{ width: `${emblemSize}rpx`, height: `${emblemSize}rpx` }">
+          <!-- 图元占位：仅在无真图时渲染（有真图时它是多余的图层，白耗性能） -->
+          <view
+            v-if="imageUrl === null"
+            class="tcard__emblem"
+            :style="{ width: `${emblemSize}rpx`, height: `${emblemSize}rpx` }"
+          >
             <view v-for="shape in shapeViews" :key="shape.key" class="tcard__shape" :style="shape.style" />
             <view v-if="crescentMaskStyle" class="tcard__shape" :style="crescentMaskStyle" />
             <view v-for="dot in starDots" :key="dot.key" class="tcard__shape tcard__dot" :style="dot.style" />
           </view>
+          <view v-else class="tcard__emblem-placeholder" />
 
           <view class="tcard__foot">
             <view class="tcard__rule" />
@@ -315,6 +375,29 @@ const crescentMaskStyle = computed(() => {
 .tcard {
   position: relative;
   perspective: 1200rpx;
+
+  // 真·插画层：铺满整张牌（含边框区域），加载完成后淡入，避免闪烁
+  &__art {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 12rpx;
+    transition: opacity 200ms $arcana-ease;
+  }
+
+  &__art--back {
+    border-radius: 12rpx;
+  }
+
+  // 有真图时的占位块：只负责撑开布局，视觉上完全透明
+  &__emblem-placeholder {
+    width: 86%;
+    height: 62%;
+  }
 
   &__flipper {
     width: 100%;
