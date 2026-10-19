@@ -21,6 +21,7 @@ import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 import MysticBackdrop from '@/components/tarot/MysticBackdrop.vue';
 import SpreadGlyph from '@/components/tarot/SpreadGlyph.vue';
 import { getTarotSpreads, type TarotSpread } from '@/api/tarot';
+import { safeNavigate, safeNavigateBack } from '@/utils/safe-navigate';
 import { useAppStore } from '@/store/app';
 
 const appStore = useAppStore();
@@ -78,15 +79,15 @@ const onPressOut = (): void => {
 
 /** 进入抽卡页（牌阵 id 带过去，抽卡与解读都在那一页完成） */
 const start = (spread: TarotSpread): void => {
-  uni.navigateTo({ url: `/pkgZodiac/pages/tarot-draw?id=${spread.id}` });
+  safeNavigate(`/pkgZodiac/pages/tarot-draw?id=${spread.id}`);
 };
 
 const goDaily = (): void => {
-  uni.navigateTo({ url: '/pkgZodiac/pages/tarot-daily' });
+  safeNavigate('/pkgZodiac/pages/tarot-daily');
 };
 
 const goBack = (): void => {
-  uni.navigateBack({ delta: 1 });
+  safeNavigateBack();
 };
 
 /** 英文副标题（设计语言里的 eyebrow 层） */

@@ -27,6 +27,7 @@ import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 
 import TarotCard from '@/components/tarot/TarotCard.vue';
+import { safeNavigateBack } from '@/utils/safe-navigate';
 import { getTarotSpreadDraw, getTarotSpreads, type TarotSpread, type TarotSpreadReading } from '@/api/tarot';
 
 /** 今天的 `YYYY-MM-DD`（本地时区口径） */
@@ -97,11 +98,19 @@ const bootstrap = async (spreadId?: string): Promise<void> => {
     }
 
     spread.value = matched;
-    reading.value = await getTarotSpreadDraw(matched.id, today);
+    const result = await getTarotSpreadDraw(matched.id, today);
+
+    if (result === null || result.draws === undefined || result.draws.length === 0) {
+      loadError.value = '这一抽没有拿到牌，请稍后再试';
+
+      return;
+    }
+
+    reading.value = result;
 
     // 逐张翻开：首张稍慢（像先抽出来），其余 220ms
     revealedCount.value = 0;
-    for (let index = 0; index < reading.value.draws.length; index += 1) {
+    for (let index = 0; index < result.draws.length; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, index === 0 ? 360 : 220));
       revealedCount.value = index + 1;
     }
@@ -116,7 +125,7 @@ const bootstrap = async (spreadId?: string): Promise<void> => {
 const isRevealed = (index: number): boolean => index < revealedCount.value;
 
 const goBack = (): void => {
-  uni.navigateBack({ delta: 1 });
+  safeNavigateBack();
 };
 </script>
 
