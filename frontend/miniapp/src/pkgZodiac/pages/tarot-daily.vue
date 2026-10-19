@@ -101,7 +101,7 @@ const reveal = (index: number): void => {
 };
 
 const goZodiac = (): void => {
-  uni.navigateTo({ url: '/pkgZodiac/pages/index' });
+  uni.navigateTo({ url: '/pkgZodiac/pages/tarot-spreads' });
 };
 </script>
 

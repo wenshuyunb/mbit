@@ -96,6 +96,10 @@ const goScore = (): void => {
   uni.navigateTo({ url: '/pkgZodiac/pages/score' });
 };
 
+const goTarot = (): void => {
+  uni.navigateTo({ url: '/pkgZodiac/pages/tarot-spreads' });
+};
+
 /**
  * 下拉刷新：同时刷新首页数据、系统配置与用户快照
  *
@@ -296,6 +300,22 @@ void refresh();
       <text class="home__score-arrow">去设置 →</text>
     </view>
 
+    <!-- 塔罗牌：放在分数横批下方，独立入口 -->
+    <view class="home__tarot card" @tap="goTarot">
+      <view class="home__tarot-left">
+        <view class="home__tarot-cards">
+          <view class="home__tarot-card home__tarot-card--left" />
+          <view class="home__tarot-card home__tarot-card--mid" />
+          <view class="home__tarot-card home__tarot-card--right" />
+        </view>
+      </view>
+      <view class="home__tarot-body">
+        <text class="home__tarot-title">塔罗牌</text>
+        <text class="home__tarot-desc">五种牌阵可选 · 抽卡后逐位置解读 + 整体分析</text>
+      </view>
+      <text class="home__tarot-arrow">→</text>
+    </view>
+
     <!-- 主行动卡片 -->
     <view class="home__primary card" @tap="goTo('/pages/test/intro')">
       <view class="home__primary-content">
@@ -446,6 +466,76 @@ void refresh();
     font-size: $font-size-sm;
     line-height: $line-height-base;
     color: $color-text-secondary;
+  }
+
+  // ---------------------------------------------------------------- 塔罗入口
+  &__tarot {
+    display: flex;
+    align-items: center;
+    margin-bottom: $space-md;
+    background: linear-gradient(135deg, #241c3b 0%, #3b2d5c 100%);
+  }
+
+  &__tarot-left {
+    flex-shrink: 0;
+    width: 96rpx;
+  }
+
+  &__tarot-cards {
+    position: relative;
+    width: 96rpx;
+    height: 88rpx;
+  }
+
+  &__tarot-card {
+    position: absolute;
+    top: 50%;
+    width: 34rpx;
+    height: 56rpx;
+    background: linear-gradient(160deg, #3b2d5c 0%, #241c3b 100%);
+    border: 2rpx solid #c8a96a;
+    border-radius: 5rpx;
+    transform: translateY(-50%);
+  }
+
+  &__tarot-card--left {
+    left: 6rpx;
+    transform: translateY(-50%) rotate(-12deg);
+  }
+
+  &__tarot-card--mid {
+    left: 30rpx;
+    z-index: 2;
+  }
+
+  &__tarot-card--right {
+    left: 54rpx;
+    transform: translateY(-50%) rotate(12deg);
+  }
+
+  &__tarot-body {
+    flex: 1;
+    margin-left: $space-sm;
+  }
+
+  &__tarot-title {
+    display: block;
+    font-size: $font-size-md;
+    font-weight: $font-weight-semibold;
+    color: #f0e5cf;
+  }
+
+  &__tarot-desc {
+    display: block;
+    margin-top: $space-xxs;
+    font-size: $font-size-xs;
+    line-height: $line-height-base;
+    color: rgba(240, 229, 207, 0.8);
+  }
+
+  &__tarot-arrow {
+    font-size: $font-size-md;
+    color: #d9bf85;
   }
 
   &__primary {

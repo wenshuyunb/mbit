@@ -153,7 +153,7 @@ const goReading = (): void => {
 };
 
 const goTarot = (): void => {
-  uni.navigateTo({ url: '/pkgZodiac/pages/tarot' });
+  uni.navigateTo({ url: '/pkgZodiac/pages/tarot-spreads' });
 };
 
 const goMatch = (): void => {
@@ -322,8 +322,8 @@ const goMatch = (): void => {
           <view class="card zodiac__entry" @tap="goTarot">
             <text class="zodiac__entry-icon">🃏</text>
             <view class="zodiac__entry-body">
-              <text class="zodiac__entry-title">今日塔罗</text>
-              <text class="zodiac__entry-desc">抽一张牌，看看今天适合把注意力放在哪里</text>
+              <text class="zodiac__entry-title">塔罗牌</text>
+              <text class="zodiac__entry-desc">五种牌阵可选，抽卡后逐位置解读 + 整体分析</text>
             </view>
           </view>
           <view class="card zodiac__entry" @tap="goSigns">

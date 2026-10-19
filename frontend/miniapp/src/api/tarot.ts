@@ -49,3 +49,71 @@ export const getDailyTarot = (date: string): Promise<TarotDailyDraw> =>
 /** 78 张牌（公开接口，牌义速查） */
 export const listTarotDeck = (): Promise<TarotCard[]> =>
   http.get<TarotCard[]>('/tarot/deck', undefined, { needAuth: false, showError: false });
+
+// ----------------------------------------------------------------------------
+// 牌阵（形式）
+// ----------------------------------------------------------------------------
+
+/** 牌阵里的一个位置 */
+export interface SpreadPosition {
+  key: string;
+  /** 位置名（如「过去」） */
+  label: string;
+  /** 这个位置在问什么 */
+  question: string;
+}
+
+/** 一个牌阵 */
+export interface TarotSpread {
+  id: string;
+  name: string;
+  tagline: string;
+  intro: string;
+  cardCount: number;
+  /** 布局：决定抽卡页怎么摆牌 */
+  layout: 'SINGLE' | 'ROW' | 'COLUMN' | 'CROSS' | 'WEEK';
+  positions: SpreadPosition[];
+}
+
+/** 牌阵里抽到的一张 */
+export interface SpreadDraw {
+  position: SpreadPosition;
+  card: TarotCard;
+  orientation: TarotOrientation;
+  orientationLabel: string;
+  /** 这张牌在这个位置上的解读 */
+  reading: string;
+}
+
+/** 牌阵的整体解读 */
+export interface SpreadSummary {
+  headline: string;
+  structure: string;
+  narrative: string;
+  advice: string;
+  stats: {
+    majorCount: number;
+    minorCount: number;
+    reversedCount: number;
+    total: number;
+  };
+}
+
+/** 一次牌阵结果 */
+export interface TarotSpreadReading {
+  spreadId: string;
+  spreadName: string;
+  date: string;
+  draws: SpreadDraw[];
+  summary: SpreadSummary;
+  /** 合规声明（**必须展示**） */
+  disclaimer: string;
+}
+
+/** 牌阵列表（**公开接口**：未登录也能先看介绍） */
+export const getTarotSpreads = (): Promise<TarotSpread[]> =>
+  http.get<TarotSpread[]>('/tarot/spreads', undefined, { needAuth: false, showError: false });
+
+/** 按牌阵抽卡（确定性：用户 + 日期 + 牌阵） */
+export const getTarotSpreadDraw = (spreadId: string, date: string): Promise<TarotSpreadReading> =>
+  http.get<TarotSpreadReading>(`/tarot/spreads/${spreadId}/draw`, { date }, { showError: false });

@@ -12,6 +12,8 @@
 
 import { TAROT_DECK, TAROT_MAJOR, TAROT_MINOR } from './tarot-deck';
 import { drawDailyCard } from './tarot-draw.util';
+import { drawSpread } from './tarot-spread.util';
+import { findSpread, TAROT_SPREADS } from './tarot-spreads';
 import { TAROT_RANKS, TAROT_SUITS } from './tarot.types';
 
 const USER_A = 'user-0001-aaaa';
@@ -190,5 +192,107 @@ describe('塔罗文案的合规红线', () => {
       expect(`${card.name}:${card.reversed.includes('凶')}`).toBe(`${card.name}:false`);
       expect(`${card.name}:${card.reversed.includes('不吉')}`).toBe(`${card.name}:false`);
     }
+  });
+});
+
+describe('牌阵：规则与解读', () => {
+  const USER = 'user-0001-aaaa';
+  const DATE = '2026-10-19';
+
+  it('五种牌阵齐全，张数与位置数量一致', () => {
+    expect(TAROT_SPREADS).toHaveLength(5);
+
+    for (const spread of TAROT_SPREADS) {
+      expect(`${spread.id}:${spread.positions.length}`).toBe(`${spread.id}:${spread.cardCount}`);
+      expect(spread.intro.length).toBeGreaterThan(40);
+      expect(spread.tagline.length).toBeGreaterThan(8);
+    }
+  });
+
+  it('【关键】同一牌阵内抽到的牌互不重复（一副牌不会出现两张愚者）', () => {
+    for (const spread of TAROT_SPREADS) {
+      const reading = drawSpread(TAROT_DECK, spread, USER, DATE);
+      const ids = reading.draws.map((draw) => draw.card.id);
+
+      expect(new Set(ids).size).toBe(spread.cardCount);
+    }
+  });
+
+  it('【关键】同一用户同一天同一牌阵，连抽 30 次完全一致', () => {
+    const spread = findSpread('THREE_TIME');
+
+    expect(spread).not.toBeNull();
+
+    const first = JSON.stringify(drawSpread(TAROT_DECK, spread as never, USER, DATE));
+
+    for (let index = 0; index < 30; index += 1) {
+      expect(JSON.stringify(drawSpread(TAROT_DECK, spread as never, USER, DATE))).toBe(first);
+    }
+  });
+
+  it('换牌阵就是另一套牌（不是同一套牌的前 N 张）', () => {
+    const three = drawSpread(TAROT_DECK, findSpread('THREE_TIME') as never, USER, DATE);
+    const choice = drawSpread(TAROT_DECK, findSpread('CHOICE') as never, USER, DATE);
+
+    expect(three.draws.map((draw) => draw.card.id)).not.toEqual(choice.draws.map((draw) => draw.card.id));
+  });
+
+  it('不同用户同一天同一牌阵，抽到的牌不同', () => {
+    const mine = drawSpread(TAROT_DECK, findSpread('RELATIONSHIP') as never, USER, DATE);
+    const other = drawSpread(TAROT_DECK, findSpread('RELATIONSHIP') as never, 'user-9999', DATE);
+
+    expect(mine.draws.map((draw) => draw.card.id)).not.toEqual(other.draws.map((draw) => draw.card.id));
+  });
+
+  it('每个位置都有解读，且解读里带位置名与该位置的提问', () => {
+    const reading = drawSpread(TAROT_DECK, findSpread('WEEK') as never, USER, DATE);
+
+    for (const draw of reading.draws) {
+      expect(draw.reading).toContain(draw.position.label);
+      expect(draw.reading).toContain(draw.position.question);
+      expect(draw.reading).toContain(draw.card.name);
+    }
+  });
+
+  it('整体解读四段齐全，且统计与实际牌面一致', () => {
+    const reading = drawSpread(TAROT_DECK, findSpread('WEEK') as never, USER, DATE);
+    const majors = reading.draws.filter((draw) => draw.card.arcana === 'MAJOR').length;
+    const reversed = reading.draws.filter((draw) => draw.orientation === 'REVERSED').length;
+
+    expect(reading.summary.headline.length).toBeGreaterThan(20);
+    expect(reading.summary.structure.length).toBeGreaterThan(40);
+    expect(reading.summary.narrative.length).toBeGreaterThan(40);
+    expect(reading.summary.advice.length).toBeGreaterThan(20);
+
+    expect(reading.summary.stats.majorCount).toBe(majors);
+    expect(reading.summary.stats.reversedCount).toBe(reversed);
+    expect(reading.summary.stats.total).toBe(7);
+  });
+
+  it('整体解读的结论与牌面一致（大阿卡纳多就说"底层模式"，逆位多就说"受阻"）', () => {
+    // 用大量牌阵扫一遍，确保结论与数据没有互相矛盾
+    for (let day = 1; day <= 28; day += 1) {
+      const reading = drawSpread(
+        TAROT_DECK,
+        findSpread('WEEK') as never,
+        USER,
+        `2026-11-${String(day).padStart(2, '0')}`,
+      );
+      const { majorCount, reversedCount, total } = reading.summary.stats;
+
+      if (majorCount / total >= 0.5) {
+        expect(reading.summary.headline).toContain('大阿卡纳偏多');
+      } else {
+        expect(reading.summary.headline).toContain('小阿卡纳偏多');
+      }
+
+      if (reversedCount / total >= 0.5) {
+        expect(reading.summary.headline).toContain('受阻');
+      }
+    }
+  });
+
+  it('牌阵不存在时返回 null（由服务层给 400，不回退默认牌阵）', () => {
+    expect(findSpread('NOT_A_SPREAD')).toBeNull();
   });
 });

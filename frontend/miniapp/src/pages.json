@@ -165,9 +165,22 @@
           }
         },
         {
-          "path": "pages/tarot",
+          "path": "pages/tarot-spreads",
           "style": {
             "navigationBarTitleText": "塔罗牌",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
+          "path": "pages/tarot-draw",
+          "style": {
+            "navigationBarTitleText": "抽卡解读"
+          }
+        },
+        {
+          "path": "pages/tarot-daily",
+          "style": {
+            "navigationBarTitleText": "今日单张",
             "enablePullDownRefresh": true
           }
         }
