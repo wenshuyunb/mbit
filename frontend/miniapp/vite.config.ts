@@ -1,4 +1,4 @@
-/**
+﻿/**
  * uni-app Vite 构建配置
  *
  * ⚠ 版本约束（不可随意升级）：
@@ -26,7 +26,7 @@ export default defineConfig({
     preprocessorOptions: {
       scss: {
         // 设计令牌全局可用，业务样式无需重复 @import
-        additionalData: '@import "@/styles/tokens.scss";',
+        additionalData: '@import "@/styles/tokens.scss";@import "@/styles/arcana-theme.scss";',
       },
     },
   },

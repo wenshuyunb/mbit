@@ -1,0 +1,140 @@
+/**
+ * 塔罗牌模块的设计令牌：Celestial Arcana｜星夜秘境
+ *
+ * ## 为什么不复用全局 tokens
+ *
+ * 全局 tokens 服务于整个小程序（浅色、明亮、产品化）；塔罗是**沉浸式深色场景**，
+ * 两套色彩逻辑不能混：把塔罗的深紫塞进全局会让报告页也变暗，
+ * 而把全局的白色卡片搬进塔罗就会变成"工具界面"——用户明确说"太简陋"。
+ *
+ * 因此这里是一套**模块内的设计系统**：颜色、字号、间距、动效节奏、
+ * 纹理与边框全部集中在此，三个塔罗页面只引用变量，不各写一份。
+ *
+ * ## 色彩的三条约束（照规格里的"禁止项"反推）
+ *
+ *   ① **深色要有层次**：背景不是一个纯色，而是 ink → violet → navy 三层，
+ *      分别用于页面、氛围光、卡片；卡片比页面亮一点点，靠明度差分层而不是靠边框；
+ *   ② **金色要有质感**：用 `#C9AB73` 这类偏灰的香槟金，不用 `#FFD700` 亮黄；
+ *      金色只出现在**边缘、刻度、分隔线**上，不用于大面积填充；
+ *   ③ **禁止廉价紫渐变**：不写 `linear-gradient(#8A2BE2, #4B0082)` 这种；
+ *      氛围光只用极低透明度的径向渐变，且叠在深底之上。
+ *
+ * ⚠ 本文件只放变量与 mixin，不放具体选择器（它会被注入到每个组件的样式块里）。
+ */
+
+// ---------------------------------------------------------------- 夜空底色
+$arcana-ink: #101422; // 页面底色（Midnight Ink）
+$arcana-violet: #252039; // 氛围紫（Astral Violet）
+$arcana-navy: #1c2335; // 卡片底（Velvet Navy）
+$arcana-navy-deep: #171d2c; // 卡片内凹区
+$arcana-night: #0b0e18; // 抽卡舞台的更深一层
+
+// ---------------------------------------------------------------- 金属与光
+$arcana-gold: #c9ab73; // 古金（Antique Gold）
+$arcana-gold-soft: rgba(201, 171, 115, 0.42); // 弱金线
+$arcana-gold-faint: rgba(201, 171, 115, 0.16); // 极弱金线（分隔）
+$arcana-gold-glow: rgba(201, 171, 115, 0.5); // 辉光
+$arcana-moon: #f2ebdd; // 月光白（Moon Ivory）
+$arcana-lilac: #afa3c8; // 浅紫星雾（Lunar Lilac）
+$arcana-silver: #a8a6b8; // 次级文字（Muted Silver）
+$arcana-parchment: #efe4cf; // 羊皮纸（解读区的暖色块）
+$arcana-parchment-ink: #3a3021; // 羊皮纸上的文字
+
+// ---------------------------------------------------------------- 语义色（沿用全局变量，保持与其它模块一致）
+$arcana-text: $arcana-moon;
+$arcana-text-sub: $arcana-silver;
+
+// ---------------------------------------------------------------- 字体
+//
+// 中文衬线：小程序无法内嵌几 MB 的思源宋体，因此用**系统衬线回退栈**：
+//   iOS 有 Songti SC / STSong；安卓多数机型没有中文衬线，会落到 serif → 无衬线。
+// 这是平台限制，不是设计妥协：宁可降级成清晰的黑体，也不要为了"看起来古典"
+// 而塞一个加载不出来的字体文件（那会导致文字闪烁或空白）。
+$arcana-font-serif: 'Songti SC', 'STSong', 'Source Han Serif SC', 'Noto Serif SC', serif;
+$arcana-font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+
+// 字号（塔罗页不追求多档，五档够用）
+$arcana-fs-display: 52rpx; // 页面主标题
+$arcana-fs-title: 38rpx; // 区块标题
+$arcana-fs-card: 32rpx; // 牌名
+$arcana-fs-body: 28rpx; // 正文
+$arcana-fs-meta: 24rpx; // 说明
+$arcana-fs-micro: 20rpx; // 标签 / 编号
+
+// 行高（正文阅读质量优先）
+$arcana-lh-body: 1.85;
+$arcana-lh-tight: 1.4;
+
+// ---------------------------------------------------------------- 间距
+$arcana-space-xs: 8rpx;
+$arcana-space-sm: 16rpx;
+$arcana-space-md: 24rpx;
+$arcana-space-lg: 36rpx;
+$arcana-space-xl: 56rpx;
+$arcana-space-xxl: 80rpx;
+
+// ---------------------------------------------------------------- 圆角
+$arcana-radius-card: 16rpx;
+$arcana-radius-lg: 24rpx;
+$arcana-radius-round: 999rpx;
+
+// ---------------------------------------------------------------- 动效节奏
+//
+// 规格里给了时间目标，这里是唯一出处。不同动画之间要有节奏关系，
+// 因此统一用一条标准缓动 + 一条"出场"缓动，不要每个地方各写一条 bezier。
+$arcana-ease: cubic-bezier(0.32, 0.72, 0.24, 1); // 通用（快进慢出）
+$arcana-ease-out: cubic-bezier(0.16, 0.9, 0.3, 1); // 元素入场
+
+$arcana-dur-tap: 180ms; // 卡片触碰反馈
+$arcana-dur-enter: 420ms; // 文字入场
+$arcana-dur-focus: 520ms; // 抽牌聚焦
+$arcana-dur-flip: 820ms; // 翻牌（规格 700–950ms）
+$arcana-dur-reveal: 560ms; // 牌面揭示
+
+// ---------------------------------------------------------------- 复用 mixin
+
+/// 深色卡片：靠明度差分层，不靠边框堆叠
+@mixin arcana-card($padding: $arcana-space-md) {
+  padding: $padding;
+  background-color: $arcana-navy;
+  border: 1px solid $arcana-gold-faint;
+  border-radius: $arcana-radius-card;
+}
+
+/// 金线分隔（用于标题下、区块之间）
+@mixin arcana-rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, $arcana-gold-soft, transparent);
+}
+
+/// 小号全大写字距标签（如 `ONE CARD · DAILY GUIDANCE`）
+@mixin arcana-eyebrow {
+  font-family: $arcana-font-sans;
+  font-size: $arcana-fs-micro;
+  letter-spacing: 3rpx;
+  text-transform: uppercase;
+  color: $arcana-gold;
+}
+
+/// 衬线标题
+@mixin arcana-serif($size: $arcana-fs-title) {
+  font-family: $arcana-font-serif;
+  font-size: $size;
+  font-weight: 500;
+  line-height: $arcana-lh-tight;
+  letter-spacing: 2rpx;
+  color: $arcana-text;
+}
+
+/// 正文
+@mixin arcana-body {
+  font-family: $arcana-font-sans;
+  font-size: $arcana-fs-body;
+  line-height: $arcana-lh-body;
+  color: $arcana-text-sub;
+}
+
+/// 月光辉光（极低透明度径向渐变，叠在深底上；禁止做成刺眼的亮斑）
+@mixin arcana-moonlight($alpha: 0.14) {
+  background: radial-gradient(circle, rgba(242, 235, 221, $alpha) 0%, rgba(242, 235, 221, 0) 68%);
+}

@@ -167,14 +167,20 @@
         {
           "path": "pages/tarot-spreads",
           "style": {
+            "navigationStyle": "custom",
             "navigationBarTitleText": "塔罗牌",
-            "enablePullDownRefresh": true
+            "enablePullDownRefresh": true,
+            "backgroundColor": "#101422",
+            "backgroundTextStyle": "light"
           }
         },
         {
           "path": "pages/tarot-draw",
           "style": {
-            "navigationBarTitleText": "抽卡解读"
+            "navigationStyle": "custom",
+            "navigationBarTitleText": "抽卡解读",
+            "backgroundColor": "#0b0e18",
+            "backgroundTextStyle": "light"
           }
         },
         {

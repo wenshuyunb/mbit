@@ -1,67 +1,45 @@
 <script setup lang="ts">
 /**
- * 塔罗牌 · 形式选择（分包 pkgZodiac）
+ * 塔罗牌 · 牌阵选择（分包 pkgZodiac）— Celestial Arcana｜星夜秘境
  *
- * ## 这一页解决什么
+ * ## 这一版与上一版的差别（不是换颜色）
  *
- * 用户说「塔罗牌也有很多形式对吧」—— 对，塔罗的玩法本来就是「牌阵 × 牌义」。
- * 同样一张「塔」，在「时间之流」里读作"已经发生过的断裂"，在「二选一」里读作
- * "这个选项会带来突变"。**位置才让牌有意义**。
+ * | | 上一版 | 现在 |
+ * | --- | --- | --- |
+ * | 导航 | 系统白色导航栏 | 沉浸式深色自定义导航 + 月相图腾，避开胶囊与状态栏 |
+ * | 顶部 | 一段说明文字 | 艺术主题区：月相刻线图 + 衬线主标题 + 副标题 |
+ * | 今日指引 | 与其它牌阵同样的卡片 | **主推横向艺术卡**：左侧真实牌背、右侧标题与金线箭头 |
+ * | 其它牌阵 | 同样的缩略图换数字 | 每个牌阵**专属排列图**（时间之流横向、关系之镜镜像、七日指引扇形） |
+ * | 交互 | 点一下跳转 | 触碰缩放 0.98 + 金边增强，松手进入 |
  *
- * 因此这一页不是"选一张好看的牌"，而是让用户**按处境选牌阵**：
- * 一句话副标题回答"我现在该选哪个"，可展开的简介讲清楚"它适合什么、怎么读"，
- * 缩略图让人先看到会摆几张、怎么摆。
- *
- * ## 为什么缩略图用 CSS 摆位而不是用图
- *
- * 五种布局各配一张图的话，改布局还得同步图片资源；用几个小方块按 `layout`
- * 与百分比坐标摆位，前端不必为每个牌阵单独写代码，也不需要额外的图片。
+ * 业务逻辑（拉列表、跳转抽卡页、今日单张入口）与上一版完全一致，未改协议。
  */
 
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app';
 
+import MysticBackdrop from '@/components/tarot/MysticBackdrop.vue';
+import SpreadGlyph from '@/components/tarot/SpreadGlyph.vue';
 import { getTarotSpreads, type TarotSpread } from '@/api/tarot';
+import { useAppStore } from '@/store/app';
+
+const appStore = useAppStore();
 
 const loading = ref(true);
 const loadError = ref('');
 const spreads = ref<TarotSpread[]>([]);
-
-/** 展开的牌阵（一次只展开一个：同时展开五个会把页面变成一堵字） */
+/** 展开详情的牌阵（一次一个） */
 const expanded = ref<string | null>(null);
+/** 按下的牌阵（做按压反馈） */
+const pressed = ref<string | null>(null);
 
-/** 布局 → 缩略图里小方块的位置（百分比，直接用 style 渲染） */
-const LAYOUT_SLOTS: Readonly<Record<string, ReadonlyArray<{ left: string; top: string }>>> = {
-  SINGLE: [{ left: '50%', top: '50%' }],
-  ROW: [
-    { left: '22%', top: '50%' },
-    { left: '50%', top: '50%' },
-    { left: '78%', top: '50%' },
-  ],
-  COLUMN: [
-    { left: '50%', top: '20%' },
-    { left: '50%', top: '50%' },
-    { left: '50%', top: '80%' },
-  ],
-  CROSS: [
-    { left: '24%', top: '30%' },
-    { left: '76%', top: '30%' },
-    { left: '50%', top: '52%' },
-    { left: '50%', top: '82%' },
-  ],
-  WEEK: [
-    { left: '18%', top: '38%' },
-    { left: '32%', top: '30%' },
-    { left: '46%', top: '40%' },
-    { left: '60%', top: '30%' },
-    { left: '74%', top: '38%' },
-    { left: '52%', top: '72%' },
-    { left: '86%', top: '64%' },
-  ],
-};
+/** 导航栏高度：状态栏 + 与胶囊对齐的 44px 区，避开系统按钮 */
+const navHeight = computed<number>(() => appStore.statusBarHeight + 44);
+const navPaddingTop = computed<number>(() => appStore.statusBarHeight + 8);
 
-const slotsOf = (layout: string): ReadonlyArray<{ left: string; top: string }> =>
-  LAYOUT_SLOTS[layout] ?? [{ left: '50%', top: '50%' }];
+/** 主推牌阵（今日指引）与其余牌阵分开渲染 */
+const featured = computed<TarotSpread | null>(() => spreads.value.find((item) => item.id === 'DAILY') ?? null);
+const others = computed<TarotSpread[]>(() => spreads.value.filter((item) => item.id !== 'DAILY'));
 
 onLoad(() => {
   void bootstrap();
@@ -90,295 +68,694 @@ const toggle = (id: string): void => {
   expanded.value = expanded.value === id ? null : id;
 };
 
+const onPressIn = (id: string): void => {
+  pressed.value = id;
+};
+
+const onPressOut = (): void => {
+  pressed.value = null;
+};
+
 /** 进入抽卡页（牌阵 id 带过去，抽卡与解读都在那一页完成） */
 const start = (spread: TarotSpread): void => {
   uni.navigateTo({ url: `/pkgZodiac/pages/tarot-draw?id=${spread.id}` });
 };
 
-/** 今日单张（轻量玩法，仍保留） */
 const goDaily = (): void => {
   uni.navigateTo({ url: '/pkgZodiac/pages/tarot-daily' });
+};
+
+const goBack = (): void => {
+  uni.navigateBack({ delta: 1 });
+};
+
+/** 英文副标题（设计语言里的 eyebrow 层） */
+const EYEBROW: Readonly<Record<string, string>> = {
+  DAILY: 'ONE CARD · DAILY GUIDANCE',
+  THREE_TIME: 'THREE CARDS · PAST / PRESENT / FUTURE',
+  CHOICE: 'THREE CARDS · TWO PATHS',
+  RELATIONSHIP: 'FOUR CARDS · THE MIRROR',
+  WEEK: 'SEVEN CARDS · THE WHEEL OF WEEK',
 };
 </script>
 
 <template>
-  <view class="spreads page-container">
-    <view v-if="loading" class="card spreads__state">
-      <text>正在摆牌…</text>
-    </view>
+  <view class="arcana">
+    <MysticBackdrop :moonlight-top="-160" />
 
-    <view v-else-if="loadError" class="card spreads__state">
-      <text class="spreads__state-title">{{ loadError }}</text>
-      <button class="spreads__state-action" @tap="bootstrap">重新加载</button>
-    </view>
-
-    <template v-else>
-      <view class="spreads__intro">
-        <text class="spreads__intro-title">选一个牌阵</text>
-        <text class="spreads__intro-desc">
-          塔罗不是"抽一张看运气"。同样一张牌，放在「过去」还是「选项 A」上，意思完全不同 ——
-          先按你现在想问的事挑一个牌阵，牌阵决定了每张牌在回答什么。
-        </text>
+    <!-- 沉浸式导航：避开状态栏与胶囊 -->
+    <view class="arcana__nav" :style="{ height: `${navHeight}px`, paddingTop: `${navPaddingTop}px` }">
+      <view class="arcana__nav-back" @tap="goBack">
+        <text class="arcana__nav-arrow">‹</text>
       </view>
+      <view class="arcana__nav-title-box">
+        <text class="arcana__nav-title">塔罗牌</text>
+      </view>
+      <!-- 月相图腾：三个不同盈亏的月亮，作为品牌记号（不抢标题） -->
+      <view class="arcana__nav-moon">
+        <view class="arcana__moon-dot arcana__moon-dot--new" />
+        <view class="arcana__moon-dot arcana__moon-dot--half" />
+        <view class="arcana__moon-dot arcana__moon-dot--full" />
+      </view>
+    </view>
 
-      <!-- 今日单张：轻量玩法入口 -->
-      <view class="card spreads__quick" @tap="goDaily">
-        <view class="spreads__quick-body">
-          <text class="spreads__quick-title">只想抽一张？</text>
-          <text class="spreads__quick-desc">今日单张指引 · 看今天把注意力放在哪里</text>
+    <view class="arcana__body" :style="{ paddingTop: `${navHeight + 8}px` }">
+      <!-- 主题区 -->
+      <view class="arcana__hero">
+        <view class="arcana__hero-moon">
+          <view class="arcana__hero-moon-core" />
+          <view class="arcana__hero-moon-ring arcana__hero-moon-ring--outer" />
+          <view class="arcana__hero-moon-ring arcana__hero-moon-ring--inner" />
+          <!-- 黄道刻度：八道短线，绕月相一圈 -->
+          <view
+            v-for="tick in 8"
+            :key="tick"
+            class="arcana__hero-tick"
+            :style="{ transform: `rotate(${tick * 45}deg)` }"
+          />
         </view>
-        <text class="spreads__quick-arrow">→</text>
+
+        <text class="arcana__hero-title">向星辰寻一个答案</text>
+        <text class="arcana__hero-sub">选择一种牌阵，让问题慢慢显现。</text>
       </view>
 
-      <view v-for="spread in spreads" :key="spread.id" class="spreads__item card">
-        <view class="spreads__head" @tap="toggle(spread.id)">
-          <!-- 布局缩略图：小方块按 layout 摆位 -->
-          <view class="spreads__thumb">
-            <view
-              v-for="(slot, index) in slotsOf(spread.layout)"
-              :key="index"
-              class="spreads__thumb-card"
-              :style="{ left: slot.left, top: slot.top }"
+      <view v-if="loading" class="arcana__state">
+        <text class="arcana__state-text">正在翻阅星象手稿…</text>
+      </view>
+
+      <view v-else-if="loadError" class="arcana__state">
+        <text class="arcana__state-text">{{ loadError }}</text>
+        <view class="arcana__retry" @tap="bootstrap">重新加载</view>
+      </view>
+
+      <template v-else>
+        <!-- 主推：今日指引（横向艺术卡） -->
+        <view
+          v-if="featured"
+          class="arcana__featured"
+          :class="pressed === featured.id ? 'arcana__featured--pressed' : ''"
+          @touchstart="onPressIn(featured.id)"
+          @touchend="onPressOut"
+          @touchcancel="onPressOut"
+          @tap="start(featured)"
+        >
+          <!-- 左侧：真实牌背（倾斜摆放，带月光） -->
+          <view class="arcana__featured-art">
+            <view class="arcana__featured-glow" />
+            <view class="arcana__featured-card">
+              <view class="arcana__featured-card-frame">
+                <text class="arcana__featured-glyph">✦</text>
+              </view>
+            </view>
+          </view>
+
+          <!-- 右侧：标题与引导 -->
+          <view class="arcana__featured-body">
+            <text class="arcana__eyebrow">{{ EYEBROW['DAILY'] }}</text>
+            <text class="arcana__featured-title">今日指引</text>
+            <text class="arcana__featured-desc">一张牌，感受今天的方向。</text>
+            <view class="arcana__featured-action">
+              <view class="arcana__featured-arrow">
+                <text class="arcana__featured-arrow-glyph">→</text>
+              </view>
+            </view>
+          </view>
+        </view>
+
+        <!-- 今日单张入口（轻量玩法）：做成一行细金线分隔的次要入口 -->
+        <view class="arcana__minor" @tap="goDaily">
+          <text class="arcana__minor-text">只想抽一张？今日单张指引</text>
+          <text class="arcana__minor-arrow">›</text>
+        </view>
+
+        <!-- 其余牌阵：各自专属排列图 -->
+        <view class="arcana__section">
+          <text class="arcana__section-title">其他牌阵</text>
+          <view class="arcana__section-rule" />
+        </view>
+
+        <view
+          v-for="spread in others"
+          :key="spread.id"
+          class="arcana__item"
+          :class="pressed === spread.id ? 'arcana__item--pressed' : ''"
+          @touchstart="onPressIn(spread.id)"
+          @touchend="onPressOut"
+          @touchcancel="onPressOut"
+        >
+          <view class="arcana__item-main" @tap="start(spread)">
+            <SpreadGlyph
+              :layout="spread.layout"
+              :card-count="spread.cardCount"
+              :width-rpx="180"
+              :height-rpx="132"
+              :card-rpx="24"
             />
-          </view>
 
-          <view class="spreads__head-body">
-            <view class="spreads__name-row">
-              <text class="spreads__name">{{ spread.name }}</text>
-              <text class="spreads__count">{{ spread.cardCount }} 张</text>
+            <view class="arcana__item-body">
+              <view class="arcana__item-head">
+                <text class="arcana__item-title">{{ spread.name }}</text>
+                <text class="arcana__item-count">{{ spread.cardCount }} 张</text>
+              </view>
+              <text class="arcana__eyebrow arcana__item-eyebrow">{{ EYEBROW[spread.id] ?? '' }}</text>
+              <text class="arcana__item-desc">{{ spread.tagline }}</text>
             </view>
-            <text class="spreads__tagline">{{ spread.tagline }}</text>
-          </view>
 
-          <text class="spreads__chevron">{{ expanded === spread.id ? '收起' : '详情' }}</text>
-        </view>
-
-        <!-- 展开：简介 + 每个位置在问什么 -->
-        <view v-if="expanded === spread.id" class="spreads__detail">
-          <text class="spreads__detail-text">{{ spread.intro }}</text>
-
-          <text class="spreads__detail-label">每张牌在回答什么</text>
-          <view v-for="(position, index) in spread.positions" :key="position.key" class="spreads__position">
-            <text class="spreads__position-index">{{ index + 1 }}</text>
-            <view class="spreads__position-body">
-              <text class="spreads__position-label">{{ position.label }}</text>
-              <text class="spreads__position-question">{{ position.question }}</text>
+            <view class="arcana__item-arrow">
+              <text class="arcana__item-arrow-glyph">›</text>
             </view>
           </view>
+
+          <view class="arcana__item-toggle" @tap="toggle(spread.id)">
+            <text class="arcana__item-toggle-text">{{ expanded === spread.id ? '收起说明' : '这个牌阵怎么读' }}</text>
+          </view>
+
+          <view v-if="expanded === spread.id" class="arcana__item-detail">
+            <text class="arcana__item-intro">{{ spread.intro }}</text>
+            <view v-for="(position, index) in spread.positions" :key="position.key" class="arcana__pos">
+              <text class="arcana__pos-index">{{ index + 1 }}</text>
+              <view class="arcana__pos-body">
+                <text class="arcana__pos-label">{{ position.label }}</text>
+                <text class="arcana__pos-question">{{ position.question }}</text>
+              </view>
+            </view>
+          </view>
         </view>
 
-        <button class="spreads__start" @tap="start(spread)">用这个牌阵抽卡</button>
-      </view>
-
-      <text class="spreads__note">每天每个牌阵的结果是固定的（刷新不会变），隔天再来会是一组新的牌。</text>
-    </template>
+        <text class="arcana__footnote">每天每个牌阵的牌是固定的（刷新不会变）。明天再来会是一组新的牌。</text>
+      </template>
+    </view>
   </view>
 </template>
 
 <style lang="scss" scoped>
-.spreads {
-  &__state {
-    text-align: center;
+.arcana {
+  position: relative;
+  min-height: 100vh;
+  padding-bottom: $arcana-space-xxl;
+  background-color: $arcana-ink;
+
+  // ---------------------------------------------------------------- 导航
+  &__nav {
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    padding-right: $arcana-space-md;
+    padding-left: $arcana-space-md;
+    background: linear-gradient(180deg, rgba(16, 20, 34, 0.96) 0%, rgba(16, 20, 34, 0.7) 70%, rgba(16, 20, 34, 0) 100%);
   }
 
-  &__state-title {
+  &__nav-back {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56rpx;
+    height: 56rpx;
+  }
+
+  &__nav-arrow {
+    font-size: 40rpx;
+    line-height: 1;
+    color: $arcana-gold;
+  }
+
+  &__nav-title-box {
+    flex: 1;
+    margin-left: $arcana-space-xs;
+  }
+
+  &__nav-title {
+    font-family: $arcana-font-serif;
+    font-size: 32rpx;
+    letter-spacing: 6rpx;
+    color: $arcana-moon;
+  }
+
+  &__nav-moon {
+    display: flex;
+    align-items: center;
+  }
+
+  &__moon-dot {
+    width: 10rpx;
+    height: 10rpx;
+    margin-left: 8rpx;
+    border-radius: 50%;
+  }
+
+  &__moon-dot--new {
+    background-color: transparent;
+    border: 1rpx solid rgba(201, 171, 115, 0.6);
+  }
+
+  &__moon-dot--half {
+    background: linear-gradient(90deg, $arcana-gold 50%, transparent 50%);
+    border: 1rpx solid rgba(201, 171, 115, 0.6);
+  }
+
+  &__moon-dot--full {
+    background-color: $arcana-gold;
+  }
+
+  &__body {
+    position: relative;
+    z-index: 2;
+    padding-right: $arcana-space-lg;
+    padding-left: $arcana-space-lg;
+  }
+
+  // ---------------------------------------------------------------- 主题区
+  &__hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: $arcana-space-xl 0 $arcana-space-lg;
+  }
+
+  &__hero-moon {
+    position: relative;
+    width: 200rpx;
+    height: 200rpx;
+  }
+
+  &__hero-moon-core {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 96rpx;
+    height: 96rpx;
+    margin-top: -48rpx;
+    margin-left: -48rpx;
+    background: radial-gradient(circle at 36% 32%, #f7f1e4 0%, #e2d7bf 46%, #b9a880 100%);
+    border-radius: 50%;
+    box-shadow: 0 0 40rpx rgba(242, 235, 221, 0.22);
+    animation: hero-moon 7s ease-in-out infinite;
+  }
+
+  &__hero-moon-ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    border: 1rpx solid rgba(201, 171, 115, 0.28);
+    border-radius: 50%;
+  }
+
+  &__hero-moon-ring--outer {
+    width: 184rpx;
+    height: 184rpx;
+    margin-top: -92rpx;
+    margin-left: -92rpx;
+  }
+
+  &__hero-moon-ring--inner {
+    width: 140rpx;
+    height: 140rpx;
+    margin-top: -70rpx;
+    margin-left: -70rpx;
+    border-color: rgba(201, 171, 115, 0.14);
+  }
+
+  &__hero-tick {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 1rpx;
+    height: 92rpx;
+    margin-top: -92rpx;
+    background: linear-gradient(180deg, rgba(201, 171, 115, 0.5) 0%, rgba(201, 171, 115, 0) 26%);
+    transform-origin: center bottom;
+  }
+
+  &__hero-title {
+    margin-top: $arcana-space-lg;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-display;
+    letter-spacing: 4rpx;
+    color: $arcana-moon;
+  }
+
+  &__hero-sub {
+    margin-top: $arcana-space-sm;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    letter-spacing: 1rpx;
+    color: $arcana-silver;
+  }
+
+  // ---------------------------------------------------------------- 主推卡
+  &__featured {
+    display: flex;
+    align-items: center;
+    padding: $arcana-space-md;
+    background: linear-gradient(132deg, #1b2337 0%, #252039 58%, #1a2135 100%);
+    border: 1rpx solid rgba(201, 171, 115, 0.32);
+    border-radius: $arcana-radius-lg;
+    box-shadow: 0 12rpx 36rpx rgba(5, 7, 14, 0.45);
+    transition:
+      transform $arcana-dur-tap $arcana-ease,
+      border-color $arcana-dur-tap $arcana-ease,
+      box-shadow $arcana-dur-tap $arcana-ease;
+  }
+
+  &__featured--pressed {
+    border-color: $arcana-gold;
+    box-shadow: 0 12rpx 40rpx rgba(201, 171, 115, 0.22);
+    transform: scale(0.98);
+  }
+
+  &__featured-art {
+    position: relative;
+    flex-shrink: 0;
+    width: 176rpx;
+    height: 268rpx;
+  }
+
+  &__featured-glow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 240rpx;
+    height: 240rpx;
+    margin-top: -120rpx;
+    margin-left: -130rpx;
+    @include arcana-moonlight(0.16);
+    border-radius: 50%;
+  }
+
+  &__featured-card {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    box-sizing: border-box;
+    width: 148rpx;
+    height: 240rpx;
+    padding: 5rpx;
+    margin-top: -120rpx;
+    margin-left: -74rpx;
+    background:
+      repeating-linear-gradient(45deg, rgba(201, 171, 115, 0.1) 0 2rpx, transparent 2rpx 14rpx),
+      repeating-linear-gradient(-45deg, rgba(201, 171, 115, 0.1) 0 2rpx, transparent 2rpx 14rpx),
+      linear-gradient(162deg, #1a2135 0%, #2b2440 52%, #171d2c 100%);
+    border: 1rpx solid rgba(201, 171, 115, 0.5);
+    border-radius: 10rpx;
+    box-shadow: 0 10rpx 28rpx rgba(5, 7, 14, 0.55);
+    transform: rotate(-8deg);
+  }
+
+  &__featured-card-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    border: 1rpx solid rgba(201, 171, 115, 0.25);
+    border-radius: 7rpx;
+  }
+
+  &__featured-glyph {
+    font-size: 28rpx;
+    color: $arcana-gold;
+    opacity: 0.85;
+  }
+
+  &__featured-body {
+    flex: 1;
+    padding-left: $arcana-space-lg;
+  }
+
+  &__eyebrow {
+    @include arcana-eyebrow;
+  }
+
+  &__featured-title {
     display: block;
-    margin-bottom: $space-md;
+    margin-top: $arcana-space-xs;
+    font-family: $arcana-font-serif;
+    font-size: 44rpx;
+    letter-spacing: 4rpx;
+    color: $arcana-moon;
   }
 
-  &__state-action {
-    color: $color-text-inverse;
-    background-color: $color-primary;
-    border-radius: $radius-round;
-  }
-
-  &__intro {
-    padding: $space-md 0 $space-lg;
-  }
-
-  &__intro-title {
+  &__featured-desc {
     display: block;
-    font-size: $font-size-xl;
-    font-weight: $font-weight-bold;
-    letter-spacing: 2rpx;
+    margin-top: $arcana-space-sm;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    line-height: 1.6;
+    color: $arcana-silver;
   }
 
-  &__intro-desc {
-    display: block;
-    margin-top: $space-sm;
-    font-size: $font-size-sm;
-    line-height: $line-height-loose;
-    color: $color-text-secondary;
+  &__featured-action {
+    display: flex;
+    margin-top: $arcana-space-lg;
   }
 
-  &__quick {
+  &__featured-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 64rpx;
+    height: 64rpx;
+    border: 1rpx solid rgba(201, 171, 115, 0.55);
+    border-radius: 50%;
+  }
+
+  &__featured-arrow-glyph {
+    font-size: 28rpx;
+    color: $arcana-gold;
+  }
+
+  // ---------------------------------------------------------------- 次要入口
+  &__minor {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: $space-md;
-    background: linear-gradient(135deg, #241c3b 0%, #3b2d5c 100%);
+    padding: $arcana-space-md 0;
+    margin-top: $arcana-space-md;
   }
 
-  &__quick-title {
-    display: block;
-    font-size: $font-size-md;
-    font-weight: $font-weight-semibold;
-    color: #f0e5cf;
+  &__minor-text {
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    color: $arcana-silver;
   }
 
-  &__quick-desc {
-    display: block;
-    margin-top: $space-xxs;
-    font-size: $font-size-xs;
-    color: rgba(240, 229, 207, 0.8);
+  &__minor-arrow {
+    font-size: 30rpx;
+    color: rgba(201, 171, 115, 0.6);
   }
 
-  &__quick-arrow {
-    font-size: $font-size-md;
-    color: #d9bf85;
-  }
-
-  &__item {
-    margin-bottom: $space-md;
-  }
-
-  &__head {
+  // ---------------------------------------------------------------- 区块标题
+  &__section {
     display: flex;
     align-items: center;
+    margin: $arcana-space-lg 0 $arcana-space-md;
   }
 
-  &__thumb {
-    position: relative;
-    flex-shrink: 0;
-    width: 124rpx;
-    height: 124rpx;
-    background:
-      repeating-linear-gradient(45deg, rgba(200, 169, 106, 0.12) 0 2rpx, transparent 2rpx 14rpx),
-      repeating-linear-gradient(-45deg, rgba(200, 169, 106, 0.12) 0 2rpx, transparent 2rpx 14rpx),
-      linear-gradient(160deg, #241c3b 0%, #3b2d5c 100%);
-    border: 2rpx solid rgba(200, 169, 106, 0.55);
-    border-radius: $radius-sm;
+  &__section-title {
+    margin-right: $arcana-space-md;
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-card;
+    letter-spacing: 3rpx;
+    color: $arcana-moon;
   }
 
-  &__thumb-card {
-    position: absolute;
-    width: 20rpx;
-    height: 34rpx;
-    background: linear-gradient(160deg, #f0e5cf 0%, #c8a96a 100%);
-    border: 1rpx solid rgba(36, 28, 59, 0.35);
-    border-radius: 3rpx;
-    box-shadow: 0 2rpx 6rpx rgba(0, 0, 0, 0.35);
-    transform: translate(-50%, -50%);
-  }
-
-  &__head-body {
+  &__section-rule {
     flex: 1;
-    margin-left: $space-md;
+    @include arcana-rule;
   }
 
-  &__name-row {
+  // ---------------------------------------------------------------- 牌阵项
+  &__item {
+    margin-bottom: $arcana-space-md;
+    background-color: $arcana-navy;
+    border: 1rpx solid rgba(201, 171, 115, 0.18);
+    border-radius: $arcana-radius-card;
+    transition:
+      transform $arcana-dur-tap $arcana-ease,
+      border-color $arcana-dur-tap $arcana-ease;
+  }
+
+  &__item--pressed {
+    border-color: rgba(201, 171, 115, 0.6);
+    transform: scale(0.98);
+  }
+
+  &__item-main {
+    display: flex;
+    align-items: center;
+    padding: $arcana-space-md;
+  }
+
+  &__item-body {
+    flex: 1;
+    padding-left: $arcana-space-md;
+  }
+
+  &__item-head {
     display: flex;
     align-items: baseline;
   }
 
-  &__name {
-    font-size: $font-size-md;
-    font-weight: $font-weight-semibold;
+  &__item-title {
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-card;
+    letter-spacing: 2rpx;
+    color: $arcana-moon;
   }
 
-  &__count {
-    padding: 0 $space-xs;
-    margin-left: $space-xs;
-    font-size: $font-size-xs;
-    color: $color-primary;
-    background-color: $color-primary-fade;
-    border-radius: $radius-round;
+  &__item-count {
+    margin-left: $arcana-space-sm;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    color: rgba(201, 171, 115, 0.75);
   }
 
-  &__tagline {
+  &__item-eyebrow {
     display: block;
-    margin-top: $space-xxs;
-    font-size: $font-size-xs;
-    line-height: $line-height-base;
-    color: $color-text-secondary;
+    margin-top: 6rpx;
+    font-size: 16rpx;
+    letter-spacing: 2rpx;
   }
 
-  &__chevron {
-    margin-left: $space-sm;
-    font-size: $font-size-xs;
-    color: $color-primary;
-  }
-
-  &__detail {
-    padding-top: $space-md;
-    margin-top: $space-md;
-    border-top: 1rpx solid $color-divider;
-  }
-
-  &__detail-text {
+  &__item-desc {
     display: block;
-    font-size: $font-size-sm;
-    line-height: $line-height-loose;
-    color: $color-text-regular;
+    margin-top: $arcana-space-xs;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    line-height: 1.55;
+    color: $arcana-silver;
   }
 
-  &__detail-label {
+  &__item-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48rpx;
+  }
+
+  &__item-arrow-glyph {
+    font-size: 30rpx;
+    color: rgba(201, 171, 115, 0.7);
+  }
+
+  &__item-toggle {
+    padding: $arcana-space-sm $arcana-space-md;
+    border-top: 1rpx solid $arcana-gold-faint;
+  }
+
+  &__item-toggle-text {
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    letter-spacing: 1rpx;
+    color: rgba(201, 171, 115, 0.8);
+  }
+
+  &__item-detail {
+    padding: 0 $arcana-space-md $arcana-space-md;
+  }
+
+  &__item-intro {
     display: block;
-    margin-top: $space-md;
-    font-size: $font-size-xs;
-    color: $color-text-placeholder;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    line-height: $arcana-lh-body;
+    color: $arcana-silver;
   }
 
-  &__position {
+  &__pos {
     display: flex;
     align-items: flex-start;
-    margin-top: $space-sm;
+    margin-top: $arcana-space-md;
   }
 
-  &__position-index {
+  &__pos-index {
     flex-shrink: 0;
-    width: 32rpx;
-    height: 32rpx;
-    margin-right: $space-sm;
-    font-size: $font-size-xs;
-    line-height: 32rpx;
-    color: $color-primary;
+    width: 34rpx;
+    height: 34rpx;
+    margin-right: $arcana-space-sm;
+    font-family: $arcana-font-serif;
+    font-size: 18rpx;
+    line-height: 34rpx;
+    color: $arcana-gold;
     text-align: center;
-    background-color: $color-primary-fade;
-    border-radius: $radius-round;
+    border: 1rpx solid rgba(201, 171, 115, 0.4);
+    border-radius: 50%;
   }
 
-  &__position-body {
+  &__pos-body {
     flex: 1;
   }
 
-  &__position-label {
-    font-size: $font-size-sm;
-    font-weight: $font-weight-medium;
+  &__pos-label {
+    font-family: $arcana-font-serif;
+    font-size: $arcana-fs-meta;
+    color: $arcana-moon;
   }
 
-  &__position-question {
+  &__pos-question {
     display: block;
     margin-top: 2rpx;
-    font-size: $font-size-xs;
-    line-height: $line-height-base;
-    color: $color-text-secondary;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    line-height: 1.6;
+    color: rgba(168, 166, 184, 0.85);
   }
 
-  &__start {
-    margin-top: $space-md;
-    color: $color-text-inverse;
-    background-color: $color-primary;
-    border-radius: $radius-round;
+  // ---------------------------------------------------------------- 状态
+  &__state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: $arcana-space-xxl 0;
   }
 
-  &__note {
+  &__state-text {
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-meta;
+    color: $arcana-silver;
+  }
+
+  &__retry {
+    padding: $arcana-space-sm $arcana-space-lg;
+    margin-top: $arcana-space-md;
+    font-size: $arcana-fs-meta;
+    color: $arcana-gold;
+    border: 1rpx solid rgba(201, 171, 115, 0.5);
+    border-radius: $arcana-radius-round;
+  }
+
+  &__footnote {
     display: block;
-    margin-top: $space-sm;
-    font-size: $font-size-xs;
-    line-height: $line-height-base;
-    color: $color-text-placeholder;
+    margin-top: $arcana-space-lg;
+    font-family: $arcana-font-sans;
+    font-size: $arcana-fs-micro;
+    line-height: 1.7;
+    color: rgba(168, 166, 184, 0.6);
     text-align: center;
+  }
+}
+
+@keyframes hero-moon {
+  0%,
+  100% {
+    box-shadow: 0 0 34rpx rgba(242, 235, 221, 0.18);
+  }
+
+  50% {
+    box-shadow: 0 0 54rpx rgba(242, 235, 221, 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arcana__hero-moon-core {
+    animation: none;
   }
 }
 </style>
