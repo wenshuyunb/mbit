@@ -371,6 +371,9 @@ describe('EntitlementService.listEntitlements（契约 §3.8.3）', () => {
       MEMBERSHIP_ACTIVE: 0,
       AI_CREDITS: 1,
       PDF_EXPORT: 0,
+      // 星盘解读解锁（ADR-041）：无记录时也要出现且为 0，
+      // 否则前端"我的权益"页会少一格
+      ZODIAC_READING: 0,
     });
   });
 

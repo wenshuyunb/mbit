@@ -271,6 +271,8 @@ export class EntitlementService {
       MEMBERSHIP_ACTIVE: 0,
       AI_CREDITS: 0,
       PDF_EXPORT: 0,
+      // 星盘解读解锁（ADR-041）：单次购买为永久、邀请解锁为当天有效
+      ZODIAC_READING: 0,
     };
 
     for (const row of byTypeRows) {

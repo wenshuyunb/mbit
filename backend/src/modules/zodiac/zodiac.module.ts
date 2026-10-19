@@ -23,15 +23,17 @@
 
 import { Module } from '@nestjs/common';
 
-import { SystemModule } from '../system/system.module';
+import { LlmProviderModule } from '../ai/provider/llm-provider.module';
 import { MembershipModule } from '../membership/membership.module';
+import { SystemModule } from '../system/system.module';
 import { ZodiacController } from './zodiac.controller';
+import { ZodiacReadingService } from './zodiac-reading.service';
 import { ZodiacService } from './zodiac.service';
 
 @Module({
-  imports: [SystemModule, MembershipModule],
+  imports: [SystemModule, MembershipModule, LlmProviderModule],
   controllers: [ZodiacController],
-  providers: [ZodiacService],
-  exports: [ZodiacService],
+  providers: [ZodiacService, ZodiacReadingService],
+  exports: [ZodiacService, ZodiacReadingService],
 })
 export class ZodiacModule {}

@@ -8,7 +8,7 @@
  * 描述里写"预测"就等于我们自己把它当成了预测。
  */
 
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
@@ -26,14 +26,19 @@ import {
   type ZodiacChartResponse,
   type ZodiacProfileView,
 } from './zodiac.service';
+import { ZodiacReadingService } from './zodiac-reading.service';
 import type { MonthlyFortuneView, WeeklyFortuneView, ZodiacMatchView } from './zodiac-fortune.util';
 import type { BirthCity, RegionTree } from './zodiac-city.data';
+import type { ZodiacReadingResponse } from './zodiac-reading.service';
 import type { ZodiacSign } from './zodiac.types';
 
 @ApiTags('星座运势')
 @Controller('zodiac')
 export class ZodiacController {
-  constructor(private readonly zodiacService: ZodiacService) {}
+  constructor(
+    private readonly zodiacService: ZodiacService,
+    private readonly zodiacReadingService: ZodiacReadingService,
+  ) {}
 
   @Get('signs')
   /**
@@ -242,6 +247,62 @@ export class ZodiacController {
   @ApiResponse({ status: 400, description: '省份/城市/区县路径不合法（`10001`）' })
   resolveRegion(@Query() query: ZodiacRegionResolveQueryDto): BirthCity {
     return this.zodiacService.resolveRegion(query.province, query.city, query.county);
+  }
+
+  @Get('reading')
+  @ApiBearerAuth('user-token')
+  @Throttle({ global: { limit: 60, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '我的星盘解读（首段免费，完整章节需解锁）',
+    description: [
+      '把用户的本命星盘翻译成一篇**人话版解读**：三巨头、元素与三分类、相位、命主星、十二宫、怎么用。',
+      '',
+      '**免费与付费**：`preview` 永远免费返回；完整 `sections` 需要解锁 ——',
+      '解锁途径：会员、单次购买、或邀请一位**新用户**注册（当天有效）。',
+      '未解锁时 `sections` 为 `null`（**不返回、不打码**），同时返回 `totalSections` / `totalChars`，',
+      '让用户知道完整解读有多长。',
+      '',
+      '**内容来源**：`source` 为 `TEMPLATE`（确定性模板，秒出、永远可用）或 `AI`（模型生成，更细）。',
+      '首次访问总是先得到模板版；用户点"用 AI 重新写"才会调模型（见 `POST /zodiac/reading/generate`）。',
+      '',
+      '**缓存**：同一份盘（出生日期+时间+经纬度+时区）永远复用同一份解读，不重复生成。',
+      '',
+      '⚠ `disclaimer` 与 `access.hint` 由服务端下发，前端不得硬编码。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  @ApiResponse({ status: 400, description: '尚未设置出生日期（`30019`）' })
+  async getReading(@CurrentUser('userId') userId: string): Promise<ZodiacReadingResponse> {
+    return this.zodiacReadingService.getReading(userId);
+  }
+
+  @Post('reading/generate')
+  @ApiBearerAuth('user-token')
+  /**
+   * 显式 200：本接口是"重写已有资源"（解读一直都在，只是换个来源重写一遍），
+   * 不是创建新资源。Nest 对 POST 默认返回 201，语义不符，也会让前端多一个特例分支。
+   */
+  @HttpCode(200)
+  @Throttle({ global: { limit: 6, ttl: 60_000 } })
+  @ApiOperation({
+    summary: '用 AI 重写我的星盘解读',
+    description: [
+      '把这份解读交给模型重写，内容更细。**同步接口**，通常 10–30 秒返回。',
+      '',
+      '⚠ 为什么是"用户点一下"而不是自动生成：解读一辈子只生成一次，成本极低，',
+      '但自动触发会让每个只是点进星盘页的用户都消耗一次调用（包括不看解读的人）。',
+      '改成显式动作后，只为真正想看的人花钱。',
+      '',
+      '**失败不报错**：没配 Key、模型超时、返回格式不合格时，一律返回**已有内容**',
+      '（模板版或上一次的 AI 版），响应里的 `source` 会告诉你实际用的是哪一版。',
+      '',
+      '限流 6 次/分钟，防止连点造成重复调用。',
+    ].join('\n'),
+  })
+  @ApiResponse({ status: 200, description: '生成完成（可能回退为模板版，见 `source`）' })
+  @ApiResponse({ status: 400, description: '尚未设置出生日期（`30019`）' })
+  async generateReading(@CurrentUser('userId') userId: string): Promise<ZodiacReadingResponse> {
+    return this.zodiacReadingService.generateWithAi(userId);
   }
 
   @Get('match')

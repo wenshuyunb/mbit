@@ -3422,6 +3422,11 @@ ACTIVE ──到期──► EXPIRED
 | `MEMBERSHIP_ACTIVE` | `NULL`                     | 时间窗        | 存在 `status = ACTIVE` 且 `now BETWEEN startAt AND expireAt`                             |
 | `AI_CREDITS`        | `NULL`                     | 计数递减      | `remainingQuota > 0` 时允许，消费走原子更新                                              |
 | `PDF_EXPORT`        | `NULL`                     | 时间窗内 N 次 | `usedQuota < totalQuota` 且未过期                                                        |
+| `ZODIAC_READING`    | `ZODIAC_READING`           | 时间窗        | 星盘解读的单次解锁 / 邀请解锁；`expireAt` 为空表示永久，为"当天 24:00"表示当天有效       |
+
+> `ZODIAC_READING`（ADR-041）：星盘解读的解锁**不落在** `zodiac_readings` 表上，而是复用本表 ——
+> 邀请解锁的"只限当天"正好用 `expireAt = 当日 24:00` 表达，单次购买则 `expireAt = NULL`（永久）。
+> 这样"是否已解锁"只有一条判定路径（`isEntitlementActive`），不会出现两套过期逻辑。
 
 **业务规则**
 
@@ -6296,6 +6301,49 @@ model UserPhoneHistory {
   @@index([userId, createdAt(sort: Desc)])
   @@index([phoneHash])
   @@map("user_phone_history")
+}
+
+/// 星盘解读缓存（ADR-041）：同一份盘复用同一份解读，避免重复消耗 AI 调用
+model ZodiacReading {
+  id          String              @id @default(uuid(7)) @db.Uuid
+  userId      String              @map("user_id") @db.Uuid
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 出生数据指纹（日期+时间+经纬度+时区）；变化即视为新盘，重新生成
+  chartHash   String              @map("chart_hash") @db.VarChar(32)
+  status      ZodiacReadingStatus @default(READY)
+  source      ZodiacReadingSource @default(TEMPLATE)
+  /// 免费首段：不解锁也能看
+  preview     String
+  /// 完整章节 JSON：[{key,title,body}]；AI 与模板共用同一结构
+  sections    Json                @default("[]")
+  /// 生成该解读的模型（模板为 NULL）
+  model       String?             @db.VarChar(64)
+  /// 生成失败原因（AI 不可用时用于排障，不回显给用户）
+  error       String?             @db.VarChar(256)
+  generatedAt DateTime?           @map("generated_at") @db.Timestamptz(3)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([userId, chartHash])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("zodiac_readings")
+}
+
+/// 星盘解读来源：TEMPLATE=确定性模板（AI 不可用时的兜底）；AI=模型生成
+enum ZodiacReadingSource {
+  TEMPLATE
+  AI
+
+  @@map("zodiac_reading_source")
+}
+
+/// 星盘解读生成状态
+enum ZodiacReadingStatus {
+  PENDING
+  READY
+  FAILED
+
+  @@map("zodiac_reading_status")
 }
 ```
 

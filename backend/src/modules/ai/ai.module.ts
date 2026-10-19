@@ -2,7 +2,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { forwardRef, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
-import { LlmProviderFactory } from './provider/llm-provider.factory';
+import { LlmProviderModule } from './provider/llm-provider.module';
 import { PromptService } from './prompt/prompt.service';
 import { QueueModule } from '../../infra/queue/queue.module';
 import { REPORT_EXPORT_QUEUE_NAME } from './report/report-export.util';
@@ -68,6 +68,9 @@ import { ChatModule } from './chat/chat.module';
   imports: [
     ConfigModule,
     QueueModule,
+    // Provider 抽到独立模块后，星座解读等其他模块也能只依赖这一层基础设施，
+    // 而不必把整个 AiModule（报告 / 助手 / 分享卡）拉进自己的模块图。
+    LlmProviderModule,
     MembershipModule,
     StorageModule,
     SystemModule,
@@ -81,7 +84,6 @@ import { ChatModule } from './chat/chat.module';
   ],
   controllers: [ReportController, ReportEngagementController],
   providers: [
-    LlmProviderFactory,
     PromptService,
     ReportGenerationService,
     ReportService,
@@ -96,7 +98,9 @@ import { ChatModule } from './chat/chat.module';
     ReportQuotaService,
   ],
   exports: [
-    LlmProviderFactory,
+    // 转出 Provider 模块：外部模块（如星座解读）应只依赖这一层基础设施，
+    // 而不是整个 AiModule。转发导出保证全项目仍是同一个 Factory 实例。
+    LlmProviderModule,
     PromptService,
     ReportGenerationService,
     ReportService,

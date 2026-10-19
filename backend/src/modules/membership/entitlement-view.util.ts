@@ -27,7 +27,13 @@ import type { EntitlementStatus, EntitlementType } from '@prisma/client';
 import { isEntitlementActive, type EntitlementLike } from './entitlement.util';
 
 /** 权益类型（契约 §3.8.3 的 `type` 枚举，顺序即文档顺序） */
-export const ENTITLEMENT_TYPES = ['REPORT_UNLOCK', 'MEMBERSHIP_ACTIVE', 'AI_CREDITS', 'PDF_EXPORT'] as const;
+export const ENTITLEMENT_TYPES = [
+  'REPORT_UNLOCK',
+  'MEMBERSHIP_ACTIVE',
+  'AI_CREDITS',
+  'PDF_EXPORT',
+  'ZODIAC_READING',
+] as const;
 
 export type EntitlementTypeValue = (typeof ENTITLEMENT_TYPES)[number];
 
@@ -42,6 +48,7 @@ const TYPE_NAMES: Readonly<Record<EntitlementTypeValue, string>> = {
   MEMBERSHIP_ACTIVE: '会员权益',
   AI_CREDITS: 'AI 对话次数包',
   PDF_EXPORT: 'PDF 导出权益',
+  ZODIAC_READING: '星盘解读解锁',
 };
 
 export const entitlementTypeName = (type: EntitlementTypeValue): string => TYPE_NAMES[type];

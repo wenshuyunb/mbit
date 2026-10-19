@@ -508,6 +508,7 @@ enum EntitlementType {
   MEMBERSHIP_ACTIVE // 会员有效期权益（时间窗）
   AI_CREDITS // AI 对话次数（计数递减）
   PDF_EXPORT // PDF 导出权（时间窗内 N 次）
+  ZODIAC_READING // 星盘解读解锁（时间窗：单次购买永久、邀请解锁当天有效）
 
   @@map("entitlement_type")
 }
@@ -722,6 +723,7 @@ model User {
   entitlements            Entitlement[]
   storedFiles             StoredFile[]
   phoneHistory            UserPhoneHistory[]
+  zodiacReadings          ZodiacReading[]
 
   @@index([createdAt(sort: Desc)])
   @@index([status, createdAt])
@@ -2263,4 +2265,57 @@ model UserPhoneHistory {
   @@index([userId, createdAt(sort: Desc)])
   @@index([phoneHash])
   @@map("user_phone_history")
+}
+
+/// 星盘解读缓存（ADR-041）
+///
+/// 为什么需要缓存：星盘是**静态**的（出生数据不变，解读也不变），而 AI 解读每次调用
+/// 都要花钱。因此同一份盘（`chartHash` 相同）永远复用同一份解读；
+/// 用户改了出生信息 → 指纹变化 → 才重新生成一次。
+///
+/// 为什么不复用 `ai_reports`：那张表绑定测试会话与报告类型，而星盘解读与三个测评模块
+/// **完全隔离**（ADR-038），混进去会污染测评口径。
+///
+/// 解锁状态**不存本表**：会员 / 单次购买 / 邀请解锁都走 `entitlements`（`ZODIAC_READING`），
+/// 邀请解锁的"只限当天"由 `expire_at = 当日 24:00` 表达。
+model ZodiacReading {
+  id          String              @id @default(uuid(7)) @db.Uuid
+  userId      String              @map("user_id") @db.Uuid
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 出生数据指纹（日期 + 时间 + 经纬度 + 时区）；变化即视为新盘
+  chartHash   String              @map("chart_hash") @db.VarChar(32)
+  status      ZodiacReadingStatus @default(READY)
+  source      ZodiacReadingSource @default(TEMPLATE)
+  /// 免费首段：不解锁也能看
+  preview     String
+  /// 完整章节 JSON：[{key,title,body}]；AI 与模板共用同一结构
+  sections    Json                @default("[]")
+  /// 生成该解读的模型（模板为 NULL）
+  model       String?             @db.VarChar(64)
+  /// 生成失败原因（排障用，不回显给用户）
+  error       String?             @db.VarChar(256)
+  generatedAt DateTime?           @map("generated_at") @db.Timestamptz(3)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([userId, chartHash])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("zodiac_readings")
+}
+
+/// 星盘解读来源：TEMPLATE = 确定性模板（AI 不可用时的兜底）；AI = 模型生成
+enum ZodiacReadingSource {
+  TEMPLATE
+  AI
+
+  @@map("zodiac_reading_source")
+}
+
+/// 星盘解读生成状态
+enum ZodiacReadingStatus {
+  PENDING
+  READY
+  FAILED
+
+  @@map("zodiac_reading_status")
 }
