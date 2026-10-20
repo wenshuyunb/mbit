@@ -3,6 +3,11 @@
 > 基于人格科学（MBTI + 大五人格）与生成式 AI 的**情感成长平台**
 > 微信小程序 + NestJS 后端 + Web 管理后台 · 生产级 SaaS 标准
 
+> 📌 **刚接手这个项目？先读 [`docs/AI-HANDOVER.md`](docs/AI-HANDOVER.md)（交接文档），再读
+> [`docs/QUICKSTART.md`](docs/QUICKSTART.md)（环境搭建）。**
+> 前者是单文件入口：项目是什么、架构怎么分层、进度到哪、哪些没做、铁律与踩坑、下一步做什么；
+> 本 README 是产品与历史的完整叙述，篇幅较长，适合当参考而非入口。
+
 <p>
   <img alt="phase" src="https://img.shields.io/badge/phase-0%20%E7%8E%AF%E5%A2%83%E4%B8%8E%E8%AE%BE%E8%AE%A1-blue" />
   <img alt="backend" src="https://img.shields.io/badge/backend-NestJS%2010%20%2B%20Prisma%206-informational" />
